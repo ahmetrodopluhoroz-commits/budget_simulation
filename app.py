@@ -83,33 +83,34 @@ with sekme1:
     )
 
     # --- MATEMATİKSEL HESAPLAMA MOTORU (KUMÜLATİF) ---
+    # --- MATEMATİKSEL HESAPLAMA MOTORU (KUMÜLATİF) ---
     df_nihai = duzenlenen_df.copy()
 
     # 1. Aşama: Önce 2025 Tutarlarını Güvenceye Alalım
     for ay in aylar:
-        df_nihai[f"2025 {ay} Desi"] = pd.to_numeric(df_nihai[f"2025 {ay} Desi"]).fillna(0)
-        df_nihai[f"2025 {ay} Fiyat"] = pd.to_numeric(df_nihai[f"2025 {ay} Fiyat"]).fillna(0)
+        # errors='coerce' ekleyerek uygulamayı çökmeye karşı zırhlıyoruz
+        df_nihai[f"2025 {ay} Desi"] = pd.to_numeric(df_nihai[f"2025 {ay} Desi"], errors='coerce').fillna(0)
+        df_nihai[f"2025 {ay} Fiyat"] = pd.to_numeric(df_nihai[f"2025 {ay} Fiyat"], errors='coerce').fillna(0)
         df_nihai[f"2025 {ay} Tutar"] = df_nihai[f"2025 {ay} Desi"] * df_nihai[f"2025 {ay} Fiyat"]
 
     # 2. Aşama: 2026 İçin Zincirleme (Kumülatif) Fiyat Hesaplaması
-    # Zincirin başlangıç noktası: 2025 Aralık Fiyatı
     onceki_fiyat = df_nihai["2025 Aralık Fiyat"]
 
     for ay in aylar:
-        df_nihai[f"2026 {ay} Büyüme"] = pd.to_numeric(df_nihai[f"2026 {ay} Büyüme"]).fillna(0)
-        df_nihai[f"2026 {ay} Esk."] = pd.to_numeric(df_nihai[f"2026 {ay} Esk."]).fillna(0)
+        # errors='coerce' ekleyerek uygulamayı çökmeye karşı zırhlıyoruz
+        df_nihai[f"2026 {ay} Büyüme"] = pd.to_numeric(df_nihai[f"2026 {ay} Büyüme"], errors='coerce').fillna(0)
+        df_nihai[f"2026 {ay} Esk."] = pd.to_numeric(df_nihai[f"2026 {ay} Esk."], errors='coerce').fillna(0)
         
         # Desi Hesaplama = 2025 Desi * (1 + 2026 Büyüme)
         df_nihai[f"2026 {ay} Desi"] = df_nihai[f"2025 {ay} Desi"] * (1 + df_nihai[f"2026 {ay} Büyüme"])
         
-        # KUMÜLATİF FİYAT: Bir önceki ayın fiyatı * (1 + Bu ayın Eskalasyon Oranı)
-        # Tabloda girilen %10 gibi değerleri 100'e bölerek işliyoruz
+        # KUMÜLATİF FİYAT
         df_nihai[f"2026 {ay} Fiyat"] = onceki_fiyat * (1 + (df_nihai[f"2026 {ay} Esk."] / 100))
         
-        # Tutar = 2026 Desi * 2026 Fiyat
+        # Tutar
         df_nihai[f"2026 {ay} Tutar"] = df_nihai[f"2026 {ay} Desi"] * df_nihai[f"2026 {ay} Fiyat"]
         
-        # HAFIZAYI GÜNCELLE: Sonraki ay için "onceki_fiyat" artık bu ayın hesaplanan fiyatı oldu
+        # HAFIZAYI GÜNCELLE
         onceki_fiyat = df_nihai[f"2026 {ay} Fiyat"]
 
     st.markdown("---")
