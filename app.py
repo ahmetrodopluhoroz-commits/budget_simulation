@@ -22,7 +22,7 @@ ana_kolonlar = [
 ]
 parametre_kolonlari = [
     "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)",
-    "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", " Esk. Baz Yakıt Fiyatı ", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
+    "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
 
 kolonlar_2025_desi = [f"2025 {ay} Desi" for ay in aylar]
@@ -184,17 +184,20 @@ with sekme1:
                             # Önce eski veriyi temizle
                             client.table("butce_tablosu").delete().neq("Uniq ID", "YOK").execute()
                             
-                            # === ZIRHLAMA ADIMI: Verileri JSON Uyumlu Hale Getirme ===
+                            # === ZIRHLAMA ADIMI ===
                             df_bulut = df_nihai.copy()
                             
-                            # 1. YENİ EKLENEN ZIRH: NaN değerlerini JSON uyumlu None (null) ile değiştir
+                            # YENİ EKLENEN KORUMA: Sütun isimlerinin başındaki/sonundaki görünmez boşlukları temizler
+                            df_bulut.columns = df_bulut.columns.str.strip()
+                            
+                            # NaN değerlerini JSON uyumlu None (null) ile değiştir
                             df_bulut = df_bulut.replace({np.nan: None})
                             
-                            # 2. Tarih nesnelerini JSON uyumlu metne çeviriyoruz
+                            # Tarih nesnelerini JSON uyumlu metne çeviriyoruz
                             for col in df_bulut.columns:
                                 df_bulut[col] = df_bulut[col].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else x)
                             
-                            # Artık tamamen temizlenmiş sözlüğü üretiyoruz
+                            # Tamamen temizlenmiş sözlüğü üretiyoruz
                             records = df_bulut.to_dict(orient="records")
                             # ==========================================================
                             
