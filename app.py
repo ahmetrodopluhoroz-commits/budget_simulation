@@ -184,15 +184,19 @@ with sekme1:
                             # Önce eski veriyi temizle
                             client.table("butce_tablosu").delete().neq("Uniq ID", "YOK").execute()
                             
-                            # === ZIRHLAMA ADIMI: Tarih nesnelerini JSON uyumlu metne çeviriyoruz ===
+                            # === ZIRHLAMA ADIMI: Verileri JSON Uyumlu Hale Getirme ===
                             df_bulut = df_nihai.copy()
+                            
+                            # 1. YENİ EKLENEN ZIRH: NaN değerlerini JSON uyumlu None (null) ile değiştir
+                            df_bulut = df_bulut.replace({np.nan: None})
+                            
+                            # 2. Tarih nesnelerini JSON uyumlu metne çeviriyoruz
                             for col in df_bulut.columns:
-                                # Sütundaki veri bir tarih nesnesi ise 'strftime' ile metne çevir, değilse aynen bırak
                                 df_bulut[col] = df_bulut[col].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else x)
                             
-                            # Artık tamamen temizlenmiş metinlerden oluşan sözlüğü üretiyoruz
+                            # Artık tamamen temizlenmiş sözlüğü üretiyoruz
                             records = df_bulut.to_dict(orient="records")
-                            # ===================================================================
+                            # ==========================================================
                             
                             # Güvenli transfer için 1000'er satırlık chunk'lara bölüyoruz
                             chunk_size = 1000
