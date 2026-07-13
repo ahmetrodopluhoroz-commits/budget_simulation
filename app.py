@@ -181,11 +181,20 @@ with sekme1:
                 if client:
                     try:
                         with st.spinner("Büyük veri paketi optimize ediliyor ve buluta aktarılıyor..."):
-                            # Önce eski veriyi temizle (truncate/delete)
+                            # Önce eski veriyi temizle
                             client.table("butce_tablosu").delete().neq("Uniq ID", "YOK").execute()
                             
+                            # === ZIRHLAMA ADIMI: Tarih nesnelerini JSON uyumlu metne çeviriyoruz ===
+                            df_bulut = df_nihai.copy()
+                            for col in df_bulut.columns:
+                                # Sütundaki veri bir tarih nesnesi ise 'strftime' ile metne çevir, değilse aynen bırak
+                                df_bulut[col] = df_bulut[col].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else x)
+                            
+                            # Artık tamamen temizlenmiş metinlerden oluşan sözlüğü üretiyoruz
+                            records = df_bulut.to_dict(orient="records")
+                            # ===================================================================
+                            
                             # Güvenli transfer için 1000'er satırlık chunk'lara bölüyoruz
-                            records = df_nihai.to_dict(orient="records")
                             chunk_size = 1000
                             for i in range(0, len(records), chunk_size):
                                 chunk = records[i:i + chunk_size]
