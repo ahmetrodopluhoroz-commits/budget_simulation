@@ -10,7 +10,43 @@ try:
 except ImportError:
     SUPABASE_AVAILABLE = False
 
-st.set_page_config(page_title="Gelişmiş Bütçe Simülatörü", layout="wide")
+# ============================================================
+# STREAMLIT SAYFA AYARLARI
+# ============================================================
+
+st.set_page_config(
+    page_title="Gelişmiş Bütçe Simülatörü",
+    layout="wide"
+)
+
+# ============================================================
+# 🔒 KULLANICI GİRİŞ (LOGIN) SİSTEMİ
+# ============================================================
+
+if "oturum_acik" not in st.session_state:
+    st.session_state.oturum_acik = False
+
+# Eğer kullanıcı henüz giriş yapmadıysa sadece bu ekranı göster ve durdur
+if not st.session_state.oturum_acik:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col2:
+        st.title("🔒 Bütçe Sistemine Giriş")
+        st.markdown("Lütfen devam etmek için yetkili bilgilerinizi girin.")
+        
+        kullanici_adi = st.text_input("Kullanıcı Adı")
+        sifre = st.text_input("Şifre", type="password")
+        
+        if st.button("Giriş Yap", use_container_width=True, type="primary"):
+            if kullanici_adi == "rasg" and sifre == "Hrz1234":
+                st.session_state.oturum_acik = True
+                st.success("Giriş Başarılı! Sistem Yükleniyor...")
+                st.rerun()
+            else:
+                st.error("Hatalı kullanıcı adı veya şifre girdiniz!")
+                
+    st.stop() # Şifre girilmeden aşağıdakilerin (bütçe ekranlarının) çalışmasını engeller!
 
 aylar = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 
@@ -129,16 +165,25 @@ def supabase_verisini_hazirla(dataframe):
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "secili_revizyon" not in st.session_state: st.session_state.secili_revizyon = None
 
-# --- SUPABASE BAĞLANTISI ---
-st.sidebar.header("🔐 Supabase Bağlantısı")
-url = st.sidebar.text_input("Supabase URL", type="password")
-key = st.sidebar.text_input("Supabase API Key", type="password")
+# ============================================================
+# SUPABASE AYARLARI (GİZLİ)
+# ============================================================
+
+# Bu bilgileri artık kullanıcı görmeyecek, arka planda otomatik çalışacak
+GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
+GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
 
 def get_supabase_client():
-    if SUPABASE_AVAILABLE and url and key:
-        try: return create_client(url, key)
-        except: return None
-    return None
+    """
+    Geçerli bağlantı bilgileri varsa Supabase istemcisi döndürür.
+    """
+    if not SUPABASE_AVAILABLE:
+        return None
+
+    try:
+        return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
+    except Exception:
+        return None
 
 sekme1, sekme2 = st.tabs(["🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi"])
 
