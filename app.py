@@ -195,15 +195,29 @@ with sekme1:
     st.sidebar.header("📁 Lokal Veri Yönetimi")
     yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"])
     c1, c2 = st.sidebar.columns(2)
+    
     if c1.button("📥 Veriyi Ekle") and yuklenen_dosya:
         yeni_df = pd.read_csv(yuklenen_dosya) if yuklenen_dosya.name.lower().endswith(".csv") else pd.read_excel(yuklenen_dosya)
         yeni_df.columns = [str(c).strip() for c in yeni_df.columns]
         yeni_df = yeni_df.reindex(columns=tum_kolonlar)
         st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
+        
+        # SİHİRLİ DOKUNUŞ: Editörün eski hafızasını sıfırlıyoruz
+        if "butce_veri_editoru" in st.session_state:
+            del st.session_state["butce_veri_editoru"]
+            
         st.sidebar.success(f"{len(yeni_df)} satır eklendi.")
+        st.rerun()
+        
     if c2.button("🗑️ Temizle"):
         st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
+        
+        # SİHİRLİ DOKUNUŞ: Editörün eski hafızasını sıfırlıyoruz
+        if "butce_veri_editoru" in st.session_state:
+            del st.session_state["butce_veri_editoru"]
+            
         st.sidebar.success("Sıfırlandı.")
+        st.rerun()
 
     # --- BULUT REVİZYON YÖNETİMİ (YÜKLEME) ---
     st.sidebar.markdown("---")
@@ -212,22 +226,24 @@ with sekme1:
     client = get_supabase_client()
     if client:
         try:
-            # Önce geçmiş logları çekiyoruz
             log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
             if log_res.data:
-                # Kullanıcıya göstermek için formatlı bir liste hazırlıyoruz
                 revizyonlar = {f"{r['kayit_zamani'][:10]} | {r['olusturan_kisi']} - {r['revizyon_notu']}": r['revizyon_id'] for r in log_res.data}
                 secilen_etiket = st.sidebar.selectbox("Geçmiş Senaryolardan Seçin:", list(revizyonlar.keys()))
                 st.session_state.secili_revizyon = revizyonlar[secilen_etiket]
                 
                 if st.sidebar.button("🔄 Seçili Versiyonu Ekrana Çek", type="primary"):
                     with st.spinner("İlgili bütçe versiyonu buluttan indiriliyor..."):
-                        # Sadece seçilen revizyona ait verileri çekiyoruz (filtreleme)
                         data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", st.session_state.secili_revizyon).execute()
                         if data_res.data:
                             gelen_df = pd.DataFrame(data_res.data)
                             gelen_df.columns = [str(c).strip() for c in gelen_df.columns]
                             st.session_state.ana_veri = gelen_df.reindex(columns=tum_kolonlar)
+                            
+                            # SİHİRLİ DOKUNUŞ: Editörün hafızasını siliyoruz ki buluttan geleni zorunlu olarak çizsin
+                            if "butce_veri_editoru" in st.session_state:
+                                del st.session_state["butce_veri_editoru"]
+                                
                             st.sidebar.success("Başarıyla yüklendi!")
                             st.rerun()
             else:
