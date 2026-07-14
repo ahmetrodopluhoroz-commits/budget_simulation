@@ -164,16 +164,11 @@ def supabase_verisini_hazirla(dataframe):
 # --- SESSION STATE ---
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "secili_revizyon" not in st.session_state: st.session_state.secili_revizyon = None
-
-# Tabloyu zorla yenilemek için kullanacağımız sayaç
-if "editor_key" not in st.session_state: 
-    st.session_state.editor_key = 0
+if "editor_key" not in st.session_state: st.session_state.editor_key = 0
 
 # ============================================================
 # SUPABASE AYARLARI (GİZLİ)
 # ============================================================
-
-# Bu bilgileri artık kullanıcı görmeyecek, arka planda otomatik çalışacak
 GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
 
@@ -185,12 +180,18 @@ def get_supabase_client():
     except Exception:
         return None
 
-sekme1, sekme2 = st.tabs(["🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi"])
+# ============================================================
+# ARAYÜZ SEKMELERİ (3 SEKMEYE ÇIKARILDI)
+# ============================================================
+sekme1, sekme2, sekme3 = st.tabs(["🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi"])
 
+# ------------------------------------------------------------
+# 1. SEKME: ANA BÜTÇE EKRANI
+# ------------------------------------------------------------
 with sekme1:
     st.title("🚚 Operasyonel Bütçe Simülatörü")
 
-    # --- LOKAL VERİ YÖNETİMİ ---
+    # Sadece Lokal Veri Yönetimi Sol Menüde Kaldı
     st.sidebar.markdown("---")
     st.sidebar.header("📁 Lokal Veri Yönetimi")
     yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"])
@@ -201,48 +202,14 @@ with sekme1:
         yeni_df.columns = [str(c).strip() for c in yeni_df.columns]
         yeni_df = yeni_df.reindex(columns=tum_kolonlar)
         st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
-        
-        st.session_state.editor_key += 1 # Arayüzü yeniler
+        st.session_state.editor_key += 1
         st.sidebar.success(f"{len(yeni_df)} satır eklendi.")
-        # st.rerun() SİLİNDİ - Başarı mesajı ekranda kalacak
 
     if c2.button("🗑️ Temizle"):
         st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
-        
-        st.session_state.editor_key += 1 # Arayüzü yeniler
+        st.session_state.editor_key += 1
         st.sidebar.success("Sıfırlandı.")
-        # st.rerun() SİLİNDİ - Başarı mesajı ekranda kalacak
 
-    # --- BULUT REVİZYON YÖNETİMİ (YÜKLEME) ---
-    st.sidebar.markdown("---")
-    st.sidebar.header("🗄️ Bulut Revizyon Yönetimi")
-    
-    client = get_supabase_client()
-    if client:
-        try:
-            log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
-            if log_res.data:
-                revizyonlar = {f"{r['kayit_zamani'][:10]} | {r['olusturan_kisi']} - {r['revizyon_notu']}": r['revizyon_id'] for r in log_res.data}
-                secilen_etiket = st.sidebar.selectbox("Geçmiş Senaryolardan Seçin:", list(revizyonlar.keys()))
-                st.session_state.secili_revizyon = revizyonlar[secilen_etiket]
-                
-                if st.sidebar.button("🔄 Seçili Versiyonu Ekrana Çek", type="primary"):
-                    with st.spinner("İlgili bütçe versiyonu buluttan indiriliyor..."):
-                        data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", st.session_state.secili_revizyon).execute()
-                        if data_res.data:
-                            gelen_df = pd.DataFrame(data_res.data)
-                            gelen_df.columns = [str(c).strip() for c in gelen_df.columns]
-                            st.session_state.ana_veri = gelen_df.reindex(columns=tum_kolonlar)
-                            
-                            st.session_state.editor_key += 1 # Tabloyu veritabanından gelen yeni veriyle çizmeye zorlar
-                            st.sidebar.success("Başarıyla yüklendi!")
-                            # st.rerun() SİLİNDİ - Artık veri tepki verecek ve ekranda kalacak!
-            else:
-                st.sidebar.info("Henüz kaydedilmiş bir revizyon yok.")
-        except Exception as e:
-            st.sidebar.error(f"Revizyonlar çekilemedi: {e}")
-
-    # --- EDİTÖR VE HESAPLAMA ---
     st.sidebar.markdown("---")
     global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1)
 
@@ -282,7 +249,6 @@ with sekme1:
 
         st.session_state.ana_veri = df_nihai.copy()
 
-        # --- SONUÇLAR VE KAYIT ---
         st.markdown("---")
         st.subheader("📊 2. Projeksiyon Sonuçları ve Çıktı Yönetimi")
         
@@ -302,12 +268,12 @@ with sekme1:
             st.download_button("📥 Excel Olarak İndir", output_excel.getvalue(), "horoz_butce.xlsx", use_container_width=True)
 
         with col_down2:
-            # --- YENİ VERSİYON KAYIT FORMU ---
             with st.expander("🚀 Yeni Bir Versiyon Olarak Buluta Kaydet", expanded=True):
                 kisi = st.text_input("Revizyonu Yapan Kişi", value="Ahmet Rodoplu")
                 not_ = st.text_input("Revizyon Notu", placeholder="Örn: 2026 FTL büyüme oranları güncellendi.")
                 
                 if st.button("💾 Senaryoyu Kaydet", use_container_width=True):
+                    client = get_supabase_client()
                     if client:
                         try:
                             with st.spinner("Yeni versiyon oluşturuluyor..."):
@@ -334,6 +300,9 @@ with sekme1:
 
         st.dataframe(df_nihai, use_container_width=True)
 
+# ------------------------------------------------------------
+# 2. SEKME: ÇALIŞMA GÜNLERİ
+# ------------------------------------------------------------
 with sekme2:
     st.title("📅 Operasyonel Çalışma Günleri")
     takvim_verisi = {
@@ -343,3 +312,74 @@ with sekme2:
         "Resmi Tatiller / Notlar": ["-", "-", "Ramazan Bayramı", "23 Nisan", "Kurban Bayramı", "-", "-", "30 Ağustos", "-", "29 Ekim", "-", "-"]
     }
     st.data_editor(pd.DataFrame(takvim_verisi), use_container_width=True, hide_index=True)
+
+# ------------------------------------------------------------
+# 3. SEKME: BULUT REVİZYON YÖNETİMİ (YENİ EKLENEN SAYFA)
+# ------------------------------------------------------------
+with sekme3:
+    st.title("☁️ Bulut Revizyon Geçmişi")
+    st.markdown("Geçmişte kaydedilen tüm bütçe senaryolarını aşağıdan inceleyebilir, çalışma ekranına yükleyebilir veya kalıcı olarak silebilirsiniz.")
+    
+    client = get_supabase_client()
+    if client:
+        try:
+            # Tüm kayıt defterini çek
+            log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
+            
+            if log_res.data:
+                # Tablo Görünümü Hazırlığı
+                df_log = pd.DataFrame(log_res.data)
+                df_log["kayit_zamani"] = pd.to_datetime(df_log["kayit_zamani"]).dt.strftime("%Y-%m-%d %H:%M")
+                
+                # Sütun isimlerini Türkçeleştir
+                df_log_gorsel = df_log.rename(columns={
+                    "kayit_zamani": "Kayıt Tarihi",
+                    "olusturan_kisi": "Oluşturan Kişi",
+                    "revizyon_notu": "Revizyon Notu",
+                    "revizyon_id": "Versiyon Kodu"
+                })
+                
+                # Ekrana Şık Bir Tablo Olarak Bas
+                st.dataframe(df_log_gorsel[["Kayıt Tarihi", "Oluşturan Kişi", "Revizyon Notu", "Versiyon Kodu"]], use_container_width=True, hide_index=True)
+                
+                st.markdown("---")
+                st.subheader("🛠️ Versiyon İşlemleri")
+                
+                # İşlem Yapılacak Versiyonu Seçme
+                revizyonlar = {f"{r['kayit_zamani'][:16]} | {r['olusturan_kisi']} - {r['revizyon_notu']}": r['revizyon_id'] for r in log_res.data}
+                secilen_etiket = st.selectbox("İşlem yapmak istediğiniz versiyonu seçin:", list(revizyonlar.keys()))
+                secili_rev = revizyonlar[secilen_etiket]
+                
+                c_sol, c_sag = st.columns(2)
+                
+                # YÜKLEME BUTONU
+                if c_sol.button("📥 Seçili Versiyonu Ekrana Çek (Yükle)", type="primary", use_container_width=True):
+                    with st.spinner("Bütçe verileri buluttan indiriliyor..."):
+                        data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", secili_rev).execute()
+                        if data_res.data:
+                            gelen_df = pd.DataFrame(data_res.data)
+                            gelen_df.columns = [str(c).strip() for c in gelen_df.columns]
+                            st.session_state.ana_veri = gelen_df.reindex(columns=tum_kolonlar)
+                            
+                            st.session_state.editor_key += 1
+                            st.success("🎉 Versiyon başarıyla hafızaya alındı! 'Çarşaf Liste & Bütçe' sekmesine giderek veriler üzerinde çalışabilirsiniz.")
+                        else:
+                            st.warning("Bu versiyona ait detaylı bütçe kaydı bulunamadı.")
+                
+                # SİLME BUTONU
+                if c_sag.button("🗑️ Seçili Versiyonu Kalıcı Olarak Sil", type="secondary", use_container_width=True):
+                    with st.spinner("Versiyon buluttan tamamen siliniyor..."):
+                        # Önce ana bütçe tablosundan satırları temizle
+                        client.table("butce_tablosu").delete().eq("revizyon_id", secili_rev).execute()
+                        # Sonra kayıt defterinden (log) temizle
+                        client.table("revizyon_log").delete().eq("revizyon_id", secili_rev).execute()
+                        
+                        st.success("Versiyon ve içerdiği tüm veriler kalıcı olarak silindi!")
+                        st.rerun() # Listeyi güncellemek için sayfayı yenile
+                        
+            else:
+                st.info("Sistemde henüz kaydedilmiş bir bütçe versiyonu bulunmuyor.")
+        except Exception as e:
+            st.error(f"Veritabanına erişilirken bir hata oluştu: {e}")
+    else:
+        st.error("Lütfen Supabase bağlantı ayarlarının yapıldığından emin olun.")
