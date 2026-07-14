@@ -165,6 +165,10 @@ def supabase_verisini_hazirla(dataframe):
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "secili_revizyon" not in st.session_state: st.session_state.secili_revizyon = None
 
+# YENİ EKLENEN SATIR: Tabloyu zorla yenilemek için kullanacağımız sayaç
+if "editor_key" not in st.session_state: 
+    st.session_state.editor_key = 0
+
 # ============================================================
 # SUPABASE AYARLARI (GİZLİ)
 # ============================================================
@@ -202,20 +206,18 @@ with sekme1:
         yeni_df = yeni_df.reindex(columns=tum_kolonlar)
         st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
         
-        # SİHİRLİ DOKUNUŞ: Editörün eski hafızasını sıfırlıyoruz
-        if "butce_veri_editoru" in st.session_state:
-            del st.session_state["butce_veri_editoru"]
-            
+        # KESİN ÇÖZÜM: Sayacı artır
+        st.session_state.editor_key += 1
+        
         st.sidebar.success(f"{len(yeni_df)} satır eklendi.")
         st.rerun()
-        
+
     if c2.button("🗑️ Temizle"):
         st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
         
-        # SİHİRLİ DOKUNUŞ: Editörün eski hafızasını sıfırlıyoruz
-        if "butce_veri_editoru" in st.session_state:
-            del st.session_state["butce_veri_editoru"]
-            
+        # KESİN ÇÖZÜM: Sayacı artır
+        st.session_state.editor_key += 1
+        
         st.sidebar.success("Sıfırlandı.")
         st.rerun()
 
@@ -240,10 +242,9 @@ with sekme1:
                             gelen_df.columns = [str(c).strip() for c in gelen_df.columns]
                             st.session_state.ana_veri = gelen_df.reindex(columns=tum_kolonlar)
                             
-                            # SİHİRLİ DOKUNUŞ: Editörün hafızasını siliyoruz ki buluttan geleni zorunlu olarak çizsin
-                            if "butce_veri_editoru" in st.session_state:
-                                del st.session_state["butce_veri_editoru"]
-                                
+                            # KESİN ÇÖZÜM: Sayacı artırıp tabloyu sıfırdan çizmeye zorluyoruz
+                            st.session_state.editor_key += 1
+                            
                             st.sidebar.success("Başarıyla yüklendi!")
                             st.rerun()
             else:
@@ -256,7 +257,15 @@ with sekme1:
     global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1)
 
     st.subheader("📝 1. Çarşaf Liste Veri Girişi")
-    duzenlenen_df = st.data_editor(st.session_state.ana_veri, num_rows="dynamic", use_container_width=True, height=250)
+    
+    duzenlenen_df = st.data_editor(
+        st.session_state.ana_veri, 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        height=250, 
+        # SİHİRLİ SATIR BURASI: Her tıklamada butce_veri_1, butce_veri_2 diye değişecek
+        key=f"butce_veri_{st.session_state.editor_key}" 
+    )
 
     if not duzenlenen_df.empty:
         df_nihai = duzenlenen_df.copy()
