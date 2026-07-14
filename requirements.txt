@@ -1,5 +1,5 @@
-streamlit
-pandas
-numpy
-openpyxl
-supabase
+streamlit>=1.40
+pandas>=2.1
+numpy>=1.26
+openpyxl>=3.1
+supabase>=2.4
