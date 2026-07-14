@@ -191,42 +191,101 @@ with sekme1:
     st.sidebar.markdown("---")
     st.sidebar.header("📁 Lokal Veri Yönetimi")
     yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"])
+    
+    # Gelişmiş Yükleme Tipi (Rolling Forecast / Sütun Güncelleme İçin)
+    yukleme_tipi = st.sidebar.radio("Yükleme Amacı:", ["Yeni Satırlar Ekle", "Mevcut Satırları Güncelle (Uniq ID Bazlı)"])
+    
     c1, c2 = st.sidebar.columns(2)
     
-    if c1.button("📥 Veriyi Ekle") and yuklenen_dosya:
+    if c1.button("📥 Veriyi İşle") and yuklenen_dosya:
         yeni_df = pd.read_csv(yuklenen_dosya) if yuklenen_dosya.name.lower().endswith(".csv") else pd.read_excel(yuklenen_dosya)
         yeni_df.columns = [str(c).strip() for c in yeni_df.columns]
-        yeni_df = yeni_df.reindex(columns=tum_kolonlar)
-        st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
-        st.session_state.editor_key += 1
-        st.sidebar.success(f"{len(yeni_df)} satır eklendi.")
+        
+        # Gelişmiş Yükleme Tipi (Düşeyara Mantığı)
+    yukleme_tipi = st.sidebar.radio(
+        "Yükleme Amacı:", 
+        [
+            "Yeni Satırlar Ekle", 
+            "Düşeyara (VLOOKUP) ile Güncelle"
+        ],
+        help="Sadece Uniq ID ve güncellemek istediğiniz sütunları içeren bir Excel yükleyin. Sistem eşleşen ID'leri bulup verileri üzerine yazar."
+    )
+    
+    c1, c2 = st.sidebar.columns(2)
+    
+    if c1.button("📥 Veriyi İşle") and yuklenen_dosya:
+        yeni_df = pd.read_csv(yuklenen_dosya) if yuklenen_dosya.name.lower().endswith(".csv") else pd.read_excel(yuklenen_dosya)
+        yeni_df.columns = [str(c).strip() for c in yeni_df.columns]
+        
+        # DÜŞEYARA (VLOOKUP) MOTORU ÇALIŞIYOR
+        if yukleme_tipi == "Düşeyara (VLOOKUP) ile Güncelle":
+            if "Uniq ID" in yeni_df.columns and not st.session_state.ana_veri.empty:
+                # Eşleşme hatası olmaması için ID tiplerini metne çevirip kilitliyoruz
+                st.session_state.ana_veri["Uniq ID"] = st.session_state.ana_veri["Uniq ID"].astype(str)
+                yeni_df["Uniq ID"] = yeni_df["Uniq ID"].astype(str)
+                
+                existing_df = st.session_state.ana_veri.set_index("Uniq ID")
+                update_df = yeni_df.set_index("Uniq ID")
+                
+                # Sadece yüklenen Excel'de olan sütunları bul (Uniq ID hariç)
+                guncellenecek_sutunlar = [c for c in update_df.columns if c in existing_df.columns and c != "Uniq ID"]
+                
+                # PANDAS UPDATE = VLOOKUP
+                existing_df.update(update_df[guncellenecek_sutunlar])
+                st.session_state.ana_veri = existing_df.reset_index()
+                
+                # ID'leri tekrar sayı formatına çek
+                st.session_state.ana_veri["Uniq ID"] = st.session_state.ana_veri["Uniq ID"].apply(guvenli_tamsayi)
+                st.session_state.editor_key += 1
+                st.sidebar.success(f"Düşeyara tamamlandı! {len(guncellenecek_sutunlar)} sütun başarıyla güncellendi.")
+                st.rerun()
+            else:
+                st.sidebar.error("Düşeyara yapabilmek için ekranda veri olmalı ve yüklediğiniz Excel'de mutlaka 'Uniq ID' sütunu bulunmalıdır.")
+        else:
+            # Klasik Yeni Satır Ekleme Modu
+            yeni_df = yeni_df.reindex(columns=tum_kolonlar)
+            st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
+            st.session_state.editor_key += 1
+            st.sidebar.success(f"{len(yeni_df)} yeni satır bütçeye eklendi.")
+            st.rerun()
 
-    if c2.button("🗑️ Temizle"):
+    if c2.button("🗑️ Havuzu Temizle"):
         st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
         st.session_state.editor_key += 1
-        st.sidebar.success("Sıfırlandı.")
+        st.sidebar.success("Tüm bütçe hafızası sıfırlandı.")
 
-    # --- YENİ: DİNAMİK FİLTRELEME SİSTEMİ ---
+    # --- DİNAMİK FİLTRELEME SİSTEMİ ---
     st.sidebar.markdown("---")
     st.sidebar.header("🔍 Dinamik Filtreleme")
     filtre_kolonlari = st.sidebar.multiselect("Filtrelemek İstediğiniz Sütunları Seçin:", options=tum_kolonlar)
     
-    # Tüm verileri baştan "görünür" olarak işaretleyen bir maske oluşturuyoruz
     mask = pd.Series(True, index=st.session_state.ana_veri.index)
-    
     if filtre_kolonlari:
         st.sidebar.markdown("**Filtre Değerlerini Seçin:**")
         for col in filtre_kolonlari:
-            # İlgili kolondaki benzersiz değerleri buluyoruz
             unique_vals = st.session_state.ana_veri[col].dropna().unique().tolist()
             secilen_degerler = st.sidebar.multiselect(f"{col}:", options=unique_vals, default=unique_vals)
-            # Maskeyi seçilen değerlere göre daraltıyoruz
             mask &= st.session_state.ana_veri[col].isin(secilen_degerler)
             
-    # Tabloyu ikiye ayırıyoruz: Ekranda gösterilecekler ve filtre arkasında gizlenecekler
     gosterilecek_df = st.session_state.ana_veri[mask]
     gizli_df = st.session_state.ana_veri[~mask]
     
+    # --- YENİ: HIZLI SÜTUN İÇERİĞİ TEMİZLEME ARACI (ROLLING FORECAST DESTEĞİ) ---
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🧹 Sütun Bazlı İçerik Sıfırlama"):
+        silinecek_sutun = st.selectbox("İçini boşaltmak istediğiniz sütun:", options=["Seçiniz..."] + tum_kolonlar)
+        if st.button("Sütun İçini Sıfırla (0.0 Yap)") and silinecek_sutun != "Seçiniz...":
+            if not st.session_state.ana_veri.empty:
+                if silinecek_sutun in BIGINT_KOLONLAR:
+                    st.session_state.ana_veri[silinecek_sutun] = 0
+                elif silinecek_sutun in NUMERIC_KOLONLAR:
+                    st.session_state.ana_veri[silinecek_sutun] = 0.0
+                else:
+                    st.session_state.ana_veri[silinecek_sutun] = ""
+                st.session_state.editor_key += 1
+                st.success(f"'{silinecek_sutun}' sütununun içeriği sıfırlandı! Yeni verileri yükleyebilir veya girebilirsiniz.")
+                st.rerun()
+
     # Global Eskalasyon Ayarı
     st.sidebar.markdown("---")
     global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1)
@@ -234,7 +293,7 @@ with sekme1:
     # --- VERİ EDİTÖRÜ ---
     st.subheader("📝 1. Çarşaf Liste Veri Girişi")
     if filtre_kolonlari:
-        st.info(f"Filtre uygulandı: Toplam {len(st.session_state.ana_veri)} kaydın {len(gosterilecek_df)} tanesini görüyorsunuz.")
+        st.info(f"Filtre aktif: Toplam {len(st.session_state.ana_veri)} kaydın {len(gosterilecek_df)} tanesi gösteriliyor.")
     
     duzenlenen_df = st.data_editor(
         gosterilecek_df, 
@@ -244,10 +303,9 @@ with sekme1:
         key=f"butce_veri_{st.session_state.editor_key}" 
     )
 
-    # Editörden gelen veri ile gizli kalan (filtrelenmiş) veriyi birleştiriyoruz
+    # Düzenlenen filtrelenmiş veriyi, gizli kalan verilerle kusursuz birleştir
     df_birlestirilmis = pd.concat([gizli_df, duzenlenen_df]).copy()
 
-    # Eğer birleştirilmiş tabloda veri varsa hesaplamalara başla
     if not df_birlestirilmis.empty:
         df_nihai = df_birlestirilmis.copy()
         df_nihai.columns = [str(c).strip() for c in df_nihai.columns]
@@ -274,10 +332,9 @@ with sekme1:
             df_nihai[tutar_col] = df_nihai[desi_col] * df_nihai[fiyat_col]
             onceki_fiyat = df_nihai[fiyat_col]
 
-        # Ana veriyi güncelle (Hesaplanmış en güncel hali hafızaya al)
         st.session_state.ana_veri = df_nihai.copy()
 
-        # --- SONUÇLAR VE KAYIT ---
+        # --- SONUÇLAR VE BULUTA KAYIT ---
         st.markdown("---")
         st.subheader("📊 2. Projeksiyon Sonuçları ve Çıktı Yönetimi")
         
@@ -299,7 +356,7 @@ with sekme1:
         with col_down2:
             with st.expander("🚀 Yeni Bir Versiyon Olarak Buluta Kaydet", expanded=True):
                 kisi = st.text_input("Revizyonu Yapan Kişi", value="Ahmet Rodoplu")
-                not_ = st.text_input("Revizyon Notu", placeholder="Örn: 2026 FTL büyüme oranları güncellendi, Berkan ve Yiğit onayı eklendi.")
+                not_ = st.text_input("Revizyon Notu", placeholder="Örn: Ekim 2026 gerçekleşen veriler yüklendi, tahminler fiiliye çekildi.")
                 
                 if st.button("💾 Senaryoyu Kaydet", use_container_width=True):
                     client = get_supabase_client()
@@ -326,8 +383,10 @@ with sekme1:
                     else:
                         st.error("Lütfen Supabase bağlantısını yapın.")
 
+        st.dataframe(df_nihai, use_container_width=True)
+
 # ------------------------------------------------------------
-# 2. SEKME: ÇALIŞMA GÜNLERİ
+# 2. SEKME: ÇALIŞMA GÜNLERI
 # ------------------------------------------------------------
 with sekme2:
     st.title("📅 Operasyonel Çalışma Günleri")
@@ -352,7 +411,6 @@ with sekme3:
             log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
             
             if log_res.data:
-                # Tablo Görünümü Hazırlığı
                 df_log = pd.DataFrame(log_res.data)
                 df_log["kayit_zamani"] = pd.to_datetime(df_log["kayit_zamani"]).dt.strftime("%Y-%m-%d %H:%M")
                 
@@ -363,10 +421,8 @@ with sekme3:
                     "revizyon_id": "Versiyon Kodu"
                 })
                 
-                # YENİ: Başına 'Seç' adında boolean (kutucuk) kolonu ekliyoruz
                 df_log_gorsel.insert(0, "Seç", False)
                 
-                # Sütunları kilitliyoruz ki sadece "Seç" kutucuğu tıklanabilsin
                 edited_log = st.data_editor(
                     df_log_gorsel, 
                     hide_index=True, 
@@ -374,14 +430,11 @@ with sekme3:
                     disabled=["Kayıt Tarihi", "Oluşturan Kişi", "Revizyon Notu", "Versiyon Kodu"]
                 )
                 
-                # Hangi satırların kutucuğu işaretlendiğini buluyoruz
                 secili_satirlar = edited_log[edited_log["Seç"] == True]
                 
-                # 1'den Fazla Seçimi Engelleme Kontrolü
                 if len(secili_satirlar) > 1:
                     st.warning("⚠️ Lütfen aynı anda sadece **bir tane** versiyon seçin.")
                 
-                # Sadece 1 tane versiyon seçildiyse butonları göster
                 elif len(secili_satirlar) == 1:
                     secili_rev = secili_satirlar.iloc[0]["Versiyon Kodu"]
                     
@@ -389,7 +442,6 @@ with sekme3:
                     st.subheader("🛠️ Seçili Versiyon İşlemleri")
                     c_sol, c_sag = st.columns(2)
                     
-                    # YÜKLEME BUTONU
                     if c_sol.button("📥 Seçili Versiyonu Ekrana Çek (Yükle)", type="primary", use_container_width=True):
                         with st.spinner("Bütçe verileri buluttan indiriliyor..."):
                             data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", secili_rev).execute()
@@ -403,7 +455,6 @@ with sekme3:
                             else:
                                 st.warning("Bu versiyona ait detaylı bütçe kaydı bulunamadı.")
                     
-                    # SİLME BUTONU
                     if c_sag.button("🗑️ Seçili Versiyonu Kalıcı Olarak Sil", type="secondary", use_container_width=True):
                         with st.spinner("Versiyon buluttan tamamen siliniyor..."):
                             client.table("butce_tablosu").delete().eq("revizyon_id", secili_rev).execute()
