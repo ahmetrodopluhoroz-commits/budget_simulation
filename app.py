@@ -165,7 +165,7 @@ def supabase_verisini_hazirla(dataframe):
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "secili_revizyon" not in st.session_state: st.session_state.secili_revizyon = None
 
-# YENİ EKLENEN SATIR: Tabloyu zorla yenilemek için kullanacağımız sayaç
+# Tabloyu zorla yenilemek için kullanacağımız sayaç
 if "editor_key" not in st.session_state: 
     st.session_state.editor_key = 0
 
@@ -178,12 +178,8 @@ GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
 
 def get_supabase_client():
-    """
-    Geçerli bağlantı bilgileri varsa Supabase istemcisi döndürür.
-    """
     if not SUPABASE_AVAILABLE:
         return None
-
     try:
         return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
     except Exception:
@@ -206,20 +202,16 @@ with sekme1:
         yeni_df = yeni_df.reindex(columns=tum_kolonlar)
         st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
         
-        # KESİN ÇÖZÜM: Sayacı artır
-        st.session_state.editor_key += 1
-        
+        st.session_state.editor_key += 1 # Arayüzü yeniler
         st.sidebar.success(f"{len(yeni_df)} satır eklendi.")
-        st.rerun()
+        # st.rerun() SİLİNDİ - Başarı mesajı ekranda kalacak
 
     if c2.button("🗑️ Temizle"):
         st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
         
-        # KESİN ÇÖZÜM: Sayacı artır
-        st.session_state.editor_key += 1
-        
+        st.session_state.editor_key += 1 # Arayüzü yeniler
         st.sidebar.success("Sıfırlandı.")
-        st.rerun()
+        # st.rerun() SİLİNDİ - Başarı mesajı ekranda kalacak
 
     # --- BULUT REVİZYON YÖNETİMİ (YÜKLEME) ---
     st.sidebar.markdown("---")
@@ -242,11 +234,9 @@ with sekme1:
                             gelen_df.columns = [str(c).strip() for c in gelen_df.columns]
                             st.session_state.ana_veri = gelen_df.reindex(columns=tum_kolonlar)
                             
-                            # KESİN ÇÖZÜM: Sayacı artırıp tabloyu sıfırdan çizmeye zorluyoruz
-                            st.session_state.editor_key += 1
-                            
+                            st.session_state.editor_key += 1 # Tabloyu veritabanından gelen yeni veriyle çizmeye zorlar
                             st.sidebar.success("Başarıyla yüklendi!")
-                            st.rerun()
+                            # st.rerun() SİLİNDİ - Artık veri tepki verecek ve ekranda kalacak!
             else:
                 st.sidebar.info("Henüz kaydedilmiş bir revizyon yok.")
         except Exception as e:
@@ -263,7 +253,6 @@ with sekme1:
         num_rows="dynamic", 
         use_container_width=True, 
         height=250, 
-        # SİHİRLİ SATIR BURASI: Her tıklamada butce_veri_1, butce_veri_2 diye değişecek
         key=f"butce_veri_{st.session_state.editor_key}" 
     )
 
@@ -316,7 +305,7 @@ with sekme1:
             # --- YENİ VERSİYON KAYIT FORMU ---
             with st.expander("🚀 Yeni Bir Versiyon Olarak Buluta Kaydet", expanded=True):
                 kisi = st.text_input("Revizyonu Yapan Kişi", value="Ahmet Rodoplu")
-                not_ = st.text_input("Revizyon Notu", placeholder="Örn: 2026 FTL büyüme oranları güncellendi, Berkan & Yiğit onayı eklendi.")
+                not_ = st.text_input("Revizyon Notu", placeholder="Örn: 2026 FTL büyüme oranları güncellendi.")
                 
                 if st.button("💾 Senaryoyu Kaydet", use_container_width=True):
                     if client:
@@ -324,17 +313,14 @@ with sekme1:
                             with st.spinner("Yeni versiyon oluşturuluyor..."):
                                 df_bulut, records = supabase_verisini_hazirla(df_nihai)
                                 
-                                # 1. Eşsiz bir Revizyon ID oluştur
                                 yeni_rev_id = f"REV-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
                                 
-                                # 2. Log tablosuna kimin, ne zaman, ne notla yaptığını yaz
                                 client.table("revizyon_log").insert({
                                     "revizyon_id": yeni_rev_id,
                                     "olusturan_kisi": kisi,
                                     "revizyon_notu": not_
                                 }).execute()
                                 
-                                # 3. Her bir satıra bu revizyon kimliğini ekle ve ana tabloya gönder
                                 for r in records: r["revizyon_id"] = yeni_rev_id
                                 
                                 for i in range(0, len(records), 500):
@@ -347,3 +333,13 @@ with sekme1:
                         st.error("Lütfen Supabase bağlantısını yapın.")
 
         st.dataframe(df_nihai, use_container_width=True)
+
+with sekme2:
+    st.title("📅 Operasyonel Çalışma Günleri")
+    takvim_verisi = {
+        "Ay": aylar,
+        "2025 Çalışma Günü": [22, 20, 21, 22, 21, 20, 23, 21, 22, 23, 20, 22],
+        "2026 Çalışma Günü": [21, 20, 20, 21, 17, 22, 22, 21, 22, 21, 21, 23],
+        "Resmi Tatiller / Notlar": ["-", "-", "Ramazan Bayramı", "23 Nisan", "Kurban Bayramı", "-", "-", "30 Ağustos", "-", "29 Ekim", "-", "-"]
+    }
+    st.data_editor(pd.DataFrame(takvim_verisi), use_container_width=True, hide_index=True)
