@@ -153,29 +153,26 @@ def secret_get(name: str, default: str = "") -> str:
         return os.getenv(name, default)
 
 
-APP_USERNAME = secret_get("APP_USERNAME", "rasg")
-APP_PASSWORD = secret_get("APP_PASSWORD", "")
+# Giriş bilgileri önceki uygulamadaki haliyle sabit bırakıldı.
+APP_USERNAME = "rasg"
+APP_PASSWORD = "Hrz1234"
 
 if not st.session_state.oturum_acik:
     st.markdown("<br><br>", unsafe_allow_html=True)
     _, login_col, _ = st.columns([1, 1, 1])
     with login_col:
         st.title("🔒 Bütçe Sistemine Giriş")
+        st.markdown("Lütfen devam etmek için yetkili bilgilerinizi girin.")
         kullanici_adi = st.text_input("Kullanıcı Adı")
         sifre = st.text_input("Şifre", type="password")
 
-        if not APP_PASSWORD:
-            st.warning(
-                "APP_PASSWORD tanımlı değil. .streamlit/secrets.toml dosyasını "
-                "örnek dosyaya göre doldurun."
-            )
-
         if st.button("Giriş Yap", type="primary", use_container_width=True):
-            if kullanici_adi == APP_USERNAME and sifre == APP_PASSWORD and APP_PASSWORD:
+            if kullanici_adi == APP_USERNAME and sifre == APP_PASSWORD:
                 st.session_state.oturum_acik = True
+                st.success("Giriş Başarılı! Sistem Yükleniyor...")
                 st.rerun()
             else:
-                st.error("Hatalı kullanıcı adı veya şifre.")
+                st.error("Hatalı kullanıcı adı veya şifre girdiniz!")
     st.stop()
 
 
@@ -881,4 +878,4 @@ else:
             st.success("Revizyon silindi.")
             st.rerun()
         except Exception as exc:
-            st.error(f"Silme hatası: {exc}")
+            st.error(f"Silme hatası: {exc}")f
