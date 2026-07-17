@@ -632,7 +632,7 @@ with sekme7:
                     val_prev = guvenli_sayi(mz_base.get(aylar[idx_prev], 0.0))
                 
                 if val_prev > 0 and val_curr > 0:
-                    row_data[ay] = ((val_curr / val_prev) - 1)/100
+                    row_data[ay] = ((val_curr / val_prev) - 1)*100
                 else:
                     row_data[ay] = None
                     
