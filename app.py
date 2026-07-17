@@ -106,8 +106,15 @@ def guvenli_tamsayi(value, nullable=True):
     return int(round(val)) if val != 0.0 or str(value).strip() == "0" else (None if nullable else 0)
 
 def guvenli_metin_kodu(value):
-    tamsayi = guvenli_tamsayi(value, nullable=True)
-    return str(tamsayi) if tamsayi is not None else str(value).strip()
+    if pd.isna(value): return ""
+    val_str = str(value).strip()
+    try:
+        val_float = float(val_str)
+        if val_float.is_integer():
+            return str(int(val_float))
+        return str(val_float)
+    except:
+        return val_str
 
 def bos_deger_mi(value):
     if value is None: return True
@@ -461,60 +468,60 @@ with sekme3:
 # ------------------------------------------------------------
 with sekme4:
     st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
-    st.markdown("Aşağıya sadece işlem yapmak istediğiniz (Müşteri Kodu, Adı vb. içeren) **müşteri listesini (Excel/CSV)** yükleyin. Sistem, ana bütçeden toplam desileri Düşeyara mantığıyla getirip ekranı sizin için hazırlayacaktır.")
+    st.markdown("Aşağıya sadece işlem yapmak istediğiniz (Müşteri Kodu, Adı vb. içeren) **müşteri listesini (Excel/CSV)** yükleyin. Sistem, **1. Sekmedeki (Çarşaf Liste)** güncel desi verilerini Düşeyara mantığıyla getirip ekranı sizin için hazırlayacaktır.")
 
-    # SADECE MÜŞTERİ YÜKLEME ALANI
     yuklenen_musteri = st.file_uploader("Müşteri Listenizi Yükleyin (Excel veya CSV)", type=["xlsx", "xls", "csv"], key="musteri_sablonu_yukle")
 
     if yuklenen_musteri:
         df_hedef = pd.read_csv(yuklenen_musteri) if yuklenen_musteri.name.lower().endswith(".csv") else pd.read_excel(yuklenen_musteri)
         
-        # Müşteri Kodu kolonu zorunlu
         if "Müşteri Kodu" not in df_hedef.columns:
             st.error("❌ Yüklediğiniz dosyada eşleştirme yapılabilmesi için mutlaka **'Müşteri Kodu'** adında bir sütun bulunmalıdır!")
         else:
-            # 1. Hedef listedeki Müşteri Kodlarını string'e çevirip garantile
+            # 1. HEDEF VERİYİ TEMİZLE (Kusursuz Eşleştirme İçin)
             df_hedef["Müşteri Kodu"] = df_hedef["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            # 2. Çarşaf Listeden (st.session_state.ana_veri) dolu ay sayısını ve desileri bul
             aktif_aylar_2026 = []
             dolu_ay_sayisi = 0
             
+            # 2. ÇARŞAF LİSTEDEKİ VERİLERİ (st.session_state.ana_veri) KONTROL ET VE TEMİZLE
             if not st.session_state.ana_veri.empty:
                 df_master_tmp = st.session_state.ana_veri.copy()
                 df_master_tmp["Müşteri Kodu"] = df_master_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
                 
+                # Dolu desi aylarını bul ve sayısal formata çevir
                 for ay in aylar:
                     col_desi = f"2026 {ay} Desi"
                     if col_desi in df_master_tmp.columns:
-                        if df_master_tmp[col_desi].apply(guvenli_sayi).sum() > 0:
+                        df_master_tmp[col_desi] = df_master_tmp[col_desi].apply(guvenli_sayi)
+                        if df_master_tmp[col_desi].sum() > 0:
                             aktif_aylar_2026.append(col_desi)
                 
                 dolu_ay_sayisi = len(aktif_aylar_2026)
             
-            desi_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Desi" # En az 1 ay gibi isimlendir
+            desi_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Desi" 
             
-            # 3. Düşeyara (Merge) Mantığıyla Desileri Hedef Tabloya Çek
+            # 3. DÜŞEYARA (MERGE) MANTIĞI VE TOPLAMLARI ALMA
             if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                df_master_tmp[desi_toplam_kolon_adi] = df_master_tmp[aktif_aylar_2026].applymap(guvenli_sayi).sum(axis=1)
+                # O ayki desileri satır bazında topla
+                df_master_tmp[desi_toplam_kolon_adi] = df_master_tmp[aktif_aylar_2026].sum(axis=1)
+                # Müşteri bazında grupla ve topla
                 desi_grouped = df_master_tmp.groupby("Müşteri Kodu", as_index=False)[desi_toplam_kolon_adi].sum()
                 
-                # Eşleştir
+                # Hedef tablo ile eşleştir
                 df_hedef = pd.merge(df_hedef, desi_grouped, on="Müşteri Kodu", how="left")
             else:
-                # Ana bütçe boşsa desiler 0 gelsin
                 df_hedef[desi_toplam_kolon_adi] = 0.0
+                st.warning("⚠️ Ana bütçe havuzunda desi verisi bulunamadı! Lütfen önce 1. Sekmeye (Çarşaf Liste) güncel bütçe verilerinizi yükleyin.")
                 
-            # Eşleşmeyen/Boş kalan desileri 0.0 yap
+            # Eşleşmeyenleri 0 yap
             df_hedef[desi_toplam_kolon_adi] = df_hedef[desi_toplam_kolon_adi].fillna(0.0)
             
-            # 4. Kalan Düzenlenebilir Kolonları (Durum_2, Yeni Müşteri vb.) Hafızadan Doldur
+            # 4. KALAN KOLONLARI HAFIZADAN DOLDUR
             for idx, row in df_hedef.iterrows():
                 m_kod = str(row["Müşteri Kodu"])
                 if m_kod not in st.session_state.musteri_ayarlari:
-                    # Mevcut dosyadaki Durum'u çek veya GEÇERLİ varsay
                     varsayilan_durum = row.get("Durum", "GEÇERLİ")
-                    
                     st.session_state.musteri_ayarlari[m_kod] = {
                         "Yeni/Bütçelenen Müşteri": "03.Bütçelenen",
                         "Durum_2": varsayilan_durum if varsayilan_durum in ["GEÇERLİ", "GEÇERSİZ"] else None,
@@ -522,13 +529,12 @@ with sekme4:
                         "Serbest Not": ""
                     }
                     
-            # Session State'teki değerleri tabloya yedir
             df_hedef["Yeni/Bütçelenen Müşteri"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Yeni/Bütçelenen Müşteri", "03.Bütçelenen"))
             df_hedef["Durum_2"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_2", None))
             df_hedef["Durum_3"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_3", ""))
             df_hedef["Serbest Not"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Serbest Not", ""))
             
-            # 5. Değişim Kontrol Formülü
+            # 5. DEĞİŞİM KONTROLÜ
             def degisim_kontrol_formulu_hedef(row):
                 d1 = str(row.get("Durum", "")).strip().upper()
                 d2 = str(row.get("Durum_2", "")).strip().upper() if row.get("Durum_2") is not None and not pd.isna(row.get("Durum_2")) else ""
@@ -536,16 +542,15 @@ with sekme4:
                 
             df_hedef["Değişim kontrol"] = df_hedef.apply(degisim_kontrol_formulu_hedef, axis=1)
 
-            st.success(f"Yüklenen {len(df_hedef)} müşteri başarıyla ana bütçe (çarşaf liste) ile eşleştirildi! Aşağıdaki tablodan doldurmaya başlayabilirsiniz.")
+            st.success(f"Yüklenen {len(df_hedef)} müşteri başarıyla ana bütçe ile eşleştirildi! Aşağıdaki tablodan doldurmaya başlayabilirsiniz.")
 
-            # Kilitlenecek kolonları belirle (Yüklenen kolonların hepsi + desi + değişim kontrol)
             kilitli_kolonlar = list(df_hedef.columns)
             if "Yeni/Bütçelenen Müşteri" in kilitli_kolonlar: kilitli_kolonlar.remove("Yeni/Bütçelenen Müşteri")
             if "Durum_2" in kilitli_kolonlar: kilitli_kolonlar.remove("Durum_2")
             if "Durum_3" in kilitli_kolonlar: kilitli_kolonlar.remove("Durum_3")
             if "Serbest Not" in kilitli_kolonlar: kilitli_kolonlar.remove("Serbest Not")
 
-            # 6. Ekrana Data Editor'ü Bas
+            # 6. EKRANA BAS
             edited_musteri = st.data_editor(
                 df_hedef,
                 use_container_width=True,
@@ -565,7 +570,7 @@ with sekme4:
                 key="musteri_ekran_editoru_ozel"
             )
 
-            # 7. Kaydet ve Excel Çıktısı Al Butonları
+            # 7. KAYDET VE İNDİR
             st.markdown("---")
             c_kaydet, c_indir = st.columns(2)
             
@@ -592,4 +597,4 @@ with sekme4:
                 use_container_width=True
             )
     else:
-        st.info("Lütfen örnekteki gibi sadece ilgilendiğiniz müşterileri içeren Excel veya CSV dosyanızı yükleyin.")
+        st.info("Lütfen örnekteki gibi sadece ilgilendiğiniz müşterileri içeren Excel veya CSV dosyanızı yükleyin. (Not: Desilerin 0 gelmemesi için 1. Sekmede bütçenizin dolu olduğundan emin olun.)")
