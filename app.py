@@ -485,14 +485,29 @@ with sekme4:
                 
                 # BULUTA YÜKLEME BUTONU (YENİ SÖZÜMÜZ 🚀)
                 if c_m2.button("💾 Müşteri Kartlarını Buluta Kaydet", use_container_width=True, key="btn_m_cloud_sv"):
+                    # Sadece Supabase'de var olan sütunların isimlerini belirliyoruz.
+                    izin_verilen_db_sutunlari = [
+                        "Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi", 
+                        "Durum", "Kayıt Tarihi", "Müşteri Grubu", "Yeni/Bütçelenen Müşteri", 
+                        "Durum_2", "Durum_3", "Serbest Not", "Değişim kontrol"
+                    ]
+                    
                     m_records = []
                     for _, row in edited_m.iterrows():
-                        rc = {str(col): json_uyumlu_deger(val) for col, val in row.items()}
+                        rc = {}
+                        # Ekranda olan verilerden SADECE veritabanında olanları filtreliyoruz
+                        for col in izin_verilen_db_sutunlari:
+                            if col in row:
+                                rc[col] = json_uyumlu_deger(row[col])
+                        
                         rc["revizyon_id"] = r_id_m
                         m_records.append(rc)
-                    client.table("musteri_detay_tablosu").delete().eq("revizyon_id", r_id_m).execute()
-                    for i in range(0, len(m_records), 500): client.table("musteri_detay_tablosu").insert(m_records[i:i+500]).execute()
-                    st.success("Müşteri detayları buluta kilitlendi!")
+                        
+                    with st.spinner("Müşteri detayları buluta işleniyor..."):
+                        client.table("musteri_detay_tablosu").delete().eq("revizyon_id", r_id_m).execute()
+                        for i in range(0, len(m_records), 500): 
+                            client.table("musteri_detay_tablosu").insert(m_records[i:i+500]).execute()
+                        st.success("🎉 Müşteri detayları başarıyla buluta kilitlendi!")
 
                 # BULUTTAN ÇEKME BUTONU
                 if c_m3.button("🔄 Buluttan Müşteri Kartlarını Çek", use_container_width=True, key="btn_m_cloud_ld"):
