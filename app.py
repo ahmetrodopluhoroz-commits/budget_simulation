@@ -78,6 +78,9 @@ NUMERIC_KOLONLAR = (["Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim O
                     kolonlar_2026_desi + kolonlar_2026_tutar + kolonlar_2026_fiyat)
 TARIH_KOLONLARI = ["Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
 
+# 5. Sekme İçin Özel Sütunlar
+deg_anah_sutunlari = ["Müşteri Kodu", "Sap No", "Ünvan", "Müşteri Temsilcisi 1", "Müşteri Temsilcisi 2", "Değişim Anahtarı", "KDV Durumu", "Baz Yakıt Fiyatı"]
+
 # ============================================================
 # YARDIMCI FONKSİYONLAR
 # ============================================================
@@ -93,9 +96,7 @@ def guvenli_sayi(value):
         except: return 0.0
     value = str(value).strip()
     if value.lower() in {"", "-", "nan", "none", "null", "nat"}: return 0.0
-    value = value.replace("₺", "").replace("%", "").replace(" ", "")
-    if "," in value and "." in value: value = value.replace(".", "").replace(",", ".")
-    elif "," in value: value = value.replace(",", ".")
+    value = value.replace("₺", "").replace(" ", "").replace(".", "").replace(",", ".") if "," in value and "." in value else value.replace("₺", "").replace(" ", "").replace(",", ".")
     try:
         val = float(value)
         return val if np.isfinite(val) else 0.0
@@ -179,6 +180,7 @@ def supabase_verisini_hazirla(dataframe):
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "editor_key" not in st.session_state: st.session_state.editor_key = 0
 if "musteri_ayarlari" not in st.session_state: st.session_state.musteri_ayarlari = {}
+if "deg_anah_veri" not in st.session_state: st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
 
 GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
@@ -189,13 +191,14 @@ def get_supabase_client():
     except: return None
 
 # ============================================================
-# ARAYÜZ SEKMELERİ
+# ARAYÜZ SEKMELERİ (5 SEKMEYE ÇIKARILDI)
 # ============================================================
-sekme1, sekme2, sekme3, sekme4 = st.tabs([
+sekme1, sekme2, sekme3, sekme4, sekme5 = st.tabs([
     "🚚 Çarşaf Liste & Bütçe", 
     "📅 Çalışma Günleri Takvimi", 
     "☁️ Bulut Revizyon Yönetimi",
-    "👤 Yeni-Bütçe Müşteri"
+    "👤 Yeni-Bütçe Müşteri",
+    "⚙️ değ.anah.-yakıt-kdv"
 ])
 
 # ------------------------------------------------------------
@@ -464,11 +467,11 @@ with sekme3:
         st.error("Lütfen Supabase bağlantı ayarlarının yapıldığından emin olun.")
 
 # ------------------------------------------------------------
-# 4. SEKME: YENİ-BÜTÇE MÜŞTERİ (MÜŞTERİ LİSTESİ YÜKLEME)
+# 4. SEKME: YENİ-BÜTÇE MÜŞTERİ (AY GİZLEME VE HASSAS FORMÜL)
 # ------------------------------------------------------------
 with sekme4:
     st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
-    st.markdown("Aşağıya sadece işlem yapmak istediğiniz (Müşteri Kodu, Adı vb. içeren) **müşteri listesini (Excel/CSV)** yükleyin. Sistem, **1. Sekmedeki (Çarşaf Liste)** güncel desi verilerini Düşeyara mantığıyla getirip ekranı sizin için hazırlayacaktır.")
+    st.markdown("Aşağıya sadece işlem yapmak istediğiniz müşteri listesini yükleyin. Sistem aylık desileri gizleyerek sadece **Toplam Desi** hücresini getirir.")
 
     yuklenen_musteri = st.file_uploader("Müşteri Listenizi Yükleyin (Excel veya CSV)", type=["xlsx", "xls", "csv"], key="musteri_sablonu_yukle")
 
@@ -476,20 +479,17 @@ with sekme4:
         df_hedef = pd.read_csv(yuklenen_musteri) if yuklenen_musteri.name.lower().endswith(".csv") else pd.read_excel(yuklenen_musteri)
         
         if "Müşteri Kodu" not in df_hedef.columns:
-            st.error("❌ Yüklediğiniz dosyada eşleştirme yapılabilmesi için mutlaka **'Müşteri Kodu'** adında bir sütun bulunmalıdır!")
+            st.error("❌ Dosyada eşleştirme yapılabilmesi için mutlaka **'Müşteri Kodu'** adında bir sütun bulunmalıdır!")
         else:
-            # 1. HEDEF VERİYİ TEMİZLE (Kusursuz Eşleştirme İçin)
             df_hedef["Müşteri Kodu"] = df_hedef["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
             aktif_aylar_2026 = []
             dolu_ay_sayisi = 0
             
-            # 2. ÇARŞAF LİSTEDEKİ VERİLERİ (st.session_state.ana_veri) KONTROL ET VE TEMİZLE
             if not st.session_state.ana_veri.empty:
                 df_master_tmp = st.session_state.ana_veri.copy()
                 df_master_tmp["Müşteri Kodu"] = df_master_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
                 
-                # Dolu desi aylarını bul ve sayısal formata çevir
                 for ay in aylar:
                     col_desi = f"2026 {ay} Desi"
                     if col_desi in df_master_tmp.columns:
@@ -501,23 +501,15 @@ with sekme4:
             
             desi_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Desi" 
             
-            # 3. DÜŞEYARA (MERGE) MANTIĞI VE TOPLAMLARI ALMA
             if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                # O ayki desileri satır bazında topla
                 df_master_tmp[desi_toplam_kolon_adi] = df_master_tmp[aktif_aylar_2026].sum(axis=1)
-                # Müşteri bazında grupla ve topla
                 desi_grouped = df_master_tmp.groupby("Müşteri Kodu", as_index=False)[desi_toplam_kolon_adi].sum()
-                
-                # Hedef tablo ile eşleştir
                 df_hedef = pd.merge(df_hedef, desi_grouped, on="Müşteri Kodu", how="left")
             else:
                 df_hedef[desi_toplam_kolon_adi] = 0.0
-                st.warning("⚠️ Ana bütçe havuzunda desi verisi bulunamadı! Lütfen önce 1. Sekmeye (Çarşaf Liste) güncel bütçe verilerinizi yükleyin.")
                 
-            # Eşleşmeyenleri 0 yap
             df_hedef[desi_toplam_kolon_adi] = df_hedef[desi_toplam_kolon_adi].fillna(0.0)
             
-            # 4. KALAN KOLONLARI HAFIZADAN DOLDUR
             for idx, row in df_hedef.iterrows():
                 m_kod = str(row["Müşteri Kodu"])
                 if m_kod not in st.session_state.musteri_ayarlari:
@@ -534,7 +526,7 @@ with sekme4:
             df_hedef["Durum_3"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_3", ""))
             df_hedef["Serbest Not"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Serbest Not", ""))
             
-            # 5. DEĞİŞİM KONTROLÜ
+            # KESİN VE HASSAS DEĞİŞİM KONTROL FORMÜLÜ (GÜNCELLENDİ)
             def degisim_kontrol_formulu_hedef(row):
                 d1 = str(row.get("Durum", "")).strip().upper()
                 d2 = str(row.get("Durum_2", "")).strip().upper() if row.get("Durum_2") is not None and not pd.isna(row.get("Durum_2")) else ""
@@ -542,17 +534,18 @@ with sekme4:
                 
             df_hedef["Değişim kontrol"] = df_hedef.apply(degisim_kontrol_formulu_hedef, axis=1)
 
-            st.success(f"Yüklenen {len(df_hedef)} müşteri başarıyla ana bütçe ile eşleştirildi! Aşağıdaki tablodan doldurmaya başlayabilirsiniz.")
+            # İSTENEN KOLON FİLTRESİ: Tüm ocak, şubat vb. aylık sütunları ekrandan uçur
+            gosterilecek_kolonlar = [c for c in df_hedef.columns if not any(m in str(c) for m in aylar)]
+            df_gosterim = df_hedef[gosterilecek_kolonlar].copy()
 
-            kilitli_kolonlar = list(df_hedef.columns)
+            kilitli_kolonlar = list(df_gosterim.columns)
             if "Yeni/Bütçelenen Müşteri" in kilitli_kolonlar: kilitli_kolonlar.remove("Yeni/Bütçelenen Müşteri")
             if "Durum_2" in kilitli_kolonlar: kilitli_kolonlar.remove("Durum_2")
             if "Durum_3" in kilitli_kolonlar: kilitli_kolonlar.remove("Durum_3")
             if "Serbest Not" in kilitli_kolonlar: kilitli_kolonlar.remove("Serbest Not")
 
-            # 6. EKRANA BAS
             edited_musteri = st.data_editor(
-                df_hedef,
+                df_gosterim,
                 use_container_width=True,
                 height=500,
                 disabled=kilitli_kolonlar,
@@ -570,11 +563,10 @@ with sekme4:
                 key="musteri_ekran_editoru_ozel"
             )
 
-            # 7. KAYDET VE İNDİR
             st.markdown("---")
             c_kaydet, c_indir = st.columns(2)
             
-            if c_kaydet.button("💾 Ekranda Yaptığım Değişiklikleri Hafızaya Kaydet", type="primary", use_container_width=True):
+            if c_kaydet.button("💾 Ekranda Yaptığım Değişiklikleri Hafızaya Kaydet", type="primary", use_container_width=True, key="m_detay_kaydet_btn"):
                 for idx, row in edited_musteri.iterrows():
                     m_kod = str(row["Müşteri Kodu"])
                     st.session_state.musteri_ayarlari[m_kod] = {
@@ -583,7 +575,7 @@ with sekme4:
                         "Durum_3": row["Durum_3"],
                         "Serbest Not": row["Serbest Not"]
                     }
-                st.success("Tüm değişiklikler başarıyla hafızaya alındı! Başka bir sayfaya geçseniz dahi kaybolmayacak.")
+                st.success("Değişiklikler başarıyla kaydedildi!")
                 st.rerun()
 
             output_musteri_excel = io.BytesIO()
@@ -591,10 +583,134 @@ with sekme4:
                 edited_musteri.to_excel(writer, index=False, sheet_name="Müşteri Detay Özet")
             
             c_indir.download_button(
-                "📥 Ekranda Gördüğüm (Nihai) Tabloyu Excel İndir", 
+                "📥 Ekranda Gördüğüm Tabloyu Excel İndir", 
                 output_musteri_excel.getvalue(), 
                 "ozel_musteri_durum_detay.xlsx", 
-                use_container_width=True
+                use_container_width=True,
+                key="m_detay_indir_btn"
             )
     else:
-        st.info("Lütfen örnekteki gibi sadece ilgilendiğiniz müşterileri içeren Excel veya CSV dosyanızı yükleyin. (Not: Desilerin 0 gelmemesi için 1. Sekmede bütçenizin dolu olduğundan emin olun.)")
+        st.info("Lütfen örnekteki gibi sadece ilgilendiğiniz müşterileri içeren bütçe Excel veya CSV dosyanızı yükleyin.")
+
+# ------------------------------------------------------------
+# 5. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ (YENİ EK)
+# ------------------------------------------------------------
+with sekme5:
+    st.title("⚙️ değ.anah.-yakıt-kdv Parametre Yönetimi")
+    st.markdown("Müşteri sözleşmelerine ait **Değişim Anahtarlarını**, **KDV Durumlarını** ve **Baz Yakıt Fiyatlarını** bu alandan topluca yönetebilir, buluta kaydedip geri çekebilirsiniz.")
+    
+    # Adım 1: Excel / CSV Yükleme Alanı
+    st.subheader("📥 Yeni Parametre Dosyası Yükle")
+    yuklenen_param = st.file_uploader("Parametre Şablonunu Yükle (Excel/CSV)", type=["xlsx", "xls", "csv"], key="param_sablonu_yukle")
+    
+    if yuklenen_param:
+        df_p_giren = pd.read_csv(yuklenen_param) if yuklenen_param.name.lower().endswith(".csv") else pd.read_excel(yuklenen_param)
+        df_p_giren.columns = [str(c).strip() for c in df_p_giren.columns]
+        
+        # Müşteri Kodu kolonu temizliği
+        if "Müşteri Kodu" in df_p_giren.columns:
+            df_p_giren["Müşteri Kodu"] = df_p_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
+            
+        # Şablona göre reindex et
+        df_p_giren = df_p_giren.reindex(columns=deg_anah_sutunlari)
+        st.session_state.deg_anah_veri = df_p_giren.copy()
+        st.success(f"📂 {len(df_p_giren)} satırlık veri başarıyla arayüze yüklendi!")
+
+    # Adım 2: Gelişmiş Data Editor Görünümü
+    st.subheader("📝 Parametre Düzenleme Matrisi")
+    
+    # Baz Yakıt Fiyatı hücresini güvenceye almak için fonksiyon
+    if not st.session_state.deg_anah_veri.empty:
+        st.session_state.deg_anah_veri["Baz Yakıt Fiyatı"] = st.session_state.deg_anah_veri["Baz Yakıt Fiyatı"].apply(guvenli_sayi)
+
+    edited_param_df = st.data_editor(
+        st.session_state.deg_anah_veri,
+        use_container_width=True,
+        num_rows="dynamic",
+        height=400,
+        column_config={
+            "Müşteri Kodu": st.column_config.TextColumn("Müşteri Kodu", required=True),
+            "KDV Durumu": st.column_config.SelectboxColumn("KDV Durumu", options=["KDV'li", "KDV'siz", "Muaf"]),
+            "Baz Yakıt Fiyatı": st.column_config.NumberColumn("Baz Yakıt Fiyatı", format="₺%.2f")
+        },
+        key="deg_anah_matris_editor"
+    )
+    st.session_state.deg_anah_veri = edited_param_df.copy()
+
+    # Adım 3: Bulut Kayıt & Çekme & Excel Çıktı Yönetimi
+    st.markdown("---")
+    st.subheader("☁️ Bulut Entegrasyonu & Çıktı")
+    
+    c_p1, c_p2, c_p3 = st.columns(3)
+    
+    # Excel Çıktısı Alma
+    output_param_excel = io.BytesIO()
+    with pd.ExcelWriter(output_param_excel, engine="openpyxl") as writer:
+        edited_param_df.to_excel(writer, index=False, sheet_name="Parametre_Detay")
+    
+    c_p1.download_button(
+        "📥 Mevcut Tabloyu Excel Olarak İndir",
+        output_param_excel.getvalue(),
+        "deg_anah_yakit_kdv.xlsx",
+        use_container_width=True,
+        key="param_excel_indir_btn"
+    )
+
+    # Cloud Revizyon Listesini Al
+    client = get_supabase_client()
+    rev_secenekleri = {}
+    if client:
+        try:
+            log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
+            if log_res.data:
+                rev_secenekleri = {f"{r['kayit_zamani'][:16]} | {r['olusturan_kisi']} - {r['revizyon_notu']}": r['revizyon_id'] for r in log_res.data}
+        except:
+            pass
+
+    if rev_secenekleri:
+        secilen_rev_etiket = c_p2.selectbox("İşlem Yapılacak Bulut Versiyonunu Seçin:", list(rev_secenekleri.keys()), key="param_rev_secim_box")
+        aktif_rev_id = rev_secenekleri[secilen_rev_etiket]
+        
+        # BULUTA KAYDETME MOTORU
+        if c_p2.button("💾 Bu Verileri Seçili Versiyona Kaydet", type="primary", use_container_width=True, key="param_bulut_kaydet_btn"):
+            if not edited_param_df.empty:
+                with st.spinner("Parametreler bulut veritabanına işleniyor..."):
+                    try:
+                        # Kayıtları hazırla
+                        param_records = []
+                        for _, row in edited_param_df.iterrows():
+                            rec = {str(col): json_uyumlu_deger(val) for col, val in row.items()}
+                            rec["revizyon_id"] = aktif_rev_id  # Seçilen revizyona bağla
+                            param_records.append(rec)
+                        
+                        # Varsa eski parametreleri temizle (çakışma olmaması için)
+                        client.table("deg_anah_tablosu").delete().eq("revizyon_id", aktif_rev_id).execute()
+                        
+                        # Toplu insert yap (500'erli paketler halinde)
+                        for i in range(0, len(param_records), 500):
+                            client.table("deg_anah_tablosu").insert(param_records[i:i+500]).execute()
+                            
+                        st.success(f"🎉 Başarılı! Parametreler '{aktif_rev_id}' versiyon koduna kalıcı olarak mühürlendi.")
+                    except Exception as e:
+                        st.error(f"Bulut Kayıt Hatası: {e}\n(Not: Veritabanınızda 'deg_anah_tablosu' adında bir tablo kurulduğundan emin olun.)")
+            else:
+                st.warning("Ekranda kaydedilecek parametre verisi bulunmamaktadır.")
+
+        # BULUTTAN ÇEKME MOTORU
+        if c_p3.button("🔄 Seçili Versiyonun Parametrelerini Çek", type="secondary", use_container_width=True, key="param_bulut_cek_btn"):
+            with st.spinner("Parametreler buluttan indiriliyor..."):
+                try:
+                    data_res = client.table("deg_anah_tablosu").select("*").eq("revizyon_id", aktif_rev_id).execute()
+                    if data_res.data:
+                        gelen_p_df = pd.DataFrame(data_res.data)
+                        # Veritabanındaki gereksiz sistem kolonlarını temizle (id, revizyon_id vb.)
+                        mevcut_sutunlar = [c for c in deg_anah_sutunlari if c in gelen_p_df.columns]
+                        st.session_state.deg_anah_veri = gelen_p_df[mevcut_sutunlar].reindex(columns=deg_anah_sutunlari)
+                        st.success("🎉 İlgili versiyona ait tüm sözleşme, yakıt ve KDV parametreleri başarıyla ekrana çekildi!")
+                        st.rerun()
+                    else:
+                        st.warning("Bu versiyon koduna ait kaydedilmiş bir parametre veri kaydı bulunamadı.")
+                except Exception as e:
+                    st.error(f"Buluttan Çekme Hatası: {e}")
+    else:
+        c_p2.info("Buluttan parametre kaydı/çekimi yapabilmek için önce 'Çarşaf Liste & Bütçe' sekmesinden en az bir senaryo kaydetmelisiniz.")
