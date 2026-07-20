@@ -79,6 +79,12 @@ NUMERIC_KOLONLAR = (["Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim O
                     kolonlar_2026_desi + kolonlar_2026_tutar + kolonlar_2026_fiyat)
 
 # Özel Sayfa Şablon Sütun Tanımları
+data_ekran_sutunlari = [
+    "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+    "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
+    "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
+    "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
+]
 deg_anah_sutunlari = ["Müşteri Kodu", "Sap No", "Ünvan", "Müşteri Temsilcisi 1", "Müşteri Temsilcisi 2", "Değişim Anahtarı", "KDV Durumu", "Baz Yakıt Fiyatı"]
 baz_yakit_sutunlari = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Durum", "KDV'li / KDV'siz", "Esk. Baz Yakıt Fiyatı", "Yakıt Fiyat"]
 mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
@@ -92,6 +98,7 @@ buyume_ekran_sutunlari = [
 # ============================================================
 # SESSION STATE & BULUT BAĞLANTISI
 # ============================================================
+if "data_sayfası_df" not in st.session_state: st.session_state.data_sayfası_df = pd.DataFrame(columns=data_ekran_sutunlari)
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "editor_key" not in st.session_state: st.session_state.editor_key = 0
 if "musteri_ayarlari" not in st.session_state: st.session_state.musteri_ayarlari = {}
@@ -187,10 +194,10 @@ def supabase_verisini_hazirla(dataframe):
     return df, [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in df.iterrows()]
 
 # ============================================================
-# ARAYÜZ SEKMELERİ (8 SEKMEYE ÇIKARILDI 🎉)
+# ARAYÜZ SEKMELERİ (9 SEKMEYE ÇIKARILDI - DATA EN BAŞTA 🎉)
 # ============================================================
 sekmeler = st.tabs([
-    "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
+    "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları"
 ])
@@ -205,12 +212,138 @@ if client:
     except: pass
 
 # ------------------------------------------------------------
-# 1. SEKME: ANA BÜTÇE EKRANI
+# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (YENİ MODÜL 🚀)
 # ------------------------------------------------------------
 with sekmeler[0]:
+    st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
+    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Sistem, **belirttiğiniz 9 sütunu yan yana yazarak** `Uniq ID` üretecek ve Çarşaf Liste'deki eskalasyon parametrelerini anlık bağlayacaktır.")
+
+    yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
+
+    # Çarşaf listeden Düşeyara (VLOOKUP) için verileri belleğe al
+    lookup_parametleri = {}
+    if not st.session_state.ana_veri.empty:
+        df_c_tmp = st.session_state.ana_veri.copy()
+        df_c_tmp["Müşteri Kodu"] = df_c_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        df_uniq_m = df_c_tmp.drop_duplicates(subset=["Müşteri Kodu"])
+        for _, r in df_uniq_m.iterrows():
+            mk = str(r["Müşteri Kodu"])
+            lookup_parametleri[mk] = {
+                "Durum": r.get("Durum", "GEÇERLİ"),
+                "Kayıt Tarihi": r.get("Kayıt Tarihi", ""),
+                "Müşteri Grubu": r.get("Müşteri Grubu", "DİĞER"),
+                "Yakıt Değişim Yüzdesi (%)": guvenli_sayi(r.get("Yakıt Değişim Yüzdesi (%)", 0.0)),
+                "Yakıt Anlık Değişim Oranı (%)": guvenli_sayi(r.get("Yakıt Anlık Değişim Oranı (%)", 0.0)),
+                "Yakıt Değişim Periyodu (Ay)": guvenli_tamsayi(r.get("Yakıt Değişim Periyodu (Ay)", 0)),
+                "Enf. Değişim Yüzdesi (%)": guvenli_sayi(r.get("Enf. Değişim Yüzdesi (%)", 0.0)),
+                "Enf. Değişim Periyodu (Ay)": guvenli_tamsayi(r.get("Enf. Değişim Periyodu (Ay)", 0)),
+                "Esk. Baz Yakıt Fiyatı": guvenli_sayi(r.get("Esk. Baz Yakıt Fiyatı", 0.0)),
+                "Esk. Yakıt Başlangıç Tarihi": r.get("Esk. Yakıt Başlangıç Tarihi", ""),
+                "Esk. Enf. Başlangıç Tarihi": r.get("Esk. Enf. Başlangıç Tarihi", "")
+            }
+
+    if yuklenen_data_havuzu:
+        df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
+        df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
+        
+        data_rows = []
+        for idx, row in df_d_giren.iterrows():
+            mkod = guvenli_metin_kodu(row.get("Müşteri Kodu", ""))
+            
+            # KURAL: Yıl, Teslimat Tipi, Atf Tipi ... Müşteri Kodu sütun değerlerinin metinsel olarak yan yana birleştirilmesi
+            join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
+            uniq_str = "".join([str(row.get(c, "")).strip() for c in join_cols]).replace("nan", "").replace("None", "")
+            
+            # Çarşaf Listeden Düşeyara Yapılıyor
+            p_set = lookup_parametleri.get(mkod, {})
+
+            data_rows.append({
+                "Uniq ID": uniq_str,
+                "Yıl": row.get("Yıl", ""),
+                "Teslimat Tipi": row.get("Teslimat Tipi", ""),
+                "Atf Tipi": row.get("Atf Tipi", ""),
+                "Çıkış İl Adı": row.get("Çıkış İl Adı", ""),
+                "Çıkış Şube Adı": row.get("Çıkış Şube Adı", ""),
+                "Varış İl Adı": row.get("Varış İl Adı", ""),
+                "Varış Şube Adı": row.get("Varış Şube Adı", ""),
+                "İlk Okutma Şubesi": row.get("İlk Okutma Şubesi", ""),
+                "Müşteri Kodu": mkod,
+                "Müşteri Adı": row.get("Müşteri Adı", ""),
+                "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", ""),
+                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")),
+                "Durum": p_set.get("Durum", "GEÇERLİ"),
+                "Kayıt Tarihi": p_set.get("Kayıt Tarihi", ""),
+                "Müşteri Grubu": p_set.get("Müşteri Grubu", "DİĞER"),
+                "Yakıt Değişim Yüzdesi (%)": p_set.get("Yakıt Değişim Yüzdesi (%)", 0.0),
+                "Yakıt Anlık Değişim Oranı (%)": p_set.get("Yakıt Anlık Değişim Oranı (%)", 0.0),
+                "Yakıt Değişim Periyodu (Ay)": p_set.get("Yakıt Değişim Periyodu (Ay)", 0),
+                "Enf. Değişim Yüzdesi (%)": p_set.get("Enf. Değişim Yüzdesi (%)", 0.0),
+                "Enf. Değişim Periyodu (Ay)": p_set.get("Enf. Değişim Periyodu (Ay)", 0),
+                "Esk. Baz Yakıt Fiyatı": p_set.get("Esk. Baz Yakıt Fiyatı", 0.0),
+                "Esk. Yakıt Başlangıç Tarihi": p_set.get("Esk. Yakıt Başlangıç Tarihi", ""),
+                "Esk. Enf. Başlangıç Tarihi": p_set.get("Esk. Enf. Başlangıç Tarihi", "")
+            })
+        st.session_state.data_sayfası_df = pd.DataFrame(data_rows).reindex(columns=data_ekran_sutunlari)
+        st.success("🎉 Ham veri başarıyla mühürlendi ve metinsel Uniq ID kombinasyonları oluşturuldu!")
+
+    # Tabloyu data_editor olarak ekrana bas
+    if not st.session_state.data_sayfası_df.empty:
+        edited_data_grid = st.data_editor(
+            st.session_state.data_sayfası_df,
+            use_container_width=True,
+            height=400,
+            disabled=data_ekran_sutunlari, # Sadece görüntüleme ve çapraz kontrol amaçlı kilitli
+            column_config={
+                "Esk. Baz Yakıt Fiyatı": st.column_config.NumberColumn("Esk. Baz Yakıt Fiyatı", format="₺%.2f"),
+                "Yakıt Değişim Yüzdesi (%)": st.column_config.NumberColumn("Yakıt Değişim Yüzdesi (%)", format="%.2f%%"),
+                "Enf. Değişim Yüzdesi (%)": st.column_config.NumberColumn("Enf. Değişim Yüzdesi (%)", format="%.2f%%")
+            },
+            key="data_sayfası_grid_editor"
+        )
+        st.session_state.data_sayfası_df = edited_data_grid.copy()
+
+        # Bulut Yönetim Paneli (Her Zaman Aktif - Dosya Yüklemeden Çağırma Garantili)
+        st.markdown("---")
+        st.subheader("☁️ Bulut Entegrasyonu (Yüklemeden Bağımsız Çağırma)")
+        cd1, cd2, cd3 = st.columns(3)
+        
+        # Excel İndirme Butonu
+        output_d_excel = io.BytesIO()
+        with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer: edited_data_grid.to_excel(writer, index=False, sheet_name="Data_Master")
+        cd1.download_button("📥 Tabloyu Excel Olarak İndir", output_d_excel.getvalue(), "data_master_havuz.xlsx", use_container_width=True)
+
+        if rev_secenekleri:
+            r_id_data = rev_secenekleri[cd2.selectbox("Data Yönetimi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_data_rev")]
+            
+            # BULUTA KAYDETME BUTONU
+            if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
+                data_records = [{str(col): json_uyumlu_deger(val) for col, val in row.items()} for _, row in edited_data_grid.iterrows()]
+                for r in data_records: r["revizyon_id"] = r_id_data
+                client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
+                for i in range(0, len(data_records), 500): client.table("data_tablosu").insert(data_records[i:i+500]).execute()
+                st.success("🎉 Data havuzu bulut sunucularına kalıcı olarak mühürlendi!")
+
+            # BULUTTAN DOĞRUDAN ÇEKME ENGINE (YARIN UPLOADSIZ ÇALIŞACAK KISIM 🚀)
+            if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
+                with st.spinner("Veriler veritabanından çekiliyor..."):
+                    d_res = client.table("data_tablosu").select("*").eq("revizyon_id", r_id_data).execute()
+                    if d_res.data:
+                        gelen_d_df = pd.DataFrame(d_res.data)
+                        if "id" in gelen_d_df.columns: gelen_d_df = gelen_d_df.drop(columns=["id"])
+                        st.session_state.data_sayfası_df = gelen_d_df.reindex(columns=data_ekran_sutunlari)
+                        st.success("🎉 Harika! Dün kaydettiğiniz tüm ana data şablonu buluttan geri yüklendi.")
+                        st.rerun()
+                    else: st.warning("Bu revizyona ait kaydedilmiş veri havuzu bulunamadı.")
+    else:
+        st.info("Lütfen işlem yapmak istediğiniz ham operasyonel Excel/CSV dosyanızı yükleyin ya da alttaki butondan bulut yedeğinizi çağırın.")
+
+# ------------------------------------------------------------
+# 2. SEKME: ÇARŞAF LİSTE & BÜTÇE
+# ------------------------------------------------------------
+with sekmeler[1]:
     st.title("🚚 Operasyonel Bütçe Simülatörü")
-    yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"])
-    yukleme_tipi = st.sidebar.radio("Yükleme Amacı:", ["Yeni Satırlar Ekle", "Düşeyara (VLOOKUP) ile Güncelle"])
+    yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"], key="main_file_uploader_key")
+    yukleme_tipi = st.sidebar.radio("Yükleme Amacı:", ["Yeni Satırlar Ekle", "Düşeyara (VLOOKUP) ile Güncelle"], key="main_upload_purpose")
     
     c1, c2 = st.sidebar.columns(2)
     if c1.button("📥 Veriyi İşle", key="veri_isle_btn") and yuklenen_dosya:
@@ -241,17 +374,17 @@ with sekmeler[0]:
         st.session_state.editor_key += 1
         st.rerun()
 
-    filtre_kolonlari = st.sidebar.multiselect("Filtrelemek İstediğiniz Sütunları Seçin:", options=tum_kolonlar)
+    filtre_kolonlari = st.sidebar.multiselect("Filtrelemek İstediğiniz Sütunları Seçin:", options=tum_kolonlar, key="main_filter_cols")
     mask = pd.Series(True, index=st.session_state.ana_veri.index)
     if filtre_kolonlari:
         for col in filtre_kolonlari:
             unique_vals = st.session_state.ana_veri[col].dropna().unique().tolist()
-            secilen_degerler = st.sidebar.multiselect(f"{col}:", options=unique_vals, default=unique_vals)
+            secilen_degerler = st.sidebar.multiselect(f"{col}:", options=unique_vals, default=unique_vals, key=f"filter_{col}")
             mask &= st.session_state.ana_veri[col].isin(secilen_degerler)
             
     gosterilecek_df = st.session_state.ana_veri[mask]
     gizli_df = st.session_state.ana_veri[~mask]
-    global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1)
+    global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1, key="main_global_esk_slider")
     
     duzenlenen_df = st.data_editor(gosterilecek_df, num_rows="dynamic", use_container_width=True, height=400, key=f"butce_veri_{st.session_state.editor_key}")
     df_birlestirilmis = pd.concat([gizli_df, duzenlenen_df]).copy()
@@ -289,7 +422,7 @@ with sekmeler[0]:
         with col_down1:
             output_excel = io.BytesIO()
             with pd.ExcelWriter(output_excel, engine="openpyxl") as writer: df_nihai.to_excel(writer, index=False, sheet_name="Bütçe")
-            st.download_button("📥 Excel Olarak İndir", output_excel.getvalue(), "horoz_butce.xlsx", use_container_width=True)
+            st.download_button("📥 Excel Olarak İndir", output_excel.getvalue(), "horoz_butce.xlsx", use_container_width=True, key="main_excel_down_btn")
         with col_down2:
             with st.expander("🚀 Yeni Bir Versiyon Olarak Buluta Kaydet", expanded=True):
                 kisi = st.text_input("Revizyonu Yapan Kişi", key="main_save_kisi")
@@ -308,9 +441,9 @@ with sekmeler[0]:
         st.dataframe(df_nihai, use_container_width=True)
 
 # ------------------------------------------------------------
-# 2. SEKME: ÇALIŞMA GÜNLERİ
+# 3. SEKME: ÇALIŞMA GÜNLERİ
 # ------------------------------------------------------------
-with sekmeler[1]:
+with sekmeler[2]:
     st.title("📅 Operasyonel Çalışma Günleri")
     takvim_verisi = {
         "Ay": aylar,
@@ -318,24 +451,24 @@ with sekmeler[1]:
         "2026 Çalışma Günü": [21, 20, 20, 21, 17, 22, 22, 21, 22, 21, 21, 23],
         "Resmi Tatiller / Notlar": ["-", "-", "Ramazan Bayramı", "23 Nisan", "Kurban Bayramı", "-", "-", "30 Ağustos", "-", "29 Ekim", "-", "-"]
     }
-    st.data_editor(pd.DataFrame(takvim_verisi), use_container_width=True, hide_index=True)
+    st.data_editor(pd.DataFrame(takvim_verisi), use_container_width=True, hide_index=True, key="calendar_grid_key")
 
 # ------------------------------------------------------------
-# 3. SEKME: BULUT REVİZYON YÖNETİMİ
+# 4. SEKME: BULUT REVİZYON YÖNETİMİ
 # ------------------------------------------------------------
-with sekmeler[2]:
+with sekmeler[3]:
     st.title("☁️ Bulut Revizyon Geçmişi")
     if rev_secenekleri:
         df_log_gorsel = pd.DataFrame(list(rev_secenekleri.keys()), columns=["Kayıt Bilgileri"])
         df_log_gorsel.insert(0, "Seç", False)
-        edited_log = st.data_editor(df_log_gorsel, hide_index=True, use_container_width=True)
+        edited_log = st.data_editor(df_log_gorsel, hide_index=True, use_container_width=True, key="rev_history_grid")
         secili_satirlar = edited_log[edited_log["Seç"] == True]
         if len(secili_satirlar) == 1:
             lbl = secili_satirlar.iloc[0]["Kayıt Bilgileri"]
             secili_rev = rev_secenekleri[lbl]
             st.markdown("---")
             c_sol, c_sag = st.columns(2)
-            if c_sol.button("📥 Seçili Versiyonu Ekrana Çek (Yükle)", type="primary", use_container_width=True):
+            if c_sol.button("📥 Seçili Versiyonu Ekrana Çek (Yükle)", type="primary", use_container_width=True, key="load_selected_rev_btn"):
                 with st.spinner("İndiriliyor..."):
                     data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", secili_rev).execute()
                     if data_res.data:
@@ -343,7 +476,7 @@ with sekmeler[2]:
                         st.session_state.editor_key += 1
                         st.success("🎉 Yüklendi!")
                         st.rerun()
-            if c_sag.button("🗑️ Seçili Versiyonu Kalıcı Olarak Sil", type="secondary", use_container_width=True):
+            if c_sag.button("🗑️ Seçili Versiyonu Kalıcı Olarak Sil", type="secondary", use_container_width=True, key="delete_selected_rev_btn"):
                 client.table("butce_tablosu").delete().eq("revizyon_id", secili_rev).execute()
                 client.table("revizyon_log").delete().eq("revizyon_id", secili_rev).execute()
                 client.table("deg_anah_tablosu").delete().eq("revizyon_id", secili_rev).execute()
@@ -351,13 +484,14 @@ with sekmeler[2]:
                 client.table("musteri_detay_tablosu").delete().eq("revizyon_id", secili_rev).execute()
                 client.table("mazot_tablosu").delete().eq("revizyon_id", secili_rev).execute()
                 client.table("buyume_tablosu").delete().eq("revizyon_id", secili_rev).execute()
+                client.table("data_tablosu").delete().eq("revizyon_id", secili_rev).execute()
                 st.success("Silindi.")
                 st.rerun()
 
 # ------------------------------------------------------------
-# 4. SEKME: YENİ-BÜTÇE MÜŞTERİ
+# 5. SEKME: YENİ-BÜTÇE MÜŞTERİ
 # ------------------------------------------------------------
-with sekmeler[3]:
+with sekmeler[4]:
     st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
     yuklenen_musteri = st.file_uploader("Müşteri Listenizi Yükleyin", type=["xlsx", "xls", "csv"], key="m_sablon_up")
 
@@ -469,9 +603,9 @@ with sekmeler[3]:
                 st.rerun()
 
 # ------------------------------------------------------------
-# 5. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
+# 6. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
 # ------------------------------------------------------------
-with sekmeler[4]:
+with sekmeler[5]:
     st.title("⚙️ değ.anah.-yakıt-kdv Parametre Yönetimi")
     yuklenen_param = st.file_uploader("Parametre Şablonunu Yükle", type=["xlsx", "xls", "csv"], key="param_up")
     if yuklenen_param:
@@ -508,9 +642,9 @@ with sekmeler[4]:
                 st.rerun()
 
 # ------------------------------------------------------------
-# 6. SEKME: BAZ YAKIT FİYATLARI
+# 7. SEKME: BAZ YAKIT FİYATLARI
 # ------------------------------------------------------------
-with sekmeler[5]:
+with sekmeler[6]:
     st.title("⛽ Baz Yakıt Fiyatları KDV Dağılım Yönetimi")
     up_baz_yakit = st.file_uploader("Baz Yakıt Fiyat Listesi Yükle", type=["xlsx", "xls", "csv"], key="baz_yakit_up")
     if up_baz_yakit:
@@ -563,9 +697,9 @@ with sekmeler[5]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 7. SEKME: 2026 MAZOT ANALİZİ
+# 8. SEKME: 2026 MAZOT ANALİZİ
 # ------------------------------------------------------------
-with sekmeler[6]:
+with sekmeler[7]:
     st.title("📊 2026 Mazot Fiyat Değişim Periyot Analizörü")
     up_mazot = st.file_uploader("Yeni Mazot Fiyat Trendi Yükle", type=["xlsx", "xls", "csv"], key="mazot_up_file")
     if up_mazot:
@@ -609,15 +743,14 @@ with sekmeler[6]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 8. SEKME: MÜŞTERI BÜYÜME ORANLARI (YENİ EKLENEN STRATEJİ ODASI 📈)
+# 9. SEKME: MÜŞTERI BÜYÜME ORANLARI
 # ------------------------------------------------------------
-with sekmeler[7]:
+with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
     st.markdown("Aşağıya müşteri listenizi yükleyebilir ya da **doğrudan aşağıdaki bulut butonlarıyla** veriyi çağırabilirsiniz. `KULLANICAK BÜYÜME` hücresine girdiğiniz oran, 12 aya otomatik yayılır.")
 
     yuklenen_buyume = st.file_uploader("Büyüme Müşteri Listesi Yükle (Excel/CSV)", type=["xlsx", "xls", "csv"], key="buyume_up_file")
 
-    # Excel yüklemesi varsa veri tabanını oluştur
     if yuklenen_buyume:
         df_bg = pd.read_csv(yuklenen_buyume) if yuklenen_buyume.name.lower().endswith(".csv") else pd.read_excel(yuklenen_buyume)
         df_bg.columns = [str(c).strip() for c in df_bg.columns]
@@ -626,12 +759,10 @@ with sekmeler[7]:
             st.session_state.buyume_ekran_df = df_bg.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
             st.success("Müşteri listesi yüklendi, çapraz hesaplamalar yapılıyor...")
 
-    # HESAPLAMA MOTORU & ÇAPRAZ DÜŞEYARA (CROSS-TAB VLOOKUP)
     if not st.session_state.buyume_ekran_df.empty:
         df_b_work = st.session_state.buyume_ekran_df.copy()
         df_b_work["Müşteri Kodu"] = df_b_work["Müşteri Kodu"].apply(guvenli_metin_kodu)
 
-        # 1. Çarşaf Listeden (st.session_state.ana_veri) 2024 ve 2025 İlk 9 Ay Desilerini Hesapla
         desi_24_map = {}
         desi_25_map = {}
 
@@ -639,14 +770,12 @@ with sekmeler[7]:
             df_master_c = st.session_state.ana_veri.copy()
             df_master_c["Müşteri Kodu"] = df_master_c["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            # 2024 Hesaplama Güvencesi (Varsa topla)
             cols_24_desi = [f"2024 {m} Desi" for m in ilk_9_ay]
             mevcut_24_cols = [c for c in cols_24_desi if c in df_master_c.columns]
             if mevcut_24_cols:
                 df_master_c["tmp_24_sum"] = df_master_c[mevcut_24_cols].applymap(guvenli_sayi).sum(axis=1)
                 desi_24_map = df_master_c.groupby("Müşteri Kodu")["tmp_24_sum"].sum().to_dict()
 
-            # 2025 Hesaplama Güvencesi (Kesin var)
             cols_25_desi = [f"2025 {m} Desi" for m in ilk_9_ay]
             mevcut_25_cols = [c for c in cols_25_desi if c in df_master_c.columns]
             if mevcut_25_cols:
@@ -656,16 +785,12 @@ with sekmeler[7]:
         final_rows = []
         for idx, row in df_b_work.iterrows():
             mkod = str(row["Müşteri Kodu"])
-            
-            # Durum_2'den Durum Al (Sekme 4)
             dur_v = st.session_state.musteri_ayarlari.get(mkod, {}).get("Durum_2", row.get("Durum", "GEÇERLİ"))
             if dur_v is None: dur_v = "GEÇERLİ"
 
-            # Desi Verilerini Eşleştir
             d24 = desi_24_map.get(mkod, guvenli_sayi(row.get("2024 ilk 9 ay desi", 0.0)))
             d25 = desi_25_map.get(mkod, guvenli_sayi(row.get("2025 ilk 9 ay desi", 0.0)))
 
-            # Hafızadaki özel bütçe girişlerini çek
             if mkod not in st.session_state.buyume_ayarlari:
                 st.session_state.buyume_ayarlari[mkod] = {
                     "25 kullanılan büyüme": row.get("25 kullanılan büyüme", ""),
@@ -677,7 +802,6 @@ with sekmeler[7]:
             b_set = st.session_state.buyume_ayarlari[mkod]
             kb_orani = guvenli_sayi(b_set["KULLANICAK BÜYÜME"])
 
-            # İnşa Edilecek Row Yapısı
             r_dict = {
                 "Müşteri Kodu": mkod,
                 "Müşteri Adı": row.get("Müşteri Adı", row.get("Ünvan", "")),
@@ -694,66 +818,41 @@ with sekmeler[7]:
                 "Müşteriden Gelen Büyüme": b_set["Müşteriden Gelen Büyüme"]
             }
 
-            # FLAT DAĞITIM MOTORU: KULLANICAK BÜYÜME hücresindeki değeri 12 aya kopyala
-            for m in aylar:
-                r_dict[m] = kb_orani / 100.0  # Streamlit % formatı için float/100 yapıyoruz
-
+            for m in aylar: r_dict[m] = kb_orani / 100.0
             final_rows.append(r_dict)
 
         df_final_b = pd.DataFrame(final_rows)
-
-        # Matematiksel Toplam Formülleri (Cross-Total)
         total_25_desi = df_final_b["2025 ilk 9 ay desi"].sum()
-        
-        if total_25_desi > 0:
-            df_final_b["2025 % desi pay"] = df_final_b["2025 ilk 9 ay desi"] / total_25_desi
-        else:
-            df_final_b["2025 % desi pay"] = 0.0
-
-        # Y To Y Desi Formülü: =EĞERHATA(U2/T2-1;0)
+        df_final_b["2025 % desi pay"] = df_final_b["2025 ilk 9 ay desi"] / total_25_desi if total_25_desi > 0 else 0.0
         df_final_b["Y To Y Desi"] = df_final_b.apply(lambda r: (r["2025 ilk 9 ay desi"] / r["2024 ilk 9 ay desi"] - 1) if r["2024 ilk 9 ay desi"] > 0 else 0.0, axis=1)
-
-        # Sıralama Düzenlemesi
         df_final_b = df_final_b.reindex(columns=buyume_ekran_sutunlari)
 
-        # Düzenlenebilir ve Kilitli alanları ayır
         kilitli_b_cols = [c for c in buyume_ekran_sutunlari if c not in ["25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]
 
-        # Data Editorü Ekrana Bas
         edited_b_matris = st.data_editor(
-            df_final_b,
-            use_container_width=True,
-            height=400,
-            disabled=kilitli_b_cols,
+            df_final_b, use_container_width=True, height=400, disabled=kilitli_b_cols,
             column_config={
                 "2025 % desi pay": st.column_config.NumberColumn("2025 % desi pay", format="%.2f%%"),
                 "Y To Y Desi": st.column_config.NumberColumn("Y To Y Desi", format="%.2f%%"),
                 "KULLANICAK BÜYÜME": st.column_config.NumberColumn("KULLANICAK BÜYÜME", format="%.2f"),
                 **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
-            },
-            key="buyume_matris_editoru"
+            }, key="buyume_matris_editoru"
         )
 
-        # 3. KONTROL VE BULUT AKIŞ DÜĞMELERİ
         st.markdown("---")
         cb_1, cb_2, cb_3 = st.columns(3)
-
         if cb_1.button("💾 Büyüme Kartlarını Hafızaya Kaydet", type="primary", use_container_width=True, key="btn_b_hfz_save"):
             for idx, row in edited_b_matris.iterrows():
                 mk = str(row["Müşteri Kodu"])
                 st.session_state.buyume_ayarlari[mk] = {
-                    "25 kullanılan büyüme": row["25 kullanılan büyüme"],
-                    "KULLANICAK BÜYÜME": guvenli_sayi(row["KULLANICAK BÜYÜME"]),
-                    "Gelen Özet Bilgi": row["Gelen Özet Bilgi"],
-                    "Müşteriden Gelen Büyüme": row["Müşteriden Gelen Büyüme"]
+                    "25 kullanılan büyüme": row["25 kullanılan büyüme"], "KULLANICAK BÜYÜME": guvenli_sayi(row["KULLANICAK BÜYÜME"]),
+                    "Gelen Özet Bilgi": row["Gelen Özet Bilgi"], "Müşteriden Gelen Büyüme": row["Müşteriden Gelen Büyüme"]
                 }
-            st.success("Büyüme stratejileri hafızaya mühürlendi! (12 aya dağılım başarıyla uygulandı.)")
+            st.success("Büyüme stratejileri hafızaya mühürlendi!")
             st.rerun()
 
         if rev_secenekleri:
             r_id_b = rev_secenekleri[cb_2.selectbox("Büyüme İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_b_rev_box")]
-
-            # BULUTA GÜVENLİ KAYDETME (API-ERROR SAVAR KALKANLI 🛡️)
             if cb_2.button("💾 Büyüme Verilerini Buluta Gönder", use_container_width=True, key="btn_b_cloud_save"):
                 izin_verilen_b_db = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
                 b_records = [{col: json_uyumlu_deger(row[col]) for col in izin_verilen_b_db if col in row} for _, row in edited_b_matris.iterrows()]
@@ -762,7 +861,6 @@ with sekmeler[7]:
                 for i in range(0, len(b_records), 500): client.table("buyume_tablosu").insert(b_records[i:i+500]).execute()
                 st.success("🎉 Müşteri büyüme oranları seçili versiyona mühürlendi!")
 
-            # DOSYA YÜKLEMEDEN BULUTTAN DOĞRUDAN ÇEKME ENGINE 🚀
             if cb_3.button("🔄 Dosyasız Buluttan Büyüme Kartlarını Çek", use_container_width=True, key="btn_b_cloud_load"):
                 b_res = client.table("buyume_tablosu").select("*").eq("revizyon_id", r_id_b).execute()
                 if b_res.data:
@@ -772,13 +870,8 @@ with sekmeler[7]:
                     for _, row in gelen_b_df.iterrows():
                         mk = str(row["Müşteri Kodu"])
                         st.session_state.buyume_ayarlari[mk] = {
-                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme"),
-                            "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME")),
-                            "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi"),
-                            "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme")
+                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme"), "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME")),
+                            "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi"), "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme")
                         }
-                    st.success("🎉 Harika! Tüm senaryo bağımsız olarak buluttan çekildi.")
+                    st.success("🎉 Tüm senaryo bağımsız olarak buluttan çekildi.")
                     st.rerun()
-                else: st.warning("Bu revizyona ait büyüme kaydı bulunamadı.")
-    else:
-        st.info("Lütfen örnek görünümdeki gibi bütçelenecek müşteri listesini içeren Excel dosyasını yükleyin ya da buluttan çekme butonunu kullanın.")
