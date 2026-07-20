@@ -212,15 +212,32 @@ if client:
     except: pass
 
 # ------------------------------------------------------------
-# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (YENİ MODÜL 🚀)
+# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (AKILLI METRİK MOTORU 🚀)
 # ------------------------------------------------------------
 with sekmeler[0]:
     st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
-    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Sistem, `Durum` bilgisini **Yeni-Bütçe** sayfasından, `Esk. Baz Yakıt Fiyatı`nı ise **Baz Yakıtlar** sayfasından çapraz eşleyerek (Düşeyara) çekecektir. Kalan alanlar yüklediğiniz şablondan alınır.")
+    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Yıl ve dosyanızdaki metrik tipini seçerek veri ambarını dinamik olarak besleyebilirsiniz.")
 
+    # 🎯 DİNAMİK SEÇİCİLER (YIL VE METRİK TİPİ SORGUSU)
+    c_cfg1, c_cfg2 = st.columns(2)
+    with c_cfg1:
+        secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
+    with c_cfg2:
+        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Desi Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Desi (Örn: Ocak Desi)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
+
+    sabit_data_sutunlari = [
+        "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+        "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
+        "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
+        "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
+    ]
+    
+    # Tüm yılların dinamik kolon tanımları hafızada hazır tutulur
+    dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi"]
+    
     yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
 
-    # Çarşaf listeden Düşeyara (VLOOKUP) için verileri belleğe al (Yedek Havuz)
+    # Çarşaf listeden Düşeyara (VLOOKUP) için verileri belleğe al
     lookup_parametleri = {}
     if not st.session_state.ana_veri.empty:
         df_c_tmp = st.session_state.ana_veri.copy()
@@ -240,7 +257,6 @@ with sekmeler[0]:
                 "Esk. Enf. Başlangıç Tarihi": r.get("Esk. Enf. Başlangıç Tarihi", "")
             }
 
-    # 6. Sekmedeki (Baz Yakıt Fiyatları) güncel "Yakıt Fiyat" verilerini Düşeyara için hazırla
     baz_yakit_map = {}
     if not st.session_state.baz_yakit_veri.empty:
         for _, r in st.session_state.baz_yakit_veri.iterrows():
@@ -250,104 +266,109 @@ with sekmeler[0]:
         df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
         df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
         
+        # Metrik son ekini belirle (Kg, Desi, Tutar)
+        sonek = " Kg" if "Kg" in metrik_tipi else (" Desi" if "Desi" in metrik_tipi else " Tutar")
+        
         data_rows = []
         for idx, row in df_d_giren.iterrows():
             mkod = guvenli_metin_kodu(row.get("Müşteri Kodu", ""))
             
-            # KURAL: Uniq ID kombinasyon motoru
+            # 9 Kolonlu Metinsel Uniq ID Kombinasyon Motoru
             join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
             uniq_str = "".join([str(row.get(c, "")).strip() for c in join_cols]).replace("nan", "").replace("None", "")
             
             p_set = lookup_parametleri.get(mkod, {})
+            durum_2_val = st.session_state.musteri_ayarlari.get(mkod, {}).get("Durum_2", row.get("Durum", "GEÇERLİ"))
+            esk_baz_yakit_val = baz_yakit_map.get(mkod, guvenli_sayi(row.get("Esk. Baz Yakıt Fiyatı", 0.0)))
 
-            # 1. ÖZEL KURAL: DURUM -> Yeni-Bütçe Müşteri sayfasındaki Durum_2'den alınacak
-            durum_2_val = st.session_state.musteri_ayarlari.get(mkod, {}).get("Durum_2")
-            if pd.isna(durum_2_val) or durum_2_val is None or str(durum_2_val).strip() == "":
-                durum_2_val = row.get("Durum", "GEÇERLİ")  # Bulamazsa Excel'den veya varsayılan
+            # Dinamik Metrik Eşleştirme Bölümü
+            desi_degerleri = {}
+            toplam_desi = 0.0
+            for ay in aylar:
+                # Örn: Hem "Ocak Kg" hem "2026 Ocak Kg" hem de yalın "Ocak" ihtimallerini kontrol eder
+                aranan_sutunlar = [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]
+                val = 0.0
+                for col in aranan_sutunlar:
+                    if col in df_d_giren.columns:
+                        val = guvenli_sayi(row.get(col, 0.0))
+                        break
+                desi_degerleri[f"{secilen_yil} {ay} Desi"] = val
+                toplam_desi += val
+            desi_degerleri[f"{secilen_yil} Toplam Desi"] = toplam_desi
 
-            # 2. ÖZEL KURAL: ESK BAZ YAKIT -> Baz Yakıt Fiyatları sayfasındaki Yakıt Fiyat'tan alınacak
-            esk_baz_yakit_val = baz_yakit_map.get(mkod)
-            if esk_baz_yakit_val is None or esk_baz_yakit_val == 0.0:
-                esk_baz_yakit_val = guvenli_sayi(row.get("Esk. Baz Yakıt Fiyatı", 0.0)) # Bulamazsa Excel'den al
-
-            # 3. KURAL: Diğer parametreler direkt yüklenen Excel'den (Yoksa eski havuzdan)
-            data_rows.append({
-                "Uniq ID": uniq_str,
-                "Yıl": row.get("Yıl", ""),
-                "Teslimat Tipi": row.get("Teslimat Tipi", ""),
-                "Atf Tipi": row.get("Atf Tipi", ""),
-                "Çıkış İl Adı": row.get("Çıkış İl Adı", ""),
-                "Çıkış Şube Adı": row.get("Çıkış Şube Adı", ""),
-                "Varış İl Adı": row.get("Varış İl Adı", ""),
-                "Varış Şube Adı": row.get("Varış Şube Adı", ""),
-                "İlk Okutma Şubesi": row.get("İlk Okutma Şubesi", ""),
-                "Müşteri Kodu": mkod,
-                "Müşteri Adı": row.get("Müşteri Adı", ""),
-                "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", ""),
-                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")),
-                
-                # Dinamik Çekilen Alanlar
-                "Durum": durum_2_val,
-                "Esk. Baz Yakıt Fiyatı": esk_baz_yakit_val,
-                
-                # Excel'den Yüklenen Alanlar
-                "Kayıt Tarihi": row.get("Kayıt Tarihi", p_set.get("Kayıt Tarihi", "")),
-                "Müşteri Grubu": row.get("Müşteri Grubu", p_set.get("Müşteri Grubu", "DİĞER")),
+            r_dict = {
+                "Uniq ID": uniq_str, "Yıl": row.get("Yıl", ""), "Teslimat Tipi": row.get("Teslimat Tipi", ""),
+                "Atf Tipi": row.get("Atf Tipi", ""), "Çıkış İl Adı": row.get("Çıkış İl Adı", ""),
+                "Çıkış Şube Adı": row.get("Çıkış Şube Adı", ""), "Varış İl Adı": row.get("Varış İl Adı", ""),
+                "Varış Şube Adı": row.get("Varış Şube Adı", ""), "İlk Okutma Şubesi": row.get("İlk Okutma Şubesi", ""),
+                "Müşteri Kodu": mkod, "Müşteri Adı": row.get("Müşteri Adı", ""), "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", ""),
+                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")), "Durum": durum_2_val,
+                "Kayıt Tarihi": row.get("Kayıt Tarihi", p_set.get("Kayıt Tarihi", "")), "Müşteri Grubu": row.get("Müşteri Grubu", p_set.get("Müşteri Grubu", "DİĞER")),
                 "Yakıt Değişim Yüzdesi (%)": guvenli_sayi(row.get("Yakıt Değişim Yüzdesi (%)", p_set.get("Yakıt Değişim Yüzdesi (%)", 0.0))),
                 "Yakıt Anlık Değişim Oranı (%)": guvenli_sayi(row.get("Yakıt Anlık Değişim Oranı (%)", p_set.get("Yakıt Anlık Değişim Oranı (%)", 0.0))),
                 "Yakıt Değişim Periyodu (Ay)": guvenli_tamsayi(row.get("Yakıt Değişim Periyodu (Ay)", p_set.get("Yakıt Değişim Periyodu (Ay)", 0))),
                 "Enf. Değişim Yüzdesi (%)": guvenli_sayi(row.get("Enf. Değişim Yüzdesi (%)", p_set.get("Enf. Değişim Yüzdesi (%)", 0.0))),
                 "Enf. Değişim Periyodu (Ay)": guvenli_tamsayi(row.get("Enf. Değişim Periyodu (Ay)", p_set.get("Enf. Değişim Periyodu (Ay)", 0))),
-                "Esk. Yakıt Başlangıç Tarihi": row.get("Esk. Yakıt Başlangıç Tarihi", p_set.get("Esk. Yakıt Başlangıç Tarihi", "")),
+                "Esk. Baz Yakıt Fiyatı": esk_baz_yakit_val, "Esk. Yakıt Başlangıç Tarihi": row.get("Esk. Yakıt Başlangıç Tarihi", p_set.get("Esk. Yakıt Başlangıç Tarihi", "")),
                 "Esk. Enf. Başlangıç Tarihi": row.get("Esk. Enf. Başlangıç Tarihi", p_set.get("Esk. Enf. Başlangıç Tarihi", ""))
-            })
-        st.session_state.data_sayfası_df = pd.DataFrame(data_rows).reindex(columns=data_ekran_sutunlari)
-        st.success("🎉 Ham veri yüklendi, `Durum` ve `Yakıt Fiyat` çapraz sekme sorgularıyla başarıyla güncellendi!")
+            }
+            r_dict.update(desi_degerleri)
+            data_rows.append(r_dict)
+            
+        df_yeni_yuklenen = pd.DataFrame(data_rows)
+        
+        # 🌟 UNIQ ID BAZLI GÜNCELLEME MOTORU (Üst üste bindirmeyi önler, yanal genişletir)
+        if st.session_state.data_sayfası_df.empty:
+            st.session_state.data_sayfası_df = df_yeni_yuklenen
+        else:
+            main_df = st.session_state.data_sayfası_df.set_index("Uniq ID")
+            new_df = df_yeni_yuklenen.set_index("Uniq ID")
+            
+            # Yeni gelen dinamik desi sütunlarını ve eksik sabitleri güncelle/ekle
+            for col in new_df.columns:
+                main_df[col] = new_df[col].combine_first(main_df[col]) if col in main_df.columns else new_df[col]
+                
+            st.session_state.data_sayfası_df = main_df.reset_index()
+            
+        st.success(f"🎉 Veriler başarıyla işlendi! {secilen_yil} yılına ait aylık '{metrik_tipi}' değerleri veri havuzuna mühürlendi.")
 
-    # Tabloyu data_editor olarak ekrana bas
+    # Arayüz Tablo Gösterimi
     if not st.session_state.data_sayfası_df.empty:
-        edited_data_grid = st.data_editor(
-            st.session_state.data_sayfası_df,
-            use_container_width=True,
-            height=400,
-            disabled=data_ekran_sutunlari, # Sadece görüntüleme ve çapraz kontrol amaçlı kilitli
+        # Arayüzün temiz kalması için sadece sabitler + o an seçili olan yılın desi kırılımlarını filtrele
+        gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_desi_kolonlari if c in st.session_state.data_sayfası_df.columns]
+        df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
+        
+        edited_grid = st.data_editor(
+            df_ekran, use_container_width=True, height=400, disabled=gosterim_kolonlari,
             column_config={
                 "Esk. Baz Yakıt Fiyatı": st.column_config.NumberColumn("Esk. Baz Yakıt Fiyatı", format="₺%.2f"),
-                "Yakıt Değişim Yüzdesi (%)": st.column_config.NumberColumn("Yakıt Değişim Yüzdesi (%)", format="%.2f%%"),
-                "Enf. Değişim Yüzdesi (%)": st.column_config.NumberColumn("Enf. Değişim Yüzdesi (%)", format="%.2f%%")
-            },
-            key="data_sayfası_grid_editor"
+                **{c: st.column_config.NumberColumn(c, format="%d") for c in dinamik_desi_kolonlari}
+            }, key="data_sayfası_grid_editor"
         )
-        st.session_state.data_sayfası_df = edited_data_grid.copy()
+        st.session_state.data_sayfası_df.update(edited_grid)
 
-        # Bulut Yönetim Paneli (Her Zaman Aktif - Dosya Yüklemeden Çağırma Garantili)
         st.markdown("---")
         st.subheader("☁️ Bulut Entegrasyonu (Yüklemeden Bağımsız Çağırma)")
         cd1, cd2, cd3 = st.columns(3)
         
-        # Excel İndirme Butonu
         output_d_excel = io.BytesIO()
-        with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer: edited_data_grid.to_excel(writer, index=False, sheet_name="Data_Master")
+        with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer: st.session_state.data_sayfası_df.to_excel(writer, index=False, sheet_name="Data_Master")
         cd1.download_button("📥 Tabloyu Excel Olarak İndir", output_d_excel.getvalue(), "data_master_havuz.xlsx", use_container_width=True)
 
         if rev_secenekleri:
             r_id_data = rev_secenekleri[cd2.selectbox("Data Yönetimi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_data_rev")]
             
-            # BULUTA KAYDETME BUTONU
+            # 🛡️ API-ERROR SAVAR KALKANI (Tüm Yılların Tüm Sütunlarını Eksiksiz Veritabanına Haritalar)
             if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
-                # Supabase veritabanında tam karşılığı olan sütunların listesi (Güvenlik Kalkanı)
-                izin_verilen_db_sutunlari_data = [
-                    "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", 
-                    "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", 
-                    "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
-                    "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", 
-                    "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", 
-                    "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
-                ]
+                tum_desi_sutunlari_db = []
+                for y in ["2024", "2025", "2026"]:
+                    for m in aylar: tum_desi_sutunlari_db.append(f"{y} {m} Desi")
+                    tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
+
+                izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
                 
                 data_records = []
-                for _, row in edited_data_grid.iterrows():
-                    # Ekranda olan verilerden SADECE veritabanında olanları filtreliyoruz
+                for _, row in st.session_state.data_sayfası_df.iterrows():
                     rc = {col: json_uyumlu_deger(row[col]) for col in izin_verilen_db_sutunlari_data if col in row}
                     rc["revizyon_id"] = r_id_data
                     data_records.append(rc)
@@ -356,17 +377,16 @@ with sekmeler[0]:
                     client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
                     for i in range(0, len(data_records), 500): 
                         client.table("data_tablosu").insert(data_records[i:i+500]).execute()
-                    st.success("🎉 Data havuzu bulut sunucularına kalıcı olarak mühürlendi!")
+                    st.success("🎉 Harika! Tüm yılların desi paketleri hata riski olmadan buluta kilitlendi!")
 
-            # BULUTTAN DOĞRUDAN ÇEKME ENGINE (YARIN UPLOADSIZ ÇALIŞACAK KISIM 🚀)
             if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
                 with st.spinner("Veriler veritabanından çekiliyor..."):
                     d_res = client.table("data_tablosu").select("*").eq("revizyon_id", r_id_data).execute()
                     if d_res.data:
                         gelen_d_df = pd.DataFrame(d_res.data)
                         if "id" in gelen_d_df.columns: gelen_d_df = gelen_d_df.drop(columns=["id"])
-                        st.session_state.data_sayfası_df = gelen_d_df.reindex(columns=data_ekran_sutunlari)
-                        st.success("🎉 Harika! Dün kaydettiğiniz tüm ana data şablonu buluttan geri yüklendi.")
+                        st.session_state.data_sayfası_df = gelen_d_df
+                        st.success("🎉 Başarılı! Tüm operasyonel hafıza buluttan geri yüklendi.")
                         st.rerun()
                     else: st.warning("Bu revizyona ait kaydedilmiş veri havuzu bulunamadı.")
     else:
@@ -778,22 +798,40 @@ with sekmeler[7]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 9. SEKME: MÜŞTERI BÜYÜME ORANLARI
+# 9. SEKME: MÜŞTERI BÜYÜME ORANLARI (SAYFA BAĞIMSIZ DOĞRUDAN ÇEKME SİSTEMİ 📈)
 # ------------------------------------------------------------
 with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
-    st.markdown("Aşağıya müşteri listenizi yükleyebilir ya da **doğrudan aşağıdaki bulut butonlarıyla** veriyi çağırabilirsiniz. `KULLANICAK BÜYÜME` hücresine girdiğiniz oran, 12 aya otomatik yayılır.")
+    st.markdown("Müşteri listenizi ve kümülatif desilerinizi **1. Sekmedeki Data Havuzundan** otomatik çekebilir veya manuel şablon yükleyebilirsiniz.")
 
-    yuklenen_buyume = st.file_uploader("Büyüme Müşteri Listesi Yükle (Excel/CSV)", type=["xlsx", "xls", "csv"], key="buyume_up_file")
+    # 🎯 VERİ KAYNAĞI SEÇİCİ (MÜKEMMEL ÇAPRAZ ENTEGRASYON)
+    buyume_veri_kaynagi = st.radio("🔄 Simülasyon Listesi Nereden Beslensin?", 
+                                   ["📁 1. Sekmedeki Data Havuzundan Otomatik Çek (Önerilen 🚀)", "Manuel Excel/CSV Dosyası Yükle"], 
+                                   horizontal=True, key="buyume_kaynak_secimi")
 
-    if yuklenen_buyume:
-        df_bg = pd.read_csv(yuklenen_buyume) if yuklenen_buyume.name.lower().endswith(".csv") else pd.read_excel(yuklenen_buyume)
-        df_bg.columns = [str(c).strip() for c in df_bg.columns]
-        if "Müşteri Kodu" in df_bg.columns:
-            df_bg["Müşteri Kodu"] = df_bg["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            st.session_state.buyume_ekran_df = df_bg.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
-            st.success("Müşteri listesi yüklendi, çapraz hesaplamalar yapılıyor...")
+    if buyume_veri_kaynagi == "Manuel Excel/CSV Dosyası Yükle":
+        yuklenen_buyume = st.file_uploader("Büyüme Müşteri Listesi Yükle", type=["xlsx", "xls", "csv"], key="buyume_up_file")
+        if yuklenen_buyume:
+            df_bg = pd.read_csv(yuklenen_buyume) if yuklenen_buyume.name.lower().endswith(".csv") else pd.read_excel(yuklenen_buyume)
+            df_bg.columns = [str(c).strip() for c in df_bg.columns]
+            if "Müşteri Kodu" in df_bg.columns:
+                df_bg["Müşteri Kodu"] = df_bg["Müşteri Kodu"].apply(guvenli_metin_kodu)
+                st.session_state.buyume_ekran_df = df_bg.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
+                st.success("Müşteri listesi yüklendi.")
 
+    else:
+        # 📁 DATA SAYFASINDAN OTOMATİK ÇEKME MOTORU
+        if not st.session_state.data_sayfası_df.empty:
+            df_d_src = st.session_state.data_sayfası_df.copy()
+            df_d_src["Müşteri Kodu"] = df_d_src["Müşteri Kodu"].apply(guvenli_metin_kodu)
+            
+            # Müşteri bazında tekilleştirilmiş kart listesini çıkart
+            df_distinct_m = df_d_src.drop_duplicates(subset=["Müşteri Kodu"]).copy()
+            st.session_state.buyume_ekran_df = df_distinct_m.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
+        else:
+            st.info("Büyüme matrisinin otomatik oluşabilmesi için lütfen 1. Sekmede (📁 Data) verilerin yüklü olduğundan emin olun veya alttaki butonla buluttan çağırın.")
+
+    # HESAPLAMA VE DEĞİŞİM DAĞITIM MOTORU
     if not st.session_state.buyume_ekran_df.empty:
         df_b_work = st.session_state.buyume_ekran_df.copy()
         df_b_work["Müşteri Kodu"] = df_b_work["Müşteri Kodu"].apply(guvenli_metin_kodu)
@@ -801,21 +839,21 @@ with sekmeler[8]:
         desi_24_map = {}
         desi_25_map = {}
 
-        if not st.session_state.ana_veri.empty:
-            df_master_c = st.session_state.ana_veri.copy()
-            df_master_c["Müşteri Kodu"] = df_master_c["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        # 1. Sekmedeki veri ambarı tablosu üzerinden dinamik İlk 9 Ay kümülatif sum hesabı
+        if not st.session_state.data_sayfası_df.empty:
+            df_ds_calc = st.session_state.data_sayfası_df.copy()
+            df_ds_calc["Müşteri Kodu"] = df_ds_calc["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            cols_24_desi = [f"2024 {m} Desi" for m in ilk_9_ay]
-            mevcut_24_cols = [c for c in cols_24_desi if c in df_master_c.columns]
-            if mevcut_24_cols:
-                df_master_c["tmp_24_sum"] = df_master_c[mevcut_24_cols].applymap(guvenli_sayi).sum(axis=1)
-                desi_24_map = df_master_c.groupby("Müşteri Kodu")["tmp_24_sum"].sum().to_dict()
-
-            cols_25_desi = [f"2025 {m} Desi" for m in ilk_9_ay]
-            mevcut_25_cols = [c for c in cols_25_desi if c in df_master_c.columns]
-            if mevcut_25_cols:
-                df_master_c["tmp_25_sum"] = df_master_c[mevcut_25_cols].applymap(guvenli_sayi).sum(axis=1)
-                desi_25_map = df_master_c.groupby("Müşteri Kodu")["tmp_25_sum"].sum().to_dict()
+            cols_24 = [f"2024 {m} Desi" for m in ilk_9_ay]
+            cols_25 = [f"2025 {m} Desi" for m in ilk_9_ay]
+            
+            if all(c in df_ds_calc.columns for c in cols_24):
+                df_ds_calc["sum_24"] = df_ds_calc[cols_24].applymap(guvenli_sayi).sum(axis=1)
+                desi_24_map = df_ds_calc.groupby("Müşteri Kodu")["sum_24"].sum().to_dict()
+                
+            if all(c in df_ds_calc.columns for c in cols_25):
+                df_ds_calc["sum_25"] = df_ds_calc[cols_25].applymap(guvenli_sayi).sum(axis=1)
+                desi_25_map = df_ds_calc.groupby("Müşteri Kodu")["sum_25"].sum().to_dict()
 
         final_rows = []
         for idx, row in df_b_work.iterrows():
@@ -838,19 +876,13 @@ with sekmeler[8]:
             kb_orani = guvenli_sayi(b_set["KULLANICAK BÜYÜME"])
 
             r_dict = {
-                "Müşteri Kodu": mkod,
-                "Müşteri Adı": row.get("Müşteri Adı", row.get("Ünvan", "")),
+                "Müşteri Kodu": mkod, "Müşteri Adı": row.get("Müşteri Adı", row.get("Ünvan", "")),
                 "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", row.get("Müşteri Temsilcisi 1", "")),
-                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")),
-                "Durum": dur_v,
-                "Kayıt Tarihi": row.get("Kayıt Tarihi", ""),
-                "Müşteri Grubu": row.get("Müşteri Grubu", ""),
-                "2024 ilk 9 ay desi": d24,
-                "2025 ilk 9 ay desi": d25,
-                "25 kullanılan büyüme": b_set["25 kullanılan büyüme"],
-                "KULLANICAK BÜYÜME": kb_orani,
-                "Gelen Özet Bilgi": b_set["Gelen Özet Bilgi"],
-                "Müşteriden Gelen Büyüme": b_set["Müşteriden Gelen Büyüme"]
+                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")), "Durum": dur_v,
+                "Kayıt Tarihi": row.get("Kayıt Tarihi", ""), "Müşteri Grubu": row.get("Müşteri Grubu", ""),
+                "2024 ilk 9 ay desi": d24, "2025 ilk 9 ay desi": d25,
+                "25 kullanılan büyüme": b_set["25 kullanılan büyüme"], "KULLANICAK BÜYÜME": kb_orani,
+                "Gelen Özet Bilgi": b_set["Gelen Özet Bilgi"], "Müşteriden Gelen Büyüme": b_set["Müşteriden Gelen Büyüme"]
             }
 
             for m in aylar: r_dict[m] = kb_orani / 100.0
@@ -883,18 +915,19 @@ with sekmeler[8]:
                     "25 kullanılan büyüme": row["25 kullanılan büyüme"], "KULLANICAK BÜYÜME": guvenli_sayi(row["KULLANICAK BÜYÜME"]),
                     "Gelen Özet Bilgi": row["Gelen Özet Bilgi"], "Müşteriden Gelen Büyüme": row["Müşteriden Gelen Büyüme"]
                 }
-            st.success("Büyüme stratejileri hafızaya mühürlendi!")
+            st.success("Büyüme stratejileri hafızaya mühürlendi! (12 aya flat yayılım uygulandı)")
             st.rerun()
 
         if rev_secenekleri:
             r_id_b = rev_secenekleri[cb_2.selectbox("Büyüme İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_b_rev_box")]
+            
             if cb_2.button("💾 Büyüme Verilerini Buluta Gönder", use_container_width=True, key="btn_b_cloud_save"):
                 izin_verilen_b_db = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
                 b_records = [{col: json_uyumlu_deger(row[col]) for col in izin_verilen_b_db if col in row} for _, row in edited_b_matris.iterrows()]
                 for r in b_records: r["revizyon_id"] = r_id_b
                 client.table("buyume_tablosu").delete().eq("revizyon_id", r_id_b).execute()
                 for i in range(0, len(b_records), 500): client.table("buyume_tablosu").insert(b_records[i:i+500]).execute()
-                st.success("🎉 Müşteri büyüme oranları seçili versiyona mühürlendi!")
+                st.success("🎉 Müşteri büyüme oranları başarıyla mühürlendi!")
 
             if cb_3.button("🔄 Dosyasız Buluttan Büyüme Kartlarını Çek", use_container_width=True, key="btn_b_cloud_load"):
                 b_res = client.table("buyume_tablosu").select("*").eq("revizyon_id", r_id_b).execute()
@@ -908,5 +941,6 @@ with sekmeler[8]:
                             "25 kullanılan büyüme": row.get("25 kullanılan büyüme"), "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME")),
                             "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi"), "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme")
                         }
-                    st.success("🎉 Tüm senaryo bağımsız olarak buluttan çekildi.")
+                    st.success("🎉 Senaryo bağımsız olarak buluttan çekildi.")
                     st.rerun()
+                else: st.warning("Bu revizyona ait büyüme kaydı bulunamadı.")
