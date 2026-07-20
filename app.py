@@ -216,11 +216,11 @@ if client:
 # ------------------------------------------------------------
 with sekmeler[0]:
     st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
-    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Sistem, **belirttiğiniz 9 sütunu yan yana yazarak** `Uniq ID` üretecek ve Çarşaf Liste'deki eskalasyon parametrelerini anlık bağlayacaktır.")
+    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Sistem, `Durum` bilgisini **Yeni-Bütçe** sayfasından, `Esk. Baz Yakıt Fiyatı`nı ise **Baz Yakıtlar** sayfasından çapraz eşleyerek (Düşeyara) çekecektir. Kalan alanlar yüklediğiniz şablondan alınır.")
 
     yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
 
-    # Çarşaf listeden Düşeyara (VLOOKUP) için verileri belleğe al
+    # Çarşaf listeden Düşeyara (VLOOKUP) için verileri belleğe al (Yedek Havuz)
     lookup_parametleri = {}
     if not st.session_state.ana_veri.empty:
         df_c_tmp = st.session_state.ana_veri.copy()
@@ -229,7 +229,6 @@ with sekmeler[0]:
         for _, r in df_uniq_m.iterrows():
             mk = str(r["Müşteri Kodu"])
             lookup_parametleri[mk] = {
-                "Durum": r.get("Durum", "GEÇERLİ"),
                 "Kayıt Tarihi": r.get("Kayıt Tarihi", ""),
                 "Müşteri Grubu": r.get("Müşteri Grubu", "DİĞER"),
                 "Yakıt Değişim Yüzdesi (%)": guvenli_sayi(r.get("Yakıt Değişim Yüzdesi (%)", 0.0)),
@@ -237,10 +236,15 @@ with sekmeler[0]:
                 "Yakıt Değişim Periyodu (Ay)": guvenli_tamsayi(r.get("Yakıt Değişim Periyodu (Ay)", 0)),
                 "Enf. Değişim Yüzdesi (%)": guvenli_sayi(r.get("Enf. Değişim Yüzdesi (%)", 0.0)),
                 "Enf. Değişim Periyodu (Ay)": guvenli_tamsayi(r.get("Enf. Değişim Periyodu (Ay)", 0)),
-                "Esk. Baz Yakıt Fiyatı": guvenli_sayi(r.get("Esk. Baz Yakıt Fiyatı", 0.0)),
                 "Esk. Yakıt Başlangıç Tarihi": r.get("Esk. Yakıt Başlangıç Tarihi", ""),
                 "Esk. Enf. Başlangıç Tarihi": r.get("Esk. Enf. Başlangıç Tarihi", "")
             }
+
+    # 6. Sekmedeki (Baz Yakıt Fiyatları) güncel "Yakıt Fiyat" verilerini Düşeyara için hazırla
+    baz_yakit_map = {}
+    if not st.session_state.baz_yakit_veri.empty:
+        for _, r in st.session_state.baz_yakit_veri.iterrows():
+            baz_yakit_map[str(r["Müşteri Kodu"])] = guvenli_sayi(r.get("Yakıt Fiyat", 0.0))
 
     if yuklenen_data_havuzu:
         df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
@@ -250,13 +254,23 @@ with sekmeler[0]:
         for idx, row in df_d_giren.iterrows():
             mkod = guvenli_metin_kodu(row.get("Müşteri Kodu", ""))
             
-            # KURAL: Yıl, Teslimat Tipi, Atf Tipi ... Müşteri Kodu sütun değerlerinin metinsel olarak yan yana birleştirilmesi
+            # KURAL: Uniq ID kombinasyon motoru
             join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
             uniq_str = "".join([str(row.get(c, "")).strip() for c in join_cols]).replace("nan", "").replace("None", "")
             
-            # Çarşaf Listeden Düşeyara Yapılıyor
             p_set = lookup_parametleri.get(mkod, {})
 
+            # 1. ÖZEL KURAL: DURUM -> Yeni-Bütçe Müşteri sayfasındaki Durum_2'den alınacak
+            durum_2_val = st.session_state.musteri_ayarlari.get(mkod, {}).get("Durum_2")
+            if pd.isna(durum_2_val) or durum_2_val is None or str(durum_2_val).strip() == "":
+                durum_2_val = row.get("Durum", "GEÇERLİ")  # Bulamazsa Excel'den veya varsayılan
+
+            # 2. ÖZEL KURAL: ESK BAZ YAKIT -> Baz Yakıt Fiyatları sayfasındaki Yakıt Fiyat'tan alınacak
+            esk_baz_yakit_val = baz_yakit_map.get(mkod)
+            if esk_baz_yakit_val is None or esk_baz_yakit_val == 0.0:
+                esk_baz_yakit_val = guvenli_sayi(row.get("Esk. Baz Yakıt Fiyatı", 0.0)) # Bulamazsa Excel'den al
+
+            # 3. KURAL: Diğer parametreler direkt yüklenen Excel'den (Yoksa eski havuzdan)
             data_rows.append({
                 "Uniq ID": uniq_str,
                 "Yıl": row.get("Yıl", ""),
@@ -271,20 +285,24 @@ with sekmeler[0]:
                 "Müşteri Adı": row.get("Müşteri Adı", ""),
                 "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", ""),
                 "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")),
-                "Durum": p_set.get("Durum", "GEÇERLİ"),
-                "Kayıt Tarihi": p_set.get("Kayıt Tarihi", ""),
-                "Müşteri Grubu": p_set.get("Müşteri Grubu", "DİĞER"),
-                "Yakıt Değişim Yüzdesi (%)": p_set.get("Yakıt Değişim Yüzdesi (%)", 0.0),
-                "Yakıt Anlık Değişim Oranı (%)": p_set.get("Yakıt Anlık Değişim Oranı (%)", 0.0),
-                "Yakıt Değişim Periyodu (Ay)": p_set.get("Yakıt Değişim Periyodu (Ay)", 0),
-                "Enf. Değişim Yüzdesi (%)": p_set.get("Enf. Değişim Yüzdesi (%)", 0.0),
-                "Enf. Değişim Periyodu (Ay)": p_set.get("Enf. Değişim Periyodu (Ay)", 0),
-                "Esk. Baz Yakıt Fiyatı": p_set.get("Esk. Baz Yakıt Fiyatı", 0.0),
-                "Esk. Yakıt Başlangıç Tarihi": p_set.get("Esk. Yakıt Başlangıç Tarihi", ""),
-                "Esk. Enf. Başlangıç Tarihi": p_set.get("Esk. Enf. Başlangıç Tarihi", "")
+                
+                # Dinamik Çekilen Alanlar
+                "Durum": durum_2_val,
+                "Esk. Baz Yakıt Fiyatı": esk_baz_yakit_val,
+                
+                # Excel'den Yüklenen Alanlar
+                "Kayıt Tarihi": row.get("Kayıt Tarihi", p_set.get("Kayıt Tarihi", "")),
+                "Müşteri Grubu": row.get("Müşteri Grubu", p_set.get("Müşteri Grubu", "DİĞER")),
+                "Yakıt Değişim Yüzdesi (%)": guvenli_sayi(row.get("Yakıt Değişim Yüzdesi (%)", p_set.get("Yakıt Değişim Yüzdesi (%)", 0.0))),
+                "Yakıt Anlık Değişim Oranı (%)": guvenli_sayi(row.get("Yakıt Anlık Değişim Oranı (%)", p_set.get("Yakıt Anlık Değişim Oranı (%)", 0.0))),
+                "Yakıt Değişim Periyodu (Ay)": guvenli_tamsayi(row.get("Yakıt Değişim Periyodu (Ay)", p_set.get("Yakıt Değişim Periyodu (Ay)", 0))),
+                "Enf. Değişim Yüzdesi (%)": guvenli_sayi(row.get("Enf. Değişim Yüzdesi (%)", p_set.get("Enf. Değişim Yüzdesi (%)", 0.0))),
+                "Enf. Değişim Periyodu (Ay)": guvenli_tamsayi(row.get("Enf. Değişim Periyodu (Ay)", p_set.get("Enf. Değişim Periyodu (Ay)", 0))),
+                "Esk. Yakıt Başlangıç Tarihi": row.get("Esk. Yakıt Başlangıç Tarihi", p_set.get("Esk. Yakıt Başlangıç Tarihi", "")),
+                "Esk. Enf. Başlangıç Tarihi": row.get("Esk. Enf. Başlangıç Tarihi", p_set.get("Esk. Enf. Başlangıç Tarihi", ""))
             })
         st.session_state.data_sayfası_df = pd.DataFrame(data_rows).reindex(columns=data_ekran_sutunlari)
-        st.success("🎉 Ham veri başarıyla mühürlendi ve metinsel Uniq ID kombinasyonları oluşturuldu!")
+        st.success("🎉 Ham veri yüklendi, `Durum` ve `Yakıt Fiyat` çapraz sekme sorgularıyla başarıyla güncellendi!")
 
     # Tabloyu data_editor olarak ekrana bas
     if not st.session_state.data_sayfası_df.empty:
