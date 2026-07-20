@@ -335,11 +335,28 @@ with sekmeler[0]:
             
             # BULUTA KAYDETME BUTONU
             if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
-                data_records = [{str(col): json_uyumlu_deger(val) for col, val in row.items()} for _, row in edited_data_grid.iterrows()]
-                for r in data_records: r["revizyon_id"] = r_id_data
-                client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
-                for i in range(0, len(data_records), 500): client.table("data_tablosu").insert(data_records[i:i+500]).execute()
-                st.success("🎉 Data havuzu bulut sunucularına kalıcı olarak mühürlendi!")
+                # Supabase veritabanında tam karşılığı olan sütunların listesi (Güvenlik Kalkanı)
+                izin_verilen_db_sutunlari_data = [
+                    "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", 
+                    "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", 
+                    "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
+                    "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", 
+                    "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", 
+                    "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
+                ]
+                
+                data_records = []
+                for _, row in edited_data_grid.iterrows():
+                    # Ekranda olan verilerden SADECE veritabanında olanları filtreliyoruz
+                    rc = {col: json_uyumlu_deger(row[col]) for col in izin_verilen_db_sutunlari_data if col in row}
+                    rc["revizyon_id"] = r_id_data
+                    data_records.append(rc)
+                
+                with st.spinner("Data havuzu buluta işleniyor..."):
+                    client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
+                    for i in range(0, len(data_records), 500): 
+                        client.table("data_tablosu").insert(data_records[i:i+500]).execute()
+                    st.success("🎉 Data havuzu bulut sunucularına kalıcı olarak mühürlendi!")
 
             # BULUTTAN DOĞRUDAN ÇEKME ENGINE (YARIN UPLOADSIZ ÇALIŞACAK KISIM 🚀)
             if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
