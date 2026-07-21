@@ -955,48 +955,74 @@ with sekmeler[8]:
         )
 
         # ============================================================
-        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI)
+        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI) - ÖNGÖRÜ DOLGULU 🚀
         # ============================================================
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("📊 Müşteri Grubu Sezonluk Dağılım Matrisi (%)")
-        st.markdown("1. Sekmedeki veri havuzuna göre müşteri gruplarının (`MP`, `HOROZ CÜZDAN`, `DİĞER`) kendi içindeki aylık yük dağılım yüzdeleri:")
+        st.markdown("1. Sekmedeki veri havuzuna göre müşteri gruplarının kendi içindeki aylık yük dağılım yüzdeleri. *(Not: 2026'nın henüz gerçekleşmemiş ayları 2024 ve 2025 ortalamasıyla tamamlanarak yatayda %100 dengesi kurulmuştur.)*")
 
         hedef_gruplar = ["MP", "HOROZ CÜZDAN", "DİĞER"]
-        sezon_sekmeleri = st.tabs(["📅 2024 Dağılım Trendi", "📅 2025 Dağılım Trendi", "📅 2026 Dağılım Trendi"])
+        sezon_sekmeleri = st.tabs(["📅 2024 Dağılım Trendi", "📅 2025 Dağılım Trendi", "📅 2026 Dağılım Trendi (Öngörü Düzeltmeli)"])
 
+        # 1. Adım: Tüm yılların kümülatif toplamlarını önden hesaplayalım (Hız Optimizasyonu)
+        if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
+            df_g_calc = st.session_state.data_sayfası_df.copy()
+            df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
+            
+            grup_totals = {}
+            for y in ["2024", "2025", "2026"]:
+                hedef_sutunlar = [f"{y} {m} Desi" for m in aylar]
+                mevcut_sutunlar = [c for c in hedef_sutunlar if c in df_g_calc.columns]
+                
+                for c in mevcut_sutunlar:
+                    df_g_calc[c] = pd.to_numeric(df_g_calc[c].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+                    
+                if mevcut_sutunlar:
+                    grup_totals[y] = df_g_calc.groupby("Müşteri Grubu")[mevcut_sutunlar].sum()
+                else:
+                    grup_totals[y] = pd.DataFrame()
+        else:
+            grup_totals = {"2024": pd.DataFrame(), "2025": pd.DataFrame(), "2026": pd.DataFrame()}
+
+        # 2. Adım: Matrisleri Oluşturma ve 2026 Ortalama Mantığını İşletme
         for i, target_yr in enumerate(["2024", "2025", "2026"]):
             with sezon_sekmeleri[i]:
                 grup_matris_rows = []
                 
-                if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
-                    df_g_calc = st.session_state.data_sayfası_df.copy()
-                    df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
-                    hedef_yil_aylik_sutunlar = [f"{target_yr} {m} Desi" for m in aylar]
+                df_yr_totals = grup_totals.get(target_yr, pd.DataFrame())
+                df_24_totals = grup_totals.get("2024", pd.DataFrame())
+                df_25_totals = grup_totals.get("2025", pd.DataFrame())
+
+                for grp in hedef_gruplar:
+                    r_g = {"Müşteri Grubu": grp}
+                    aylik_ham_degerler = []
                     
-                    if all(c in df_g_calc.columns for c in hedef_yil_aylik_sutunlar):
-                        grup_aylik_totals = df_g_calc.groupby("Müşteri Grubu")[hedef_yil_aylik_sutunlar].sum()
+                    for m in aylar:
+                        val = 0.0
+                        col_name = f"{target_yr} {m} Desi"
                         
-                        for grp in hedef_gruplar:
-                            r_g = {"Müşteri Grubu": grp}
-                            if grp in grup_aylik_totals.index:
-                                g_monthly_series = grup_aylik_totals.loc[grp]
-                                g_annual_total = g_monthly_series.sum()
-                                for m in aylar:
-                                    m_val = g_monthly_series[f"{target_yr} {m} Desi"]
-                                    r_g[m] = (m_val / g_annual_total * 100) if g_annual_total > 0 else 0.0
-                            else:
-                                for m in aylar: r_g[m] = 0.0
-                            grup_matris_rows.append(r_g)
-                    else:
-                        for grp in hedef_gruplar:
-                            r_g = {"Müşteri Grubu": grp}
-                            for m in aylar: r_g[m] = 0.0
-                            grup_matris_rows.append(r_g)
-                else:
-                    for grp in hedef_gruplar:
-                        r_g = {"Müşteri Grubu": grp}
-                        for m in aylar: r_g[m] = 0.0
-                        grup_matris_rows.append(r_g)
+                        # Mevcut değeri al
+                        if not df_yr_totals.empty and grp in df_yr_totals.index and col_name in df_yr_totals.columns:
+                            val = df_yr_totals.loc[grp, col_name]
+                        
+                        # 🌟 2026 EKSİK AY ORTALAMA TAMAMLAMA MOTORU 🌟
+                        if target_yr == "2026":
+                            eksik_aylar = ["Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+                            # Ay eksik listesindeyse veya verisi 0 gelmişse 2024 ve 2025'ten ortalama çek
+                            if m in eksik_aylar or val <= 0:
+                                val_24 = df_24_totals.loc[grp, f"2024 {m} Desi"] if (not df_24_totals.empty and grp in df_24_totals.index and f"2024 {m} Desi" in df_24_totals.columns) else 0.0
+                                val_25 = df_25_totals.loc[grp, f"2025 {m} Desi"] if (not df_25_totals.empty and grp in df_25_totals.index and f"2025 {m} Desi" in df_25_totals.columns) else 0.0
+                                
+                                val = (val_24 + val_25) / 2.0
+                                
+                        aylik_ham_degerler.append(val)
+                    
+                    # 3. Adım: Yüzdesel Formata Çevirme (Yatayda tam %100 garantisi)
+                    yillik_toplam = sum(aylik_ham_degerler)
+                    for j, m in enumerate(aylar):
+                        r_g[m] = (aylik_ham_degerler[j] / yillik_toplam * 100) if yillik_toplam > 0 else 0.0
+                        
+                    grup_matris_rows.append(r_g)
                 
                 df_grup_sezonsallik_view = pd.DataFrame(grup_matris_rows)
                 st.dataframe(
