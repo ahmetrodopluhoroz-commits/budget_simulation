@@ -544,17 +544,83 @@ with sekmeler[1]:
         st.dataframe(df_nihai, use_container_width=True)
 
 # ------------------------------------------------------------
-# 3. SEKME: ÇALIŞMA GÜNLERİ
+# 3. SEKME: ÇALIŞMA GÜNLERİ (DİNAMİK YILLIK MATRİS VE ORANLAR 📅)
 # ------------------------------------------------------------
 with sekmeler[2]:
-    st.title("📅 Operasyonel Çalışma Günleri")
-    takvim_verisi = {
-        "Ay": aylar,
-        "2025 Çalışma Günü": [22, 20, 21, 22, 21, 20, 23, 21, 22, 23, 20, 22],
-        "2026 Çalışma Günü": [21, 20, 20, 21, 17, 22, 22, 21, 22, 21, 21, 23],
-        "Resmi Tatiller / Notlar": ["-", "-", "Ramazan Bayramı", "23 Nisan", "Kurban Bayramı", "-", "-", "30 Ağustos", "-", "29 Ekim", "-", "-"]
-    }
-    st.data_editor(pd.DataFrame(takvim_verisi), use_container_width=True, hide_index=True, key="calendar_grid_key")
+    st.title("📅 Operasyonel Çalışma Günleri Takvimi")
+    st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. **2027** yılını manuel girdiğinizde yıllık toplamlar ve **26to27** oranları anlık olarak hesaplanır.")
+
+    # 1. Hafıza Yapısının İlk Kurulumu (Eksikse Geçmiş Verilerle Başlat)
+    if "takvim_verisi_yillar" not in st.session_state:
+        st.session_state.takvim_verisi_yillar = pd.DataFrame([
+            {"YIL": "2022", "Ocak": 25, "Şubat": 24, "Mart": 27, "Nisan": 26, "Mayıs": 23, "Haziran": 26, "Temmuz": 22, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 27},
+            {"YIL": "2023", "Ocak": 26, "Şubat": 24, "Mart": 27, "Nisan": 23, "Mayıs": 26, "Haziran": 24, "Temmuz": 25, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 26},
+            {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
+            {"YIL": "2025", "Ocak": 26, "Şubat": 24, "Mart": 25, "Nisan": 25, "Mayıs": 26, "Haziran": 22, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+            {"YIL": "2026", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+            {"YIL": "2027", "Ocak": 0, "Şubat": 0, "Mart": 0, "Nisan": 0, "Mayıs": 0, "Haziran": 0, "Temmuz": 0, "Ağustos": 0, "Eylül": 0, "Ekim": 0, "Kasım": 0, "Aralık": 0}
+        ])
+
+    # 2. Dinamik Hesaplama Katmanı
+    df_yillar = st.session_state.takvim_verisi_yillar.copy()
+    for m in aylar:
+        df_yillar[m] = pd.to_numeric(df_yillar[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+        
+    # Yıllık Toplamları Vektörel Hesapla (Sağ Sütun)
+    df_yillar["Toplam"] = df_yillar[aylar].sum(axis=1)
+
+    # Oran Satırlarını Çaprazlama Hesaplama Fonksiyonu
+    def yil_satiri_getir(yr_str):
+        match = df_yillar[df_yillar["YIL"] == yr_str]
+        return match.iloc[0] if not match.empty else None
+
+    ratio_rows = []
+    oran_kurgulari = [
+        ("2026", "2027", "26to27"),
+        ("2025", "2026", "25to26"),
+        ("2024", "2025", "24to25")
+    ]
+
+    for prev_y, curr_y, label in oran_kurgulari:
+        r_prev = yil_satiri_getir(prev_y)
+        r_curr = yil_satiri_getir(curr_y)
+        
+        r_dict = {"YIL": label}
+        for m in aylar:
+            v_prev = r_prev[m] if r_prev is not None else 0.0
+            v_curr = r_curr[m] if r_curr is not None else 0.0
+            # Sıfıra bölünme hatasını engelleme kalkanı
+            r_dict[m] = (v_curr / v_prev) if v_prev > 0 else 0.0
+            
+        r_dict["Toplam"] = np.nan  # Oran satırlarının kümülatif toplam sütunu boş kalır
+        ratio_rows.append(r_dict)
+
+    df_ratios = pd.DataFrame(ratio_rows)
+    
+    # Yıllar ve Hesaplanan Oranları Tek Bir Çarşaf Tabloda Birleştirme
+    combined_calendar_df = pd.concat([df_yillar, df_ratios], ignore_index=True)
+
+    # 3. Akıllı Gelişmiş Arayüz Editörü (Data Editor)
+    edited_calendar = st.data_editor(
+        combined_calendar_df,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["YIL", "Toplam"], # Satır adları ve Toplam sütunu elle değiştirilemez, sistem hesaplar
+        column_config={
+            "YIL": st.column_config.TextColumn("YIL", help="Çalışma yılı veya karşılaştırma periyodu"),
+            "Toplam": st.column_config.NumberColumn("Toplam", format="%d"),
+            **{m: st.column_config.NumberColumn(m, format="%.2f") for m in aylar}
+        },
+        key="dynamic_operational_calendar_editor"
+    )
+
+    # 4. Geri Besleme ve Hafıza Senkronizasyon Motoru
+    # Tablodan gelen verilerden sadece gerçek yılları süzüp (oran satırlarını atarak) session_state'e kilitler
+    just_real_years = edited_calendar[edited_calendar["YIL"].astype(str).str.isdigit() == True].copy()
+    if "Toplam" in just_real_years.columns:
+        just_real_years = just_real_years.drop(columns=["Toplam"])
+        
+    st.session_state.takvim_verisi_yillar = just_real_years
 
 # ------------------------------------------------------------
 # 4. SEKME: BULUT REVİZYON YÖNETİMİ
