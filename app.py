@@ -845,12 +845,17 @@ with sekmeler[8]:
             cols_24 = [f"2024 {m} Desi" for m in ilk_9_ay]
             cols_25 = [f"2025 {m} Desi" for m in ilk_9_ay]
             
+            # ÇÖZÜM: .applymap() yerine evrensel ve güvenli sütun bazlı .apply() kullanıyoruz
             if all(c in df_ds_calc.columns for c in cols_24):
-                df_ds_calc["sum_24"] = df_ds_calc[cols_24].applymap(guvenli_sayi).sum(axis=1)
+                for c in cols_24: 
+                    df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
+                df_ds_calc["sum_24"] = df_ds_calc[cols_24].sum(axis=1)
                 desi_24_map = df_ds_calc.groupby("Müşteri Kodu")["sum_24"].sum().to_dict()
                 
             if all(c in df_ds_calc.columns for c in cols_25):
-                df_ds_calc["sum_25"] = df_ds_calc[cols_25].applymap(guvenli_sayi).sum(axis=1)
+                for c in cols_25: 
+                    df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
+                df_ds_calc["sum_25"] = df_ds_calc[cols_25].sum(axis=1)
                 desi_25_map = df_ds_calc.groupby("Müşteri Kodu")["sum_25"].sum().to_dict()
 
         final_rows = []
