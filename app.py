@@ -804,7 +804,7 @@ with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
     st.markdown("Müşteri listenizi ve kümülatif desilerinizi **1. Sekmedeki Data Havuzundan** otomatik çekebilir veya manuel şablon yükleyebilirsiniz.")
 
-    # 🎯 VERİ KAYNAĞI SEÇİCİ (MÜKEMMEL ÇAPRAZ ENTEGRASYON)
+    # 🎯 VERİ KAYNAĞI SEÇİCİ
     buyume_veri_kaynagi = st.radio("🔄 Simülasyon Listesi Nereden Beslensin?", 
                                    ["📁 1. Sekmedeki Data Havuzundan Otomatik Çek (Önerilen 🚀)", "Manuel Excel/CSV Dosyası Yükle"], 
                                    horizontal=True, key="buyume_kaynak_secimi")
@@ -906,8 +906,72 @@ with sekmeler[8]:
             }, key="buyume_matris_editoru"
         )
 
+        # ============================================================
+        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI) - YENİ ENTEGRASYON 🚀
+        # ============================================================
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("📊 Müşteri Grubu Sezonluk Dağılım Matrisi (%)")
+        st.markdown("1. Sekmedeki veri havuzuna göre müşteri gruplarının (`MP`, `HOROZ CÜZDAN`, `DİĞER`) kendi içindeki aylık yük dağılım yüzdeleri:")
+
+        hedef_gruplar = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+        sezon_sekmeleri = st.tabs(["📅 2024 Dağılım Trendi", "📅 2025 Dağılım Trendi", "📅 2026 Dağılım Trendi"])
+
+        for i, target_yr in enumerate(["2024", "2025", "2026"]):
+            with sezon_sekmeleri[i]:
+                grup_matris_rows = []
+                
+                # Arka planda data yüklü mü ve Müşteri Grubu kolonu mevcut mu kontrolü
+                if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
+                    df_g_calc = st.session_state.data_sayfası_df.copy()
+                    
+                    # Verideki olası boşlukları veya küçük harfleri standartlaştırıyoruz
+                    df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
+                    
+                    # İlgili yılın aylık veri sütunları mevcut mu kontrolü
+                    hedef_yil_aylik_sutunlar = [f"{target_yr} {m} Desi" for m in aylar]
+                    
+                    if all(c in df_g_calc.columns for c in hedef_yil_aylik_sutunlar):
+                        # Gruplara göre aylık bazda kümülatif toplam al
+                        grup_aylik_totals = df_g_calc.groupby("Müşteri Grubu")[hedef_yil_aylik_sutunlar].sum()
+                        
+                        for grp in hedef_gruplar:
+                            r_g = {"Müşteri Grubu": grp}
+                            if grp in grup_aylik_totals.index:
+                                g_monthly_series = grup_aylik_totals.loc[grp]
+                                g_annual_total = g_monthly_series.sum()
+                                
+                                for m in aylar:
+                                    m_val = g_monthly_series[f"{target_yr} {m} Desi"]
+                                    # Yüzdesel pay hesabı (0-100 arasına çekerek)
+                                    r_g[m] = (m_val / g_annual_total * 100) if g_annual_total > 0 else 0.0
+                            else:
+                                for m in aylar: r_g[m] = 0.0
+                            grup_matris_rows.append(r_g)
+                    else:
+                        # Tablo kolonları henüz oluşmadıysa 0 bas
+                        for grp in hedef_gruplar:
+                            r_g = {"Müşteri Grubu": grp}
+                            for m in aylar: r_g[m] = 0.0
+                            grup_matris_rows.append(r_g)
+                else:
+                    # İçeride hiç veri yoksa boş şablon bas
+                    for grp in hedef_gruplar:
+                        r_g = {"Müşteri Grubu": grp}
+                        for m in aylar: r_g[m] = 0.0
+                        grup_matris_rows.append(r_g)
+                
+                df_grup_sezonsallik_view = pd.DataFrame(grup_matris_rows)
+                st.dataframe(
+                    df_grup_sezonsallik_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
+                )
+
+        # Bulut akış butonları grubu
         st.markdown("---")
         cb_1, cb_2, cb_3 = st.columns(3)
+
         if cb_1.button("💾 Büyüme Kartlarını Hafızaya Kaydet", type="primary", use_container_width=True, key="btn_b_hfz_save"):
             for idx, row in edited_b_matris.iterrows():
                 mk = str(row["Müşteri Kodu"])
