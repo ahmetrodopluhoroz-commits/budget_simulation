@@ -233,7 +233,7 @@ with sekmeler[0]:
     ]
     
     dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi"]
-    yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
+    yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up_yedek")
 
     if yuklenen_data_havuzu:
         with st.spinner("⚡ Büyük veri seti işleniyor, RAM kalkanı aktif..."):
