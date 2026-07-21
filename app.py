@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import json
 from datetime import date, datetime
 
 try:
@@ -60,23 +61,23 @@ parametre_kolonlari = [
     "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
 
-kolonlar_2025_desi = [f"2025 {ay} Desi" for ay in aylar]
-kolonlar_2025_tutar = [f"2025 {ay} Tutar" for ay in aylar]
-kolonlar_2025_fiyat = [f"2025 {ay} Fiyat" for ay in aylar]
+kolonlar_25_desi = [f"2025 {ay} Desi" for ay in aylar]
+kolonlar_25_tutar = [f"2025 {ay} Tutar" for ay in aylar]
+kolonlar_25_fiyat = [f"2025 {ay} Fiyat" for ay in aylar]
 
-kolonlar_2026_buyume = [f"2026 {ay} Büyüme" for ay in aylar]
-kolonlar_2026_esk = [f"2026 {ay} Esk." for ay in aylar]
-kolonlar_2026_desi = [f"2026 {ay} Desi" for ay in aylar]
-kolonlar_2026_tutar = [f"2026 {ay} Tutar" for ay in aylar]
-kolonlar_2026_fiyat = [f"2026 {ay} Fiyat" for ay in aylar]
+kolonlar_26_buyume = [f"2026 {ay} Büyüme" for ay in aylar]
+kolonlar_26_esk = [f"2026 {ay} Esk." for ay in aylar]
+kolonlar_26_desi = [f"2026 {ay} Desi" for ay in aylar]
+kolonlar_26_tutar = [f"2026 {ay} Tutar" for ay in aylar]
+kolonlar_26_fiyat = [f"2026 {ay} Fiyat" for ay in aylar]
 
-tum_kolonlar = (ana_kolonlar + parametre_kolonlari + kolonlar_2025_desi + kolonlar_2025_tutar + kolonlar_2025_fiyat +
-                kolonlar_2026_buyume + kolonlar_2026_esk + kolonlar_2026_desi + kolonlar_2026_tutar + kolonlar_2026_fiyat)
+tum_kolonlar = (ana_kolonlar + parametre_kolonlari + kolonlar_25_desi + kolonlar_25_tutar + kolonlar_25_fiyat +
+                kolonlar_26_buyume + kolonlar_26_esk + kolonlar_26_desi + kolonlar_26_tutar + kolonlar_26_fiyat)
 
 BIGINT_KOLONLAR = ["Uniq ID", "Yıl", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Periyodu (Ay)"]
 NUMERIC_KOLONLAR = (["Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Enf. Değişim Yüzdesi (%)", "Esk. Baz Yakıt Fiyatı"] +
-                    kolonlar_2025_desi + kolonlar_2025_tutar + kolonlar_2025_fiyat + kolonlar_2026_buyume + kolonlar_2026_esk +
-                    kolonlar_2026_desi + kolonlar_2026_tutar + kolonlar_2026_fiyat)
+                    kolonlar_25_desi + kolonlar_25_tutar + kolonlar_25_fiyat + kolonlar_26_buyume + kolonlar_26_esk +
+                    kolonlar_26_desi + kolonlar_26_tutar + kolonlar_26_fiyat)
 
 # Özel Sayfa Şablon Sütun Tanımları
 data_ekran_sutunlari = [
@@ -194,7 +195,7 @@ def supabase_verisini_hazirla(dataframe):
     return df, [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in df.iterrows()]
 
 # ============================================================
-# ARAYÜZ SEKMELERİ (9 SEKMEYE ÇIKARILDI - DATA EN BAŞTA 🎉)
+# ARAYÜZ SEKMELERİ (9 SEKMELİ YAPI 🎉)
 # ============================================================
 sekmeler = st.tabs([
     "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
@@ -212,204 +213,13 @@ if client:
     except: pass
 
 # ------------------------------------------------------------
-# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (BÜYÜK VERİ ZIRHLI 🚀)
+# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (ULTRA HIZLI METRİK KALKANI 🚀)
 # ------------------------------------------------------------
 with sekmeler[0]:
     st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
     st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Yıl ve dosyanızdaki metrik tipini seçerek veri ambarını dinamik olarak besleyebilirsiniz.")
 
-    # 🎯 DİNAMİK SEÇİCİLER (YIL VE METRİK TİPİ SORGUSU)
-    c_cfg1, c_cfg2 = st.columns(2)
-    with c_cfg1:
-        secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil_yedek")
-    with c_cfg2:
-        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Desi Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Desi (Örn: Ocak Desi)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik_yedek")
-
-    sabit_data_sutunlari = [
-        "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
-        "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
-        "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
-        "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
-    ]
-    
-    dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi"]
-    yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up_yedek")
-
-    if yuklenen_data_havuzu:
-        with st.spinner("⚡ Büyük veri seti işleniyor, RAM kalkanı aktif..."):
-            df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
-            df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
-            
-            df_d_giren["Müşteri Kodu"] = df_d_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            
-            # 1. VEKTÖREL UNIQ ID MOTORU
-            join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
-            for c in join_cols:
-                if c not in df_d_giren.columns: df_d_giren[c] = ""
-            
-            df_d_giren["Uniq ID"] = df_d_giren[join_cols].fillna("").astype(str).agg("".join, axis=1).str.replace("nan", "").str.replace("None", "")
-            
-            # 2. VEKTÖREL DURUM EŞLEŞTİRME
-            if st.session_state.musteri_ayarlari:
-                m_ayarlar_df = pd.DataFrame.from_dict(st.session_state.musteri_ayarlari, orient='index').reset_index().rename(columns={"index": "Müşteri Kodu"})
-                if "Durum_2" in m_ayarlar_df.columns:
-                    df_d_giren = pd.merge(df_d_giren, m_ayarlar_df[["Müşteri Kodu", "Durum_2"]], on="Müşteri Kodu", how="left")
-                else: df_d_giren["Durum_2"] = np.nan
-            else: df_d_giren["Durum_2"] = np.nan
-                
-            if "Durum" not in df_d_giren.columns: df_d_giren["Durum"] = "GEÇERLİ"
-            df_d_giren["Durum_Nihai"] = df_d_giren["Durum_2"].fillna(df_d_giren["Durum"]).fillna("GEÇERLİ")
-
-            # 3. VEKTÖREL BAZ YAKIT FİYAT EŞLEŞTİRME
-            if not st.session_state.baz_yakit_veri.empty:
-                by_df = st.session_state.baz_yakit_veri.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu", "Yakıt Fiyat"]]
-                df_d_giren = pd.merge(df_d_giren, by_df, on="Müşteri Kodu", how="left")
-            else: df_d_giren["Yakıt Fiyat"] = np.nan
-                
-            if "Esk. Baz Yakıt Fiyatı" not in df_d_giren.columns: df_d_giren["Esk. Baz Yakıt Fiyatı"] = 0.0
-            df_d_giren["Esk_Baz_Yakit_Nihai"] = df_d_giren["Yakıt Fiyat"].fillna(df_d_giren["Esk. Baz Yakıt Fiyatı"]).apply(guvenli_sayi)
-
-            # 4. VEKTÖREL ÇARŞAF LİSTE YEDEK SORGUSU
-            fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
-            if not st.session_state.ana_veri.empty:
-                av_df = st.session_state.ana_veri.copy()
-                av_df["Müşteri Kodu"] = av_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                av_df = av_df.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu"] + [c for c in fallback_cols if c in av_df.columns]]
-                df_d_giren = pd.merge(df_d_giren, av_df, on="Müşteri Kodu", how="left", suffixes=("", "_av"))
-            
-            # Ana Veri İskeletini Oluşturma
-            df_built = pd.DataFrame()
-            df_built["Uniq ID"] = df_d_giren["Uniq ID"]
-            for c in ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi"]:
-                df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ""
-            df_built["Sap Kodu"] = df_d_giren["Sap Kodu"] if "Sap Kodu" in df_d_giren.columns else (df_d_giren["Sap No"] if "Sap No" in df_d_giren.columns else "")
-            df_built["Durum"] = df_d_giren["Durum_Nihai"]
-            
-            for c in fallback_cols:
-                col_av = f"{c}_av"
-                if col_av in df_d_giren.columns:
-                    df_built[c] = df_d_giren[c].fillna(df_d_giren[col_av]) if c in df_d_giren.columns else df_d_giren[col_av]
-                else:
-                    df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ("DİĞER" if c == "Müşteri Grubu" else "")
-            
-            df_built["Esk. Baz Yakıt Fiyatı"] = df_d_giren["Esk_Baz_Yakit_Nihai"]
-            df_built["Yakıt Değişim Yüzdesi (%)"] = df_built["Yakıt Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-            df_built["Yakıt Anlık Değişim Oranı (%)"] = df_built["Yakıt Anlık Değişim Oranı (%)"].apply(guvenli_sayi)
-            df_built["Enf. Değişim Yüzdesi (%)"] = df_built["Enf. Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-            df_built["Yakıt Değişim Periyodu (Ay)"] = df_built["Yakıt Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-            df_built["Enf. Değişim Periyodu (Ay)"] = df_built["Enf. Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-
-            # 5. DİNAMİK METRİK MAPPING MOTORU
-            sonek = " Kg" if "Kg" in metrik_tipi else (" Desi" if "Desi" in metrik_tipi else " Tutar")
-            toplam_desi = np.zeros(len(df_d_giren))
-            for ay in aylar:
-                col_to_use = None
-                for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
-                    if col in df_d_giren.columns:
-                        col_to_use = col
-                        break
-                if col_to_use:
-                    vals = df_d_giren[col_to_use].apply(guvenli_sayi).to_numpy()
-                else:
-                    vals = np.zeros(len(df_d_giren))
-                df_built[f"{secilen_yil} {ay} Desi"] = vals
-                toplam_desi += vals
-            df_built[f"{secilen_yil} Toplam Desi"] = toplam_desi
-
-            # 🌟 YENİ: V E K T Ö R E L  Y A N A L  B İ R L E Ş T İ R M E  M O T O R U (OH NO SAVAR 🚀)
-            if st.session_state.data_sayfası_df.empty:
-                # İlk yüklenen veriyi de kendi içinde Uniq ID'ye göre toplayarak temizle
-                agg_init = {col: ("sum" if "Desi" in col else "first") for col in df_built.columns if col != "Uniq ID"}
-                st.session_state.data_sayfası_df = df_built.groupby("Uniq ID", as_index=False).agg(agg_init)
-            else:
-                # 1. Eski veri havuzu ile yeni yüklenen veriyi alt alta birleştir (Işık Hızında)
-                df_combined = pd.concat([st.session_state.data_sayfası_df, df_built], ignore_index=True)
-                
-                # 2. Dinamik Vektörel Gruplama Stratejisi
-                agg_strategy = {}
-                for col in df_combined.columns:
-                    if col == "Uniq ID": continue
-                    if "Desi" in col:
-                        agg_strategy[col] = "sum"  # Desi kolonları toplanır (farklı yıllar birbirini ezmez)
-                    else:
-                        agg_strategy[col] = "first" # Metin parametreleri ilk satırdan korunur
-                
-                # 3. Tek hamlede, hafızada kopya oluşturmadan üstün performanslı birleştirme
-                st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
-                
-            st.success(f"🎉 Veriler başarıyla kaynaştırıldı! {secilen_yil} yılı verileri RAM şişmeden ana matrise mühürlendi.")
-
-    # Arayüz Tablo Gösterimi (KORUMA KALKANI AKTİF)
-    if not st.session_state.data_sayfası_df.empty:
-        gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_desi_kolonlari if c in st.session_state.data_sayfası_df.columns]
-        df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
-        
-        toplam_satir_sayisi = len(df_ekran)
-        st.warning(f"⚠️ Sistemde toplam {toplam_satir_sayisi:,} satır veri bulunuyor. Tarayıcınızın çökmesini engellemek amacıyla aşağıda İLK 500 satır listelenmektedir. 'Buluta Kaydet' dediğinizde {toplam_satir_sayisi:,} satırın tamamı eksiksiz kaydedilir.")
-        
-        st.dataframe(
-            df_ekran.head(500), 
-            use_container_width=True,
-            column_config={
-                "Esk. Baz Yakıt Fiyatı": st.column_config.NumberColumn("Esk. Baz Yakıt Fiyatı", format="₺%.2f"),
-                **{c: st.column_config.NumberColumn(c, format="%d") for c in dinamik_desi_kolonlari}
-            }
-        )
-
-        st.markdown("---")
-        st.subheader("☁️ Bulut Entegrasyonu (Yüklemeden Bağımsız Çağırma)")
-        cd1, cd2, cd3 = st.columns(3)
-        
-        output_d_excel = io.BytesIO()
-        with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer: st.session_state.data_sayfası_df.to_excel(writer, index=False, sheet_name="Data_Master")
-        cd1.download_button("📥 Tüm Tabloyu Excel Olarak İndir", output_d_excel.getvalue(), "data_master_havuz.xlsx", use_container_width=True)
-
-        if rev_secenekleri:
-            r_id_data = rev_secenekleri[cd2.selectbox("Data Yönetimi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_data_rev")]
-            
-            # 🌟 ULTRA GÜÇLÜ VE HIZLI BULUT MÜHÜRLERİ 🌟
-            if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
-                tum_desi_sutunlari_db = []
-                for y in ["2024", "2025", "2026"]:
-                    for m in aylar: tum_desi_sutunlari_db.append(f"{y} {m} Desi")
-                    tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
-
-                izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
-                
-                # 🛡️ iterrows() YERİNE ULTRA HIZLI VE RAM DOSTU TO_DICT MOTORU
-                mevcut_db_sutunlari = [c for c in izin_verilen_db_sutunlari_data if c in st.session_state.data_sayfası_df.columns]
-                df_to_save = st.session_state.data_sayfası_df[mevcut_db_sutunlari].copy()
-                df_to_save["revizyon_id"] = r_id_data
-                
-                # NaN değerleri veritabanı uyumlu None formatına tek hamlede vektörel çevir
-                df_to_save = df_to_save.replace({np.nan: None})
-                
-                # C-Level hızlı dönüşüm (Işık Hızında)
-                data_records = df_to_save.to_dict(orient='records')
-                
-                with st.spinner(f"🚀 {len(data_records):,} satırın tamamı buluta aktarılıyor..."):
-                    client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
-                    for i in range(0, len(data_records), 500): 
-                        client.table("data_tablosu").insert(data_records[i:i+500]).execute()
-                    st.success("🎉 Mükemmel! Dev havuz hiçbir veri kaybı ve takılma olmadan buluta başarıyla mühürlendi!")
-
-            if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
-                with st.spinner("Veriler veritabanından çekiliyor..."):
-                    d_res = client.table("data_tablosu").select("*").eq("revizyon_id", r_id_data).execute()
-                    if d_res.data:
-                        gelen_d_df = pd.DataFrame(d_res.data)
-                        if "id" in gelen_d_df.columns: gelen_d_df = gelen_d_df.drop(columns=["id"])
-                        st.session_state.data_sayfası_df = gelen_d_df
-                        st.success("🎉 Başarılı! Tüm operasyonel hafıza buluttan geri yüklendi.")
-                        st.rerun()
-                    else: st.warning("Bu revizyona ait kaydedilmiş veri havuzu bulunamadı.")# ------------------------------------------------------------
-# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (BÜYÜK VERİ ZIRHLI 🚀)
-# ------------------------------------------------------------
-with sekmeler[0]:
-    st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
-    st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Yıl ve dosyanızdaki metrik tipini seçerek veri ambarını dinamik olarak besleyebilirsiniz.")
-
-    # 🎯 DİNAMİK SEÇİCİLER (YIL VE METRİK TİPİ SORGUSU)
+    # 🎯 DİNAMİK SEÇİCİLER
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1:
         secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
@@ -423,120 +233,153 @@ with sekmeler[0]:
         "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
     ]
     
-    dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi"]
+    dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi" ]
     yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
 
     if yuklenen_data_havuzu:
         with st.spinner("⚡ Büyük veri seti işleniyor, RAM kalkanı aktif..."):
             df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
             df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
-            
             df_d_giren["Müşteri Kodu"] = df_d_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            # 1. VEKTÖREL UNIQ ID MOTORU
-            join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
-            for c in join_cols:
-                if c not in df_d_giren.columns: df_d_giren[c] = ""
-            
-            df_d_giren["Uniq ID"] = df_d_giren[join_cols].fillna("").astype(str).agg("".join, axis=1).str.replace("nan", "").str.replace("None", "")
-            
-            # 2. VEKTÖREL DURUM EŞLEŞTİRME
-            if st.session_state.musteri_ayarlari:
-                m_ayarlar_df = pd.DataFrame.from_dict(st.session_state.musteri_ayarlari, orient='index').reset_index().rename(columns={"index": "Müşteri Kodu"})
-                if "Durum_2" in m_ayarlar_df.columns:
-                    df_d_giren = pd.merge(df_d_giren, m_ayarlar_df[["Müşteri Kodu", "Durum_2"]], on="Müşteri Kodu", how="left")
-                else: df_d_giren["Durum_2"] = np.nan
-            else: df_d_giren["Durum_2"] = np.nan
-                
-            if "Durum" not in df_d_giren.columns: df_d_giren["Durum"] = "GEÇERLİ"
-            df_d_giren["Durum_Nihai"] = df_d_giren["Durum_2"].fillna(df_d_giren["Durum"]).fillna("GEÇERLİ")
-
-            # 3. VEKTÖREL BAZ YAKIT FİYAT EŞLEŞTİRME
-            if not st.session_state.baz_yakit_veri.empty:
-                by_df = st.session_state.baz_yakit_veri.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu", "Yakıt Fiyat"]]
-                df_d_giren = pd.merge(df_d_giren, by_df, on="Müşteri Kodu", how="left")
-            else: df_d_giren["Yakıt Fiyat"] = np.nan
-                
-            if "Esk. Baz Yakıt Fiyatı" not in df_d_giren.columns: df_d_giren["Esk. Baz Yakıt Fiyatı"] = 0.0
-            df_d_giren["Esk_Baz_Yakit_Nihai"] = df_d_giren["Yakıt Fiyat"].fillna(df_d_giren["Esk. Baz Yakıt Fiyatı"]).apply(guvenli_sayi)
-
-            # 4. VEKTÖREL ÇARŞAF LİSTE YEDEK SORGUSU
-            fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
-            if not st.session_state.ana_veri.empty:
-                av_df = st.session_state.ana_veri.copy()
-                av_df["Müşteri Kodu"] = av_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                av_df = av_df.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu"] + [c for c in fallback_cols if c in av_df.columns]]
-                df_d_giren = pd.merge(df_d_giren, av_df, on="Müşteri Kodu", how="left", suffixes=("", "_av"))
-            
-            # Ana Veri İskeletini Oluşturma
-            df_built = pd.DataFrame()
-            df_built["Uniq ID"] = df_d_giren["Uniq ID"]
-            for c in ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi"]:
-                df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ""
-            df_built["Sap Kodu"] = df_d_giren["Sap Kodu"] if "Sap Kodu" in df_d_giren.columns else (df_d_giren["Sap No"] if "Sap No" in df_d_giren.columns else "")
-            df_built["Durum"] = df_d_giren["Durum_Nihai"]
-            
-            for c in fallback_cols:
-                col_av = f"{c}_av"
-                if col_av in df_d_giren.columns:
-                    df_built[c] = df_d_giren[c].fillna(df_d_giren[col_av]) if c in df_d_giren.columns else df_d_giren[col_av]
-                else:
-                    df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ("DİĞER" if c == "Müşteri Grubu" else "")
-            
-            df_built["Esk. Baz Yakıt Fiyatı"] = df_d_giren["Esk_Baz_Yakit_Nihai"]
-            df_built["Yakıt Değişim Yüzdesi (%)"] = df_built["Yakıt Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-            df_built["Yakıt Anlık Değişim Oranı (%)"] = df_built["Yakıt Anlık Değişim Oranı (%)"].apply(guvenli_sayi)
-            df_built["Enf. Değişim Yüzdesi (%)"] = df_built["Enf. Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-            df_built["Yakıt Değişim Periyodu (Ay)"] = df_built["Yakıt Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-            df_built["Enf. Değişim Periyodu (Ay)"] = df_built["Enf. Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-
-            # 5. DİNAMİK METRİK MAPPING MOTORU
             sonek = " Kg" if "Kg" in metrik_tipi else (" Desi" if "Desi" in metrik_tipi else " Tutar")
-            toplam_desi = np.zeros(len(df_d_giren))
-            for ay in aylar:
-                col_to_use = None
-                for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
-                    if col in df_d_giren.columns:
-                        col_to_use = col
-                        break
-                if col_to_use:
-                    vals = df_d_giren[col_to_use].apply(guvenli_sayi).to_numpy()
+            
+            # 🎯 EN HIZLI RAM OPTİMİZASYONU: GEÇMİŞ YILLARDA (2024-2025) VERİYİ MÜŞTERİ BAZINDA ÖZETLEYEREK SIKIŞTIRMA
+            if secilen_yil in ["2024", "2025"]:
+                # Geçmiş yıllar için ham dosyadan sadece hacim içeren kolonları bul ve sayıya çevir
+                mapped_cols = {}
+                for ay in aylar:
+                    for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
+                        if col in df_d_giren.columns:
+                            df_d_giren[col] = df_d_giren[col].apply(guvenli_sayi)
+                            mapped_cols[col] = f"{secilen_yil} {ay} Desi"
+                            break
+                
+                # Sadece Müşteri Kodu, Müşteri Grubu ve Hacimleri filtrele ve gruplayarak topla
+                grup_sutunlari = ["Müşteri Kodu"]
+                if "Müşteri Grubu" in df_d_giren.columns:
+                    grup_sutunlari.append("Müşteri Grubu")
+                    df_d_giren["Müşteri Grubu"] = df_d_giren["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
+                
+                keep_cols = grup_sutunlari + list(mapped_cols.keys())
+                df_compressed = df_d_giren[keep_cols].rename(columns=mapped_cols)
+                df_summary = df_compressed.groupby(grup_sutunlari, as_index=False).sum()
+                
+                # Toplam kolonunu vektörel ekle
+                calc_cols = [v for v in mapped_cols.values()]
+                df_summary[f"{secilen_yil} Toplam Desi"] = df_summary[calc_cols].sum(axis=1)
+                
+                # Mevcut veri havuzu boş ise şablonu ata, dolu ise sadece Müşteri Kodu bazında yanal merge yap
+                if st.session_state.data_sayfası_df.empty:
+                    df_base = pd.DataFrame(columns=data_ekran_sutunlari)
+                    df_base["Müşteri Kodu"] = df_summary["Müşteri Kodu"]
+                    if "Müşteri Grubu" in df_summary.columns: df_base["Müşteri Grubu"] = df_summary["Müşteri Grubu"]
+                    df_base["Yıl"] = "2026"
+                    df_base["Durum"] = "GEÇERLİ"
+                    
+                    join_cols_id = ["Yıl", "Müşteri Kodu"]
+                    df_base["Uniq ID"] = df_base[join_cols_id].fillna("").astype(str).agg("".join, axis=1)
+                    
+                    st.session_state.data_sayfası_df = pd.merge(df_base, df_summary, on="Müşteri Kodu", how="left")
                 else:
-                    vals = np.zeros(len(df_d_giren))
-                df_built[f"{secilen_yil} {ay} Desi"] = vals
-                toplam_desi += vals
-            df_built[f"{secilen_yil} Toplam Desi"] = toplam_desi
+                    if "Müşteri Grubu" in df_summary.columns and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
+                        df_summary = df_summary.drop(columns=["Müşteri Grubu"])
+                    
+                    st.session_state.data_sayfası_df = pd.merge(
+                        st.session_state.data_sayfası_df, 
+                        df_summary, 
+                        on="Müşteri Kodu", 
+                        how="left",
+                        suffixes=('', '_new')
+                    )
+                    # Çakışan kolonları temizle
+                    for col in calc_cols + [f"{secilen_yil} Toplam Desi"]:
+                        if f"{col}_new" in st.session_state.data_sayfası_df.columns:
+                            st.session_state.data_sayfası_df[col] = st.session_state.data_sayfası_df[col].fillna(0.0) + st.session_state.data_sayfası_df[f"{col}_new"].fillna(0.0)
+                            st.session_state.data_sayfası_df = st.session_state.data_sayfası_df.drop(columns=[f"{col}_new"])
+                
+                st.success(f"🎉 {secilen_yil} yılı geçmiş verisi Müşteri bazında özetlenerek hafızaya sıkıştırıldı! RAM yükü engellendi.")
 
-            # 🌟 YENİ: V E K T Ö R E L  Y A N A L  B İ R L E Ş T İ R M E  M O T O R U (OH NO SAVAR 🚀)
-            if st.session_state.data_sayfası_df.empty:
-                # İlk yüklenen veriyi de kendi içinde Uniq ID'ye göre toplayarak temizle
-                agg_init = {col: ("sum" if "Desi" in col else "first") for col in df_built.columns if col != "Uniq ID"}
-                st.session_state.data_sayfası_df = df_built.groupby("Uniq ID", as_index=False).agg(agg_init)
             else:
-                # 1. Eski veri havuzu ile yeni yüklenen veriyi alt alta birleştir (Işık Hızında)
-                df_combined = pd.concat([st.session_state.data_sayfası_df, df_built], ignore_index=True)
+                # 🎯 2026 ASIL DETAYLI İŞLEM YILI YÜKLEME STRATEJİSİ
+                join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
+                for c in join_cols:
+                    if c not in df_d_giren.columns: df_d_giren[c] = ""
                 
-                # 2. Dinamik Vektörel Gruplama Stratejisi
-                agg_strategy = {}
-                for col in df_combined.columns:
-                    if col == "Uniq ID": continue
-                    if "Desi" in col:
-                        agg_strategy[col] = "sum"  # Desi kolonları toplanır (farklı yıllar birbirini ezmez)
-                    else:
-                        agg_strategy[col] = "first" # Metin parametreleri ilk satırdan korunur
+                df_d_giren["Uniq ID"] = df_d_giren[join_cols].fillna("").astype(str).agg("".join, axis=1).str.replace("nan", "").str.replace("None", "")
                 
-                # 3. Tek hamlede, hafızada kopya oluşturmadan üstün performanslı birleştirme
-                st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
-                
-            st.success(f"🎉 Veriler başarıyla kaynaştırıldı! {secilen_yil} yılı verileri RAM şişmeden ana matrise mühürlendi.")
+                if st.session_state.musteri_ayarlari:
+                    m_ayarlar_df = pd.DataFrame.from_dict(st.session_state.musteri_ayarlari, orient='index').reset_index().rename(columns={"index": "Müşteri Kodu"})
+                    df_d_giren = pd.merge(df_d_giren, m_ayarlar_df[["Müşteri Kodu", "Durum_2"]], on="Müşteri Kodu", how="left") if "Durum_2" in m_ayarlar_df.columns else df_d_giren.assign(Durum_2=np.nan)
+                else: df_d_giren["Durum_2"] = np.nan
+                    
+                if "Durum" not in df_d_giren.columns: df_d_giren["Durum"] = "GEÇERLİ"
+                df_d_giren["Durum_Nihai"] = df_d_giren["Durum_2"].fillna(df_d_giren["Durum"]).fillna("GEÇERLİ")
 
-    # Arayüz Tablo Gösterimi (KORUMA KALKANI AKTİF)
+                if not st.session_state.baz_yakit_veri.empty:
+                    by_df = st.session_state.baz_yakit_veri.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu", "Yakıt Fiyat"]]
+                    df_d_giren = pd.merge(df_d_giren, by_df, on="Müşteri Kodu", how="left")
+                else: df_d_giren["Yakıt Fiyat"] = np.nan
+                    
+                if "Esk. Baz Yakıt Fiyatı" not in df_d_giren.columns: df_d_giren["Esk. Baz Yakıt Fiyatı"] = 0.0
+                df_d_giren["Esk_Baz_Yakit_Nihai"] = df_d_giren["Yakıt Fiyat"].fillna(df_d_giren["Esk. Baz Yakıt Fiyatı"]).apply(guvenli_sayi)
+
+                fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
+                if not st.session_state.ana_veri.empty:
+                    av_df = st.session_state.ana_veri.copy().assign(Müşteri Kodu=lambda x: x["Müşteri Kodu"].apply(guvenli_metin_kodu))
+                    av_df = av_df.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu"] + [c for c in fallback_cols if c in av_df.columns]]
+                    df_d_giren = pd.merge(df_d_giren, av_df, on="Müşteri Kodu", how="left", suffixes=("", "_av"))
+                
+                df_built = pd.DataFrame()
+                df_built["Uniq ID"] = df_d_giren["Uniq ID"]
+                for c in ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi"]:
+                    df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ""
+                df_built["Sap Kodu"] = df_d_giren["Sap Kodu"] if "Sap Kodu" in df_d_giren.columns else (df_d_giren["Sap No"] if "Sap No" in df_d_giren.columns else "")
+                df_built["Durum"] = df_d_giren["Durum_Nihai"]
+                
+                for c in fallback_cols:
+                    col_av = f"{c}_av"
+                    if col_av in df_d_giren.columns:
+                        df_built[c] = df_d_giren[c].fillna(df_d_giren[col_av]) if c in df_d_giren.columns else df_d_giren[col_av]
+                    else:
+                        df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ("DİĞER" if c == "Müşteri Grubu" else "")
+                
+                df_built["Esk. Baz Yakıt Fiyatı"] = df_d_giren["Esk_Baz_Yakit_Nihai"]
+                df_built["Yakıt Değişim Yüzdesi (%)"] = df_built["Yakıt Değişim Yüzdesi (%)"].apply(guvenli_sayi)
+                df_built["Yakıt Anlık Değişim Oranı (%)"] = df_built["Yakıt Anlık Değişim Oranı (%)"].apply(guvenli_sayi)
+                df_built["Enf. Değişim Yüzdesi (%)"] = df_built["Enf. Değişim Yüzdesi (%)"].apply(guvenli_sayi)
+                df_built["Yakıt Değişim Periyodu (Ay)"] = df_built["Yakıt Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
+                df_built["Enf. Değişim Periyodu (Ay)"] = df_built["Enf. Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
+
+                toplam_desi = np.zeros(len(df_d_giren))
+                for ay in aylar:
+                    col_to_use = None
+                    for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
+                        if col in df_d_giren.columns:
+                            col_to_use = col
+                            break
+                    vals = df_d_giren[col_to_use].apply(guvenli_sayi).to_numpy() if col_to_use else np.zeros(len(df_d_giren))
+                    df_built[f"{secilen_yil} {ay} Desi"] = vals
+                    toplam_desi += vals
+                df_built[f"{secilen_yil} Toplam Desi"] = toplam_desi
+
+                if st.session_state.data_sayfası_df.empty:
+                    agg_init = {col: ("sum" if "Desi" in col else "first") for col in df_built.columns if col != "Uniq ID"}
+                    st.session_state.data_sayfası_df = df_built.groupby("Uniq ID", as_index=False).agg(agg_init)
+                else:
+                    df_combined = pd.concat([st.session_state.data_sayfası_df, df_built], ignore_index=True)
+                    agg_strategy = {col: ("sum" if "Desi" in col else "first") for col in df_combined.columns if col != "Uniq ID"}
+                    st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
+                    
+                st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
+
+    # Arayüz Gösterim Ekranı
     if not st.session_state.data_sayfası_df.empty:
         gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_desi_kolonlari if c in st.session_state.data_sayfası_df.columns]
         df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
         
         toplam_satir_sayisi = len(df_ekran)
-        st.warning(f"⚠️ Sistemde toplam {toplam_satir_sayisi:,} satır veri bulunuyor. Tarayıcınızın çökmesini engellemek amacıyla aşağıda İLK 500 satır listelenmektedir. 'Buluta Kaydet' dediğinizde {toplam_satir_sayisi:,} satırın tamamı eksiksiz kaydedilir.")
+        st.warning(f"⚠️ Sistemde toplam {toplam_satir_sayisi:,} satır veri bulunuyor. Tarayıcının çökmesini engellemek amacıyla ilk 500 satır listelenmektedir.")
         
         st.dataframe(
             df_ekran.head(500), 
@@ -558,7 +401,6 @@ with sekmeler[0]:
         if rev_secenekleri:
             r_id_data = rev_secenekleri[cd2.selectbox("Data Yönetimi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_data_rev")]
             
-            # 🌟 ULTRA GÜÇLÜ VE HIZLI BULUT MÜHÜRLERİ 🌟
             if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
                 tum_desi_sutunlari_db = []
                 for y in ["2024", "2025", "2026"]:
@@ -566,23 +408,16 @@ with sekmeler[0]:
                     tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
 
                 izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
-                
-                # 🛡️ iterrows() YERİNE ULTRA HIZLI VE RAM DOSTU TO_DICT MOTORU
                 mevcut_db_sutunlari = [c for c in izin_verilen_db_sutunlari_data if c in st.session_state.data_sayfası_df.columns]
-                df_to_save = st.session_state.data_sayfası_df[mevcut_db_sutunlari].copy()
-                df_to_save["revizyon_id"] = r_id_data
                 
-                # NaN değerleri veritabanı uyumlu None formatına tek hamlede vektörel çevir
-                df_to_save = df_to_save.replace({np.nan: None})
-                
-                # C-Level hızlı dönüşüm (Işık Hızında)
+                df_to_save = st.session_state.data_sayfası_df[mevcut_db_sutunlari].copy().assign(revizyon_id=r_id_data).replace({np.nan: None})
                 data_records = df_to_save.to_dict(orient='records')
                 
-                with st.spinner(f"🚀 {len(data_records):,} satırın tamamı buluta aktarılıyor..."):
+                with st.spinner(f"🚀 {len(data_records):,} satır buluta aktarılıyor..."):
                     client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
                     for i in range(0, len(data_records), 500): 
                         client.table("data_tablosu").insert(data_records[i:i+500]).execute()
-                    st.success("🎉 Mükemmel! Dev havuz hiçbir veri kaybı ve takılma olmadan buluta başarıyla mühürlendi!")
+                    st.success("🎉 Dev havuz hiçbir veri kaybı ve takılma olmadan buluta başarıyla mühürlendi!")
 
             if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
                 with st.spinner("Veriler veritabanından çekiliyor..."):
@@ -653,21 +488,26 @@ with sekmeler[1]:
         df_nihai = df_birlestirilmis.copy()
         df_nihai.columns = [str(c).strip() for c in df_nihai.columns]
         df_nihai = df_nihai.reindex(columns=tum_kolonlar)
+        
+        # ⚡ VEKTÖREL HESAPLAMA MOTORU (HIZ OPTİMİZE)
         for ay in aylar:
             desi_col, fiyat_col, tutar_col = f"2025 {ay} Desi", f"2025 {ay} Fiyat", f"2025 {ay} Tutar"
-            df_nihai[desi_col] = df_nihai[desi_col].apply(guvenli_sayi)
-            df_nihai[fiyat_col] = df_nihai[fiyat_col].apply(guvenli_sayi)
+            df_nihai[desi_col] = pd.to_numeric(df_nihai[desi_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+            df_nihai[fiyat_col] = pd.to_numeric(df_nihai[fiyat_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             df_nihai[tutar_col] = df_nihai[desi_col] * df_nihai[fiyat_col]
-        onceki_fiyat = df_nihai["2025 Aralık Fiyat"].apply(guvenli_sayi)
+            
+        onceki_fiyat = pd.to_numeric(df_nihai["2025 Aralık Fiyat"].apply(guvenli_sayi), errors='coerce').fillna(0.0)
         for ay in aylar:
             buyume_col, esk_col, desi_col, fiyat_col, tutar_col = f"2026 {ay} Büyüme", f"2026 {ay} Esk.", f"2026 {ay} Desi", f"2026 {ay} Fiyat", f"2026 {ay} Tutar"
-            df_nihai[buyume_col] = df_nihai[buyume_col].apply(guvenli_sayi)
-            df_nihai[esk_col] = df_nihai[esk_col].apply(guvenli_sayi)
+            df_nihai[buyume_col] = pd.to_numeric(df_nihai[buyume_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+            df_nihai[esk_col] = pd.to_numeric(df_nihai[esk_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+            
             aktif_eskalasyon = np.where(df_nihai[esk_col] == 0, float(global_enflasyon), df_nihai[esk_col])
             df_nihai[desi_col] = df_nihai[f"2025 {ay} Desi"] * (1 + (df_nihai[buyume_col] / 100))
             df_nihai[fiyat_col] = onceki_fiyat * (1 + (aktif_eskalasyon / 100))
             df_nihai[tutar_col] = df_nihai[desi_col] * df_nihai[fiyat_col]
             onceki_fiyat = df_nihai[fiyat_col]
+            
         st.session_state.ana_veri = df_nihai.copy()
 
         st.markdown("---")
@@ -1030,7 +870,6 @@ with sekmeler[8]:
             df_d_src = st.session_state.data_sayfası_df.copy()
             df_d_src["Müşteri Kodu"] = df_d_src["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            # Müşteri bazında tekilleştirilmiş kart listesini çıkart
             df_distinct_m = df_d_src.drop_duplicates(subset=["Müşteri Kodu"]).copy()
             st.session_state.buyume_ekran_df = df_distinct_m.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
         else:
@@ -1044,7 +883,6 @@ with sekmeler[8]:
         desi_24_map = {}
         desi_25_map = {}
 
-        # 1. Sekmedeki veri ambarı tablosu üzerinden dinamik İlk 9 Ay kümülatif sum hesabı
         if not st.session_state.data_sayfası_df.empty:
             df_ds_calc = st.session_state.data_sayfası_df.copy()
             df_ds_calc["Müşteri Kodu"] = df_ds_calc["Müşteri Kodu"].apply(guvenli_metin_kodu)
@@ -1052,16 +890,13 @@ with sekmeler[8]:
             cols_24 = [f"2024 {m} Desi" for m in ilk_9_ay]
             cols_25 = [f"2025 {m} Desi" for m in ilk_9_ay]
             
-            # ÇÖZÜM: .applymap() yerine evrensel ve güvenli sütun bazlı .apply() kullanıyoruz
             if all(c in df_ds_calc.columns for c in cols_24):
-                for c in cols_24: 
-                    df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
+                for c in cols_24: df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
                 df_ds_calc["sum_24"] = df_ds_calc[cols_24].sum(axis=1)
                 desi_24_map = df_ds_calc.groupby("Müşteri Kodu")["sum_24"].sum().to_dict()
                 
             if all(c in df_ds_calc.columns for c in cols_25):
-                for c in cols_25: 
-                    df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
+                for c in cols_25: df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
                 df_ds_calc["sum_25"] = df_ds_calc[cols_25].sum(axis=1)
                 desi_25_map = df_ds_calc.groupby("Müşteri Kodu")["sum_25"].sum().to_dict()
 
@@ -1117,7 +952,7 @@ with sekmeler[8]:
         )
 
         # ============================================================
-        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI) - YENİ ENTEGRASYON 🚀
+        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI)
         # ============================================================
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("📊 Müşteri Grubu Sezonluk Dağılım Matrisi (%)")
@@ -1130,18 +965,12 @@ with sekmeler[8]:
             with sezon_sekmeleri[i]:
                 grup_matris_rows = []
                 
-                # Arka planda data yüklü mü ve Müşteri Grubu kolonu mevcut mu kontrolü
                 if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
                     df_g_calc = st.session_state.data_sayfası_df.copy()
-                    
-                    # Verideki olası boşlukları veya küçük harfleri standartlaştırıyoruz
                     df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
-                    
-                    # İlgili yılın aylık veri sütunları mevcut mu kontrolü
                     hedef_yil_aylik_sutunlar = [f"{target_yr} {m} Desi" for m in aylar]
                     
                     if all(c in df_g_calc.columns for c in hedef_yil_aylik_sutunlar):
-                        # Gruplara göre aylık bazda kümülatif toplam al
                         grup_aylik_totals = df_g_calc.groupby("Müşteri Grubu")[hedef_yil_aylik_sutunlar].sum()
                         
                         for grp in hedef_gruplar:
@@ -1149,22 +978,18 @@ with sekmeler[8]:
                             if grp in grup_aylik_totals.index:
                                 g_monthly_series = grup_aylik_totals.loc[grp]
                                 g_annual_total = g_monthly_series.sum()
-                                
                                 for m in aylar:
                                     m_val = g_monthly_series[f"{target_yr} {m} Desi"]
-                                    # Yüzdesel pay hesabı (0-100 arasına çekerek)
                                     r_g[m] = (m_val / g_annual_total * 100) if g_annual_total > 0 else 0.0
                             else:
                                 for m in aylar: r_g[m] = 0.0
                             grup_matris_rows.append(r_g)
                     else:
-                        # Tablo kolonları henüz oluşmadıysa 0 bas
                         for grp in hedef_gruplar:
                             r_g = {"Müşteri Grubu": grp}
                             for m in aylar: r_g[m] = 0.0
                             grup_matris_rows.append(r_g)
                 else:
-                    # İçeride hiç veri yoksa boş şablon bas
                     for grp in hedef_gruplar:
                         r_g = {"Müşteri Grubu": grp}
                         for m in aylar: r_g[m] = 0.0
@@ -1212,7 +1037,7 @@ with sekmeler[8]:
                     for _, row in gelen_b_df.iterrows():
                         mk = str(row["Müşteri Kodu"])
                         st.session_state.buyume_ayarlari[mk] = {
-                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme"), "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME")),
+                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme"), "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYUBME")),
                             "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi"), "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme")
                         }
                     st.success("🎉 Senaryo bağımsız olarak buluttan çekildi.")
