@@ -221,7 +221,7 @@ with sekmeler[0]:
     # 🎯 DİNAMİK SEÇİCİLER (YIL VE METRİK TİPİ SORGUSU)
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1:
-        secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
+        secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil_yedek")
     with c_cfg2:
         metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Desi Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Desi (Örn: Ocak Desi)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
 
