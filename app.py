@@ -316,17 +316,32 @@ with sekmeler[0]:
                 toplam_desi += vals
             df_built[f"{secilen_yil} Toplam Desi"] = toplam_desi
 
-            # Yanal Genişleme ve Birleştirme Motoru
+            # 🌟 YENİ: TEKİLLEŞTİRME (AGGREGATION) VE YANAL BİRLEŞTİRME MOTORU 🌟
+            # 1. Uniq ID'ye göre grupla: Hacimleri topla, diğer verilerin ilkini al.
+            agg_dict = {}
+            for col in df_built.columns:
+                if col == "Uniq ID": continue
+                if "Desi" in col: 
+                    agg_dict[col] = "sum"  # Hacim değerleri (Ocak Desi vs) toplanarak birleşir
+                else: 
+                    agg_dict[col] = "first" # Metin, Fiyat ve Oranlar ilk satırdan çekilir
+                    
+            df_built_unique = df_built.groupby("Uniq ID").agg(agg_dict).reset_index()
+
+            # 2. Güvenli Yanal Birleştirme (Duplicate Hatasını Tamamen Engeller)
             if st.session_state.data_sayfası_df.empty:
-                st.session_state.data_sayfası_df = df_built
+                st.session_state.data_sayfası_df = df_built_unique
             else:
-                main_df = st.session_state.data_sayfası_df.set_index("Uniq ID")
-                new_df = df_built.set_index("Uniq ID")
+                # Ana hafızadaki olası mükerrer kayıtları da güvenlik amaçlı temizleyip kilitliyoruz
+                main_df = st.session_state.data_sayfası_df.drop_duplicates(subset=["Uniq ID"]).set_index("Uniq ID")
+                new_df = df_built_unique.set_index("Uniq ID")
+                
                 for col in new_df.columns:
                     main_df[col] = new_df[col].combine_first(main_df[col]) if col in main_df.columns else new_df[col]
+                    
                 st.session_state.data_sayfası_df = main_df.reset_index()
                 
-            st.success(f"🎉 106.000 satırlık dev veri seti saniyeler içinde işlendi! {secilen_yil} yılı aylık '{metrik_tipi}' sütunları mühürlendi.")
+            st.success(f"🎉 106.000 satırlık dev veri seti tekilleştirilerek (toplanarak) işlendi! '{metrik_tipi}' sütunları mühürlendi.")
 
     # Arayüz Tablo Gösterimi (KORUMA KALKANI AKTİF)
     if not st.session_state.data_sayfası_df.empty:
