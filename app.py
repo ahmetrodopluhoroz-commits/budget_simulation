@@ -326,7 +326,10 @@ with sekmeler[0]:
 
                 fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
                 if not st.session_state.ana_veri.empty:
-                    av_df = st.session_state.ana_veri.copy().assign(Müşteri Kodu=lambda x: x["Müşteri Kodu"].apply(guvenli_metin_kodu))
+                    # ÇÖZÜM: assign() yerine köşeli parantez ile standart atama yapıyoruz
+                    av_df = st.session_state.ana_veri.copy()
+                    av_df["Müşteri Kodu"] = av_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+                    
                     av_df = av_df.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu"] + [c for c in fallback_cols if c in av_df.columns]]
                     df_d_giren = pd.merge(df_d_giren, av_df, on="Müşteri Kodu", how="left", suffixes=("", "_av"))
                 
