@@ -57,33 +57,33 @@ ana_kolonlar = [
     "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"
 ]
 parametre_kolonlari = [
-    "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)",
-    "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
+    "Yakıt Değişim YüzKg (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)",
+    "Enf. Değişim YüzKg (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
 
-kolonlar_25_desi = [f"2025 {ay} Desi" for ay in aylar]
+kolonlar_25_Kg = [f"2025 {ay} Kg" for ay in aylar]
 kolonlar_25_tutar = [f"2025 {ay} Tutar" for ay in aylar]
 kolonlar_25_fiyat = [f"2025 {ay} Fiyat" for ay in aylar]
 
 kolonlar_26_buyume = [f"2026 {ay} Büyüme" for ay in aylar]
 kolonlar_26_esk = [f"2026 {ay} Esk." for ay in aylar]
-kolonlar_26_desi = [f"2026 {ay} Desi" for ay in aylar]
+kolonlar_26_Kg = [f"2026 {ay} Kg" for ay in aylar]
 kolonlar_26_tutar = [f"2026 {ay} Tutar" for ay in aylar]
 kolonlar_26_fiyat = [f"2026 {ay} Fiyat" for ay in aylar]
 
-tum_kolonlar = (ana_kolonlar + parametre_kolonlari + kolonlar_25_desi + kolonlar_25_tutar + kolonlar_25_fiyat +
-                kolonlar_26_buyume + kolonlar_26_esk + kolonlar_26_desi + kolonlar_26_tutar + kolonlar_26_fiyat)
+tum_kolonlar = (ana_kolonlar + parametre_kolonlari + kolonlar_25_Kg + kolonlar_25_tutar + kolonlar_25_fiyat +
+                kolonlar_26_buyume + kolonlar_26_esk + kolonlar_26_Kg + kolonlar_26_tutar + kolonlar_26_fiyat)
 
 BIGINT_KOLONLAR = ["Uniq ID", "Yıl", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Periyodu (Ay)"]
-NUMERIC_KOLONLAR = (["Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Enf. Değişim Yüzdesi (%)", "Esk. Baz Yakıt Fiyatı"] +
-                    kolonlar_25_desi + kolonlar_25_tutar + kolonlar_25_fiyat + kolonlar_26_buyume + kolonlar_26_esk +
-                    kolonlar_26_desi + kolonlar_26_tutar + kolonlar_26_fiyat)
+NUMERIC_KOLONLAR = (["Yakıt Değişim YüzKg (%)", "Yakıt Anlık Değişim Oranı (%)", "Enf. Değişim YüzKg (%)", "Esk. Baz Yakıt Fiyatı"] +
+                    kolonlar_25_Kg + kolonlar_25_tutar + kolonlar_25_fiyat + kolonlar_26_buyume + kolonlar_26_esk +
+                    kolonlar_26_Kg + kolonlar_26_tutar + kolonlar_26_fiyat)
 
 # Özel Sayfa Şablon Sütun Tanımları
 data_ekran_sutunlari = [
     "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
     "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
-    "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
+    "Yakıt Değişim YüzKg (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim YüzKg (%)",
     "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
 deg_anah_sutunlari = ["Müşteri Kodu", "Sap No", "Ünvan", "Müşteri Temsilcisi 1", "Müşteri Temsilcisi 2", "Değişim Anahtarı", "KDV Durumu", "Baz Yakıt Fiyatı"]
@@ -92,7 +92,7 @@ mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
 buyume_ekran_sutunlari = [
     "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"
 ] + aylar + [
-    "2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", 
+    "2024 ilk 9 ay Kg", "2025 ilk 9 ay Kg", "2025 % Kg pay", "Y To Y Kg", 
     "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
 ]
 
@@ -224,16 +224,16 @@ with sekmeler[0]:
     with c_cfg1:
         secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
     with c_cfg2:
-        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Desi Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Desi (Örn: Ocak Desi)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
+        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Kg Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Kg (Örn: Ocak Kg)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
 
     sabit_data_sutunlari = [
         "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
         "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
-        "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
+        "Yakıt Değişim YüzKg (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim YüzKg (%)",
         "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
     ]
     
-    dinamik_desi_kolonlari = [f"{secilen_yil} {ay} Desi" for ay in aylar] + [f"{secilen_yil} Toplam Desi" ]
+    dinamik_Kg_kolonlari = [f"{secilen_yil} {ay} Kg" for ay in aylar] + [f"{secilen_yil} Toplam Kg" ]
     yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
 
     if yuklenen_data_havuzu:
@@ -242,7 +242,7 @@ with sekmeler[0]:
             df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
             df_d_giren["Müşteri Kodu"] = df_d_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            sonek = " Kg" if "Kg" in metrik_tipi else (" Desi" if "Desi" in metrik_tipi else " Tutar")
+            sonek = " Kg" if "Kg" in metrik_tipi else (" Kg" if "Kg" in metrik_tipi else " Tutar")
             
             # 🎯 EN HIZLI RAM OPTİMİZASYONU: GEÇMİŞ YILLARDA (2024-2025) VERİYİ MÜŞTERİ BAZINDA ÖZETLEYEREK SIKIŞTIRMA
             if secilen_yil in ["2024", "2025"]:
@@ -252,7 +252,7 @@ with sekmeler[0]:
                     for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
                         if col in df_d_giren.columns:
                             df_d_giren[col] = df_d_giren[col].apply(guvenli_sayi)
-                            mapped_cols[col] = f"{secilen_yil} {ay} Desi"
+                            mapped_cols[col] = f"{secilen_yil} {ay} Kg"
                             break
                 
                 # Sadece Müşteri Kodu, Müşteri Grubu ve Hacimleri filtrele ve gruplayarak topla
@@ -267,7 +267,7 @@ with sekmeler[0]:
                 
                 # Toplam kolonunu vektörel ekle
                 calc_cols = [v for v in mapped_cols.values()]
-                df_summary[f"{secilen_yil} Toplam Desi"] = df_summary[calc_cols].sum(axis=1)
+                df_summary[f"{secilen_yil} Toplam Kg"] = df_summary[calc_cols].sum(axis=1)
                 
                 # Mevcut veri havuzu boş ise şablonu ata, dolu ise sadece Müşteri Kodu bazında yanal merge yap
                 if st.session_state.data_sayfası_df.empty:
@@ -293,7 +293,7 @@ with sekmeler[0]:
                         suffixes=('', '_new')
                     )
                     # Çakışan kolonları temizle
-                    for col in calc_cols + [f"{secilen_yil} Toplam Desi"]:
+                    for col in calc_cols + [f"{secilen_yil} Toplam Kg"]:
                         if f"{col}_new" in st.session_state.data_sayfası_df.columns:
                             st.session_state.data_sayfası_df[col] = st.session_state.data_sayfası_df[col].fillna(0.0) + st.session_state.data_sayfası_df[f"{col}_new"].fillna(0.0)
                             st.session_state.data_sayfası_df = st.session_state.data_sayfası_df.drop(columns=[f"{col}_new"])
@@ -324,7 +324,7 @@ with sekmeler[0]:
                 if "Esk. Baz Yakıt Fiyatı" not in df_d_giren.columns: df_d_giren["Esk. Baz Yakıt Fiyatı"] = 0.0
                 df_d_giren["Esk_Baz_Yakit_Nihai"] = df_d_giren["Yakıt Fiyat"].fillna(df_d_giren["Esk. Baz Yakıt Fiyatı"]).apply(guvenli_sayi)
 
-                fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
+                fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim YüzKg (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim YüzKg (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
                 if not st.session_state.ana_veri.empty:
                     # ÇÖZÜM: assign() yerine köşeli parantez ile standart atama yapıyoruz
                     av_df = st.session_state.ana_veri.copy()
@@ -348,13 +348,13 @@ with sekmeler[0]:
                         df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ("DİĞER" if c == "Müşteri Grubu" else "")
                 
                 df_built["Esk. Baz Yakıt Fiyatı"] = df_d_giren["Esk_Baz_Yakit_Nihai"]
-                df_built["Yakıt Değişim Yüzdesi (%)"] = df_built["Yakıt Değişim Yüzdesi (%)"].apply(guvenli_sayi)
+                df_built["Yakıt Değişim YüzKg (%)"] = df_built["Yakıt Değişim YüzKg (%)"].apply(guvenli_sayi)
                 df_built["Yakıt Anlık Değişim Oranı (%)"] = df_built["Yakıt Anlık Değişim Oranı (%)"].apply(guvenli_sayi)
-                df_built["Enf. Değişim Yüzdesi (%)"] = df_built["Enf. Değişim Yüzdesi (%)"].apply(guvenli_sayi)
+                df_built["Enf. Değişim YüzKg (%)"] = df_built["Enf. Değişim YüzKg (%)"].apply(guvenli_sayi)
                 df_built["Yakıt Değişim Periyodu (Ay)"] = df_built["Yakıt Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
                 df_built["Enf. Değişim Periyodu (Ay)"] = df_built["Enf. Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
 
-                toplam_desi = np.zeros(len(df_d_giren))
+                toplam_Kg = np.zeros(len(df_d_giren))
                 for ay in aylar:
                     col_to_use = None
                     for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
@@ -362,16 +362,16 @@ with sekmeler[0]:
                             col_to_use = col
                             break
                     vals = df_d_giren[col_to_use].apply(guvenli_sayi).to_numpy() if col_to_use else np.zeros(len(df_d_giren))
-                    df_built[f"{secilen_yil} {ay} Desi"] = vals
-                    toplam_desi += vals
-                df_built[f"{secilen_yil} Toplam Desi"] = toplam_desi
+                    df_built[f"{secilen_yil} {ay} Kg"] = vals
+                    toplam_Kg += vals
+                df_built[f"{secilen_yil} Toplam Kg"] = toplam_Kg
 
                 if st.session_state.data_sayfası_df.empty:
-                    agg_init = {col: ("sum" if "Desi" in col else "first") for col in df_built.columns if col != "Uniq ID"}
+                    agg_init = {col: ("sum" if "Kg" in col else "first") for col in df_built.columns if col != "Uniq ID"}
                     st.session_state.data_sayfası_df = df_built.groupby("Uniq ID", as_index=False).agg(agg_init)
                 else:
                     df_combined = pd.concat([st.session_state.data_sayfası_df, df_built], ignore_index=True)
-                    agg_strategy = {col: ("sum" if "Desi" in col else "first") for col in df_combined.columns if col != "Uniq ID"}
+                    agg_strategy = {col: ("sum" if "Kg" in col else "first") for col in df_combined.columns if col != "Uniq ID"}
                     st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
                     
                 st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
@@ -381,7 +381,7 @@ with sekmeler[0]:
         st.success("🎉 Kayıtlı Data havuzu buluttan getirildi. 2024 ve 2025 değerleri artık büyüme sayfasında kullanılabilir.")
 
     if not st.session_state.data_sayfası_df.empty:
-        gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_desi_kolonlari if c in st.session_state.data_sayfası_df.columns]
+        gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_Kg_kolonlari if c in st.session_state.data_sayfası_df.columns]
         df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
         
         toplam_satir_sayisi = len(df_ekran)
@@ -392,7 +392,7 @@ with sekmeler[0]:
             use_container_width=True,
             column_config={
                 "Esk. Baz Yakıt Fiyatı": st.column_config.NumberColumn("Esk. Baz Yakıt Fiyatı", format="₺%.2f"),
-                **{c: st.column_config.NumberColumn(c, format="%d") for c in dinamik_desi_kolonlari}
+                **{c: st.column_config.NumberColumn(c, format="%d") for c in dinamik_Kg_kolonlari}
             }
         )
 
@@ -447,13 +447,13 @@ with sekmeler[0]:
         )
 
         if kaydet_tiklandi:
-            tum_desi_sutunlari_db = []
+            tum_Kg_sutunlari_db = []
             for y in ["2024", "2025", "2026"]:
                 for m in aylar:
-                    tum_desi_sutunlari_db.append(f"{y} {m} Desi")
-                tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
+                    tum_Kg_sutunlari_db.append(f"{y} {m} Kg")
+                tum_Kg_sutunlari_db.append(f"{y} Toplam Kg")
 
-            izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
+            izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_Kg_sutunlari_db
             mevcut_db_sutunlari = [
                 c for c in izin_verilen_db_sutunlari_data
                 if c in st.session_state.data_sayfası_df.columns
@@ -506,12 +506,12 @@ with sekmeler[0]:
                     for y in ["2024", "2025", "2026"]:
                         yil_aylari = []
                         for m in aylar:
-                            col = f"{y} {m} Desi"
+                            col = f"{y} {m} Kg"
                             if col in gelen_d_df.columns:
                                 gelen_d_df[col] = gelen_d_df[col].apply(guvenli_sayi)
                                 yil_aylari.append(col)
                         if yil_aylari:
-                            gelen_d_df[f"{y} Toplam Desi"] = gelen_d_df[yil_aylari].sum(axis=1)
+                            gelen_d_df[f"{y} Toplam Kg"] = gelen_d_df[yil_aylari].sum(axis=1)
 
                     st.session_state.data_sayfası_df = gelen_d_df
                     st.session_state.data_bulut_yukleme_basarili = True
@@ -580,21 +580,21 @@ with sekmeler[1]:
         
         # ⚡ VEKTÖREL HESAPLAMA MOTORU (HIZ OPTİMİZE)
         for ay in aylar:
-            desi_col, fiyat_col, tutar_col = f"2025 {ay} Desi", f"2025 {ay} Fiyat", f"2025 {ay} Tutar"
-            df_nihai[desi_col] = pd.to_numeric(df_nihai[desi_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+            Kg_col, fiyat_col, tutar_col = f"2025 {ay} Kg", f"2025 {ay} Fiyat", f"2025 {ay} Tutar"
+            df_nihai[Kg_col] = pd.to_numeric(df_nihai[Kg_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             df_nihai[fiyat_col] = pd.to_numeric(df_nihai[fiyat_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-            df_nihai[tutar_col] = df_nihai[desi_col] * df_nihai[fiyat_col]
+            df_nihai[tutar_col] = df_nihai[Kg_col] * df_nihai[fiyat_col]
             
         onceki_fiyat = pd.to_numeric(df_nihai["2025 Aralık Fiyat"].apply(guvenli_sayi), errors='coerce').fillna(0.0)
         for ay in aylar:
-            buyume_col, esk_col, desi_col, fiyat_col, tutar_col = f"2026 {ay} Büyüme", f"2026 {ay} Esk.", f"2026 {ay} Desi", f"2026 {ay} Fiyat", f"2026 {ay} Tutar"
+            buyume_col, esk_col, Kg_col, fiyat_col, tutar_col = f"2026 {ay} Büyüme", f"2026 {ay} Esk.", f"2026 {ay} Kg", f"2026 {ay} Fiyat", f"2026 {ay} Tutar"
             df_nihai[buyume_col] = pd.to_numeric(df_nihai[buyume_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             df_nihai[esk_col] = pd.to_numeric(df_nihai[esk_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             
             aktif_eskalasyon = np.where(df_nihai[esk_col] == 0, float(global_enflasyon), df_nihai[esk_col])
-            df_nihai[desi_col] = df_nihai[f"2025 {ay} Desi"] * (1 + (df_nihai[buyume_col] / 100))
+            df_nihai[Kg_col] = df_nihai[f"2025 {ay} Kg"] * (1 + (df_nihai[buyume_col] / 100))
             df_nihai[fiyat_col] = onceki_fiyat * (1 + (aktif_eskalasyon / 100))
-            df_nihai[tutar_col] = df_nihai[desi_col] * df_nihai[fiyat_col]
+            df_nihai[tutar_col] = df_nihai[Kg_col] * df_nihai[fiyat_col]
             onceki_fiyat = df_nihai[fiyat_col]
             
         st.session_state.ana_veri = df_nihai.copy()
@@ -827,19 +827,19 @@ with sekmeler[4]:
                 df_m_tmp = st.session_state.ana_veri.copy()
                 df_m_tmp["Müşteri Kodu"] = df_m_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
                 for ay in aylar:
-                    col_desi = f"2026 {ay} Desi"
-                    if col_desi in df_m_tmp.columns and df_m_tmp[col_desi].apply(guvenli_sayi).sum() > 0:
-                        aktif_aylar_2026.append(col_desi)
+                    col_Kg = f"2026 {ay} Kg"
+                    if col_Kg in df_m_tmp.columns and df_m_tmp[col_Kg].apply(guvenli_sayi).sum() > 0:
+                        aktif_aylar_2026.append(col_Kg)
                 dolu_ay_sayisi = len(aktif_aylar_2026)
             
-            desi_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Desi"
+            Kg_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Kg"
             if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                df_m_tmp[desi_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
-                desi_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[desi_toplam_kolon_adi].sum()
-                df_hedef = pd.merge(df_hedef, desi_grouped, on="Müşteri Kodu", how="left")
-            else: df_hedef[desi_toplam_kolon_adi] = 0.0
+                df_m_tmp[Kg_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
+                Kg_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[Kg_toplam_kolon_adi].sum()
+                df_hedef = pd.merge(df_hedef, Kg_grouped, on="Müşteri Kodu", how="left")
+            else: df_hedef[Kg_toplam_kolon_adi] = 0.0
 
-            df_hedef[desi_toplam_kolon_adi] = df_hedef[desi_toplam_kolon_adi].fillna(0.0)
+            df_hedef[Kg_toplam_kolon_adi] = df_hedef[Kg_toplam_kolon_adi].fillna(0.0)
 
             for idx, row in df_hedef.iterrows():
                 m_kod = str(row["Müşteri Kodu"])
@@ -905,18 +905,18 @@ with sekmeler[4]:
                     df_m_tmp = st.session_state.ana_veri.copy()
                     df_m_tmp["Müşteri Kodu"] = df_m_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
                     for ay in aylar:
-                        c_d = f"2026 {ay} Desi"
+                        c_d = f"2026 {ay} Kg"
                         if c_d in df_m_tmp.columns and df_m_tmp[c_d].apply(guvenli_sayi).sum() > 0: aktif_aylar_2026.append(c_d)
                     dolu_ay_sayisi = len(aktif_aylar_2026)
                 
-                desi_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Desi"
+                Kg_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Kg"
                 if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                    df_m_tmp[desi_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
-                    desi_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[desi_toplam_kolon_adi].sum()
-                    gelen_df = pd.merge(gelen_df, desi_grouped, on="Müşteri Kodu", how="left")
-                else: gelen_df[desi_toplam_kolon_adi] = 0.0
+                    df_m_tmp[Kg_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
+                    Kg_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[Kg_toplam_kolon_adi].sum()
+                    gelen_df = pd.merge(gelen_df, Kg_grouped, on="Müşteri Kodu", how="left")
+                else: gelen_df[Kg_toplam_kolon_adi] = 0.0
                 
-                gelen_df[desi_toplam_kolon_adi] = gelen_df[desi_toplam_kolon_adi].fillna(0.0)
+                gelen_df[Kg_toplam_kolon_adi] = gelen_df[Kg_toplam_kolon_adi].fillna(0.0)
                 st.session_state.musteri_ekran_df = gelen_df.copy()
                 for _, row in gelen_df.iterrows():
                     k = str(row["Müşteri Kodu"])
@@ -1068,8 +1068,8 @@ with sekmeler[7]:
 # 9. SEKME: MÜŞTERİ BÜYÜME ORANLARI
 # ------------------------------------------------------------
 with sekmeler[8]:
-    st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
-    st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel desi dosyası yüklenir.")
+    st.title("📈 Müşteri Büyüme Oranları ve Kg Simülasyonu")
+    st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel Kg dosyası yüklenir.")
 
     # ------------------------------------------------------------
     # 9. SEKME YARDIMCI TANIMLARI
@@ -1079,11 +1079,11 @@ with sekmeler[8]:
         "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı",
         "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
         "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi",
-        "Ocak Desi", "Şubat Desi", "Mart Desi", "Nisan Desi", "Mayıs Desi", "Haziran Desi",
-        "Temmuz Desi", "Ağustos Desi", "Eylül Desi", "Ekim Desi", "Kasım Desi", "Aralık Desi",
-        "Toplam Desi"
+        "Ocak Kg", "Şubat Kg", "Mart Kg", "Nisan Kg", "Mayıs Kg", "Haziran Kg",
+        "Temmuz Kg", "Ağustos Kg", "Eylül Kg", "Ekim Kg", "Kasım Kg", "Aralık Kg",
+        "Toplam Kg"
     ]
-    AY_KOLONLARI_9 = [f"{m} Desi" for m in aylar]
+    AY_KOLONLARI_9 = [f"{m} Kg" for m in aylar]
     KIMLIK_KOLONLARI_9 = [
         "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
         "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"
@@ -1130,12 +1130,12 @@ with sekmeler[8]:
         for c in AY_KOLONLARI_9:
             df[c] = df[c].apply(guvenli_sayi).astype(float)
 
-        df["Toplam Desi"] = df[AY_KOLONLARI_9].sum(axis=1)
+        df["Toplam Kg"] = df[AY_KOLONLARI_9].sum(axis=1)
         df = df[df["Müşteri Kodu"] != ""].reset_index(drop=True)
         return df[NIHAI_SUTUNLAR_9], eksik_kolonlar
 
     def musteri_bazinda_ozetle_9(df, yil, kaynak_31_kolon=False):
-        """Kaynağı müşteri bazına indirir ve sütunları '2026 Ocak Desi' biçimine getirir."""
+        """Kaynağı müşteri bazına indirir ve sütunları '2026 Ocak Kg' biçimine getirir."""
         if df is None or df.empty or "Müşteri Kodu" not in df.columns:
             return pd.DataFrame(columns=KIMLIK_KOLONLARI_9)
 
@@ -1152,8 +1152,8 @@ with sekmeler[8]:
 
         ay_esleme = {}
         for m in aylar:
-            kaynak = f"{m} Desi" if kaynak_31_kolon else f"{yil} {m} Desi"
-            hedef = f"{yil} {m} Desi"
+            kaynak = f"{m} Kg" if kaynak_31_kolon else f"{yil} {m} Kg"
+            hedef = f"{yil} {m} Kg"
             if kaynak not in work.columns:
                 work[kaynak] = 0.0
             work[kaynak] = work[kaynak].apply(guvenli_sayi).astype(float)
@@ -1167,10 +1167,10 @@ with sekmeler[8]:
             ))
             for c in KIMLIK_KOLONLARI_9 if c != "Müşteri Kodu"
         }
-        desi_agg = {c: "sum" for c in ay_esleme}
-        sonuc = work.groupby("Müşteri Kodu", as_index=False).agg({**kimlik_agg, **desi_agg})
+        Kg_agg = {c: "sum" for c in ay_esleme}
+        sonuc = work.groupby("Müşteri Kodu", as_index=False).agg({**kimlik_agg, **Kg_agg})
         sonuc = sonuc.rename(columns=ay_esleme)
-        sonuc[f"{yil} Toplam Desi"] = sonuc[[f"{yil} {m} Desi" for m in aylar]].sum(axis=1)
+        sonuc[f"{yil} Toplam Kg"] = sonuc[[f"{yil} {m} Kg" for m in aylar]].sum(axis=1)
         return sonuc
 
     def ilk_dolu_deger_9(row, adaylar, varsayilan=""):
@@ -1189,9 +1189,9 @@ with sekmeler[8]:
     hist_25_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2025")
 
     mevcut_yillar_9 = []
-    if any(f"2024 {m} Desi" in data_havuzu_9.columns for m in aylar):
+    if any(f"2024 {m} Kg" in data_havuzu_9.columns for m in aylar):
         mevcut_yillar_9.append("2024")
-    if any(f"2025 {m} Desi" in data_havuzu_9.columns for m in aylar):
+    if any(f"2025 {m} Kg" in data_havuzu_9.columns for m in aylar):
         mevcut_yillar_9.append("2025")
 
     c_bilgi1, c_bilgi2, c_bilgi3 = st.columns(3)
@@ -1204,18 +1204,18 @@ with sekmeler[8]:
     )
 
     if len(mevcut_yillar_9) < 2:
-        st.warning("2024 ve/veya 2025 desileri ana Data havuzunda bulunamadı. Önce 📁 Data sekmesinden eksik yılı yükleyin veya buluttaki Data revizyonunu çağırın.")
+        st.warning("2024 ve/veya 2025 Kgleri ana Data havuzunda bulunamadı. Önce 📁 Data sekmesinden eksik yılı yükleyin veya buluttaki Data revizyonunu çağırın.")
 
     # ------------------------------------------------------------
     # 2026: SADECE BU SEKMEDE 31 KOLONLU DOSYA
     # ------------------------------------------------------------
-    with st.expander("🚀 2026 Güncel Desi Dosyası (31 kolon)", expanded=True):
+    with st.expander("🚀 2026 Güncel Kg Dosyası (31 kolon)", expanded=True):
         st.markdown(
             "Dosya yüklendiğinde otomatik işlenir. 2024–2025 verileri yeniden istenmez ve "
             "ana havuzdaki geçmiş değerler değiştirilmez."
         )
         up_2026_9 = st.file_uploader(
-            "2026 güncel desi dosyasını yükleyin",
+            "2026 güncel Kg dosyasını yükleyin",
             type=["xlsx", "xls", "csv"],
             key="up_2026_only_9"
         )
@@ -1292,24 +1292,24 @@ with sekmeler[8]:
             key="karsilastirma_ay_sayisi_9"
         )
         secili_aylar_9 = aylar[:karsilastirma_ay_sayisi_9]
-        donem_24_adi_9 = f"2024 ilk {karsilastirma_ay_sayisi_9} ay desi"
-        donem_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay desi"
-        pay_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay % desi pay"
+        donem_24_adi_9 = f"2024 ilk {karsilastirma_ay_sayisi_9} ay Kg"
+        donem_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay Kg"
+        pay_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay % Kg pay"
 
         for y in ["2024", "2025", "2026"]:
             for m in aylar:
-                c = f"{y} {m} Desi"
+                c = f"{y} {m} Kg"
                 if c not in df_calc_9.columns:
                     df_calc_9[c] = 0.0
                 df_calc_9[c] = df_calc_9[c].apply(guvenli_sayi)
 
-        df_calc_9[donem_24_adi_9] = df_calc_9[[f"2024 {m} Desi" for m in secili_aylar_9]].sum(axis=1)
-        df_calc_9[donem_25_adi_9] = df_calc_9[[f"2025 {m} Desi" for m in secili_aylar_9]].sum(axis=1)
+        df_calc_9[donem_24_adi_9] = df_calc_9[[f"2024 {m} Kg" for m in secili_aylar_9]].sum(axis=1)
+        df_calc_9[donem_25_adi_9] = df_calc_9[[f"2025 {m} Kg" for m in secili_aylar_9]].sum(axis=1)
         toplam_25_9 = df_calc_9[donem_25_adi_9].sum()
         df_calc_9[pay_25_adi_9] = (
             df_calc_9[donem_25_adi_9] / toplam_25_9 * 100.0 if toplam_25_9 > 0 else 0.0
         )
-        df_calc_9["Y To Y Desi (%)"] = np.where(
+        df_calc_9["Y To Y Kg (%)"] = np.where(
             df_calc_9[donem_24_adi_9] > 0,
             (df_calc_9[donem_25_adi_9] / df_calc_9[donem_24_adi_9] - 1.0) * 100.0,
             0.0
@@ -1334,7 +1334,7 @@ with sekmeler[8]:
                 donem_24_adi_9: row[donem_24_adi_9],
                 donem_25_adi_9: row[donem_25_adi_9],
                 pay_25_adi_9: row[pay_25_adi_9],
-                "Y To Y Desi (%)": row["Y To Y Desi (%)"],
+                "Y To Y Kg (%)": row["Y To Y Kg (%)"],
                 "25 kullanılan büyüme": ayar.get("25 kullanılan büyüme", ""),
                 "KULLANICAK BÜYÜME": kullanilacak,
                 "Gelen Özet Bilgi": ayar.get("Gelen Özet Bilgi", ""),
@@ -1346,7 +1346,7 @@ with sekmeler[8]:
 
         ekran_kolonlari_9 = (
             KIMLIK_KOLONLARI_9 + aylar +
-            [donem_24_adi_9, donem_25_adi_9, pay_25_adi_9, "Y To Y Desi (%)",
+            [donem_24_adi_9, donem_25_adi_9, pay_25_adi_9, "Y To Y Kg (%)",
              "25 kullanılan büyüme", "KULLANICAK BÜYÜME",
              "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
         )
@@ -1364,7 +1364,7 @@ with sekmeler[8]:
             disabled=kilitli_9,
             column_config={
                 pay_25_adi_9: st.column_config.NumberColumn(pay_25_adi_9, format="%.2f%%"),
-                "Y To Y Desi (%)": st.column_config.NumberColumn("Y To Y Desi (%)", format="%.2f%%"),
+                "Y To Y Kg (%)": st.column_config.NumberColumn("Y To Y Kg (%)", format="%.2f%%"),
                 "KULLANICAK BÜYÜME": st.column_config.NumberColumn("KULLANICAK BÜYÜME", format="%.2f%%"),
                 **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
             },
@@ -1388,12 +1388,12 @@ with sekmeler[8]:
 
         grup_totals_9 = {}
         for y in ["2024", "2025", "2026"]:
-            y_cols = [f"{y} {m} Desi" for m in aylar]
+            y_cols = [f"{y} {m} Kg" for m in aylar]
             grup_totals_9[y] = grup_calc_9.groupby("Müşteri Grubu")[y_cols].sum()
 
         toplam_2026_ay_9 = {
-            m: grup_totals_9["2026"][f"2026 {m} Desi"].sum()
-            if f"2026 {m} Desi" in grup_totals_9["2026"].columns else 0.0
+            m: grup_totals_9["2026"][f"2026 {m} Kg"].sum()
+            if f"2026 {m} Kg" in grup_totals_9["2026"].columns else 0.0
             for m in aylar
         }
         gerceklesen_aylar_9 = [m for m in aylar if toplam_2026_ay_9[m] > 0]
@@ -1404,7 +1404,7 @@ with sekmeler[8]:
         if tahmini_aylar_9:
             st.info(
                 "2026 tahmini tamamlanan aylar: " + ", ".join(tahmini_aylar_9)
-                + ". Bu aylarda 2024 ve 2025 aynı ay desilerinin ortalaması kullanılır."
+                + ". Bu aylarda 2024 ve 2025 aynı ay Kglerinin ortalaması kullanılır."
             )
 
         sezon_tabs_9 = st.tabs([
@@ -1420,7 +1420,7 @@ with sekmeler[8]:
                     ham_aylar_9 = []
                     kaynak_tipi_9 = []
                     for m in aylar:
-                        col = f"{target_yil_9} {m} Desi"
+                        col = f"{target_yil_9} {m} Kg"
                         val = (
                             guvenli_sayi(grup_totals_9[target_yil_9].loc[grp, col])
                             if grp in grup_totals_9[target_yil_9].index else 0.0
@@ -1429,11 +1429,11 @@ with sekmeler[8]:
 
                         if target_yil_9 == "2026" and m in tahmini_aylar_9:
                             val24 = (
-                                guvenli_sayi(grup_totals_9["2024"].loc[grp, f"2024 {m} Desi"])
+                                guvenli_sayi(grup_totals_9["2024"].loc[grp, f"2024 {m} Kg"])
                                 if grp in grup_totals_9["2024"].index else 0.0
                             )
                             val25 = (
-                                guvenli_sayi(grup_totals_9["2025"].loc[grp, f"2025 {m} Desi"])
+                                guvenli_sayi(grup_totals_9["2025"].loc[grp, f"2025 {m} Kg"])
                                 if grp in grup_totals_9["2025"].index else 0.0
                             )
                             dolu_gecmis = [v for v in [val24, val25] if v > 0]
