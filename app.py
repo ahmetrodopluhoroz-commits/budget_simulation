@@ -377,6 +377,9 @@ with sekmeler[0]:
                 st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
 
     # Arayüz Gösterim Ekranı
+    if st.session_state.pop("data_bulut_yukleme_basarili", False):
+        st.success("🎉 Kayıtlı Data havuzu buluttan getirildi. 2024 ve 2025 değerleri artık büyüme sayfasında kullanılabilir.")
+
     if not st.session_state.data_sayfası_df.empty:
         gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_desi_kolonlari if c in st.session_state.data_sayfası_df.columns]
         df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
@@ -393,47 +396,130 @@ with sekmeler[0]:
             }
         )
 
-        st.markdown("---")
-        st.subheader("☁️ Bulut Entegrasyonu (Yüklemeden Bağımsız Çağırma)")
-        cd1, cd2, cd3 = st.columns(3)
-        
-        output_d_excel = io.BytesIO()
-        with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer: st.session_state.data_sayfası_df.to_excel(writer, index=False, sheet_name="Data_Master")
-        cd1.download_button("📥 Tüm Tabloyu Excel Olarak İndir", output_d_excel.getvalue(), "data_master_havuz.xlsx", use_container_width=True)
-
-        if rev_secenekleri:
-            r_id_data = rev_secenekleri[cd2.selectbox("Data Yönetimi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_data_rev")]
-            
-            if cd2.button("💾 Bu Tabloyu Buluta Kaydet (Mühürle)", type="primary", use_container_width=True, key="btn_data_cloud_sv"):
-                tum_desi_sutunlari_db = []
-                for y in ["2024", "2025", "2026"]:
-                    for m in aylar: tum_desi_sutunlari_db.append(f"{y} {m} Desi")
-                    tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
-
-                izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
-                mevcut_db_sutunlari = [c for c in izin_verilen_db_sutunlari_data if c in st.session_state.data_sayfası_df.columns]
-                
-                df_to_save = st.session_state.data_sayfası_df[mevcut_db_sutunlari].copy().assign(revizyon_id=r_id_data).replace({np.nan: None})
-                data_records = df_to_save.to_dict(orient='records')
-                
-                with st.spinner(f"🚀 {len(data_records):,} satır buluta aktarılıyor..."):
-                    client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
-                    for i in range(0, len(data_records), 500): 
-                        client.table("data_tablosu").insert(data_records[i:i+500]).execute()
-                    st.success("🎉 Dev havuz hiçbir veri kaybı ve takılma olmadan buluta başarıyla mühürlendi!")
-
-            if cd3.button("🔄 Dosya Yüklemeden Buluttan Datayı Getir", type="secondary", use_container_width=True, key="btn_data_cloud_ld"):
-                with st.spinner("Veriler veritabanından çekiliyor..."):
-                    d_res = client.table("data_tablosu").select("*").eq("revizyon_id", r_id_data).execute()
-                    if d_res.data:
-                        gelen_d_df = pd.DataFrame(d_res.data)
-                        if "id" in gelen_d_df.columns: gelen_d_df = gelen_d_df.drop(columns=["id"])
-                        st.session_state.data_sayfası_df = gelen_d_df
-                        st.success("🎉 Başarılı! Tüm operasyonel hafıza buluttan geri yüklendi.")
-                        st.rerun()
-                    else: st.warning("Bu revizyona ait kaydedilmiş veri havuzu bulunamadı.")
     else:
         st.info("Lütfen işlem yapmak istediğiniz ham operasyonel Excel/CSV dosyanızı yükleyin ya da alttaki butondan bulut yedeğinizi çağırın.")
+
+    # Bu bölüm özellikle veri havuzu boşken de görünür. Böylece uygulama ilk
+    # açıldığında dosya yüklemeden daha önce mühürlenmiş kayıt çağrılabilir.
+    st.markdown("---")
+    st.subheader("☁️ Bulut Data Kaydı")
+    st.caption("2024 ve 2025'i bir kez mühürleyin; sonraki oturumlarda aynı versiyonu seçip buluttan getirin.")
+
+    if not client:
+        st.error("Bulut bağlantısı kurulamadı. Supabase paketi, URL ve anahtar ayarlarını kontrol edin.")
+    elif not rev_secenekleri:
+        st.warning("Bulut Revizyon Yönetimi bölümünde henüz bir revizyon bulunmuyor. Önce bir revizyon oluşturun; ardından Data sekmesine geri dönün.")
+    else:
+        secilen_revizyon_etiketi = st.selectbox(
+            "Data Yönetimi İçin Bulut Versiyonu",
+            list(rev_secenekleri.keys()),
+            key="sb_data_rev"
+        )
+        r_id_data = rev_secenekleri[secilen_revizyon_etiketi]
+        cd1, cd2, cd3 = st.columns(3)
+
+        if not st.session_state.data_sayfası_df.empty:
+            output_d_excel = io.BytesIO()
+            with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer:
+                st.session_state.data_sayfası_df.to_excel(writer, index=False, sheet_name="Data_Master")
+            cd1.download_button(
+                "📥 Tüm Tabloyu Excel Olarak İndir",
+                output_d_excel.getvalue(),
+                "data_master_havuz.xlsx",
+                use_container_width=True
+            )
+        else:
+            cd1.info("Excel indirmek için önce veri yükleyin veya buluttan çağırın.")
+
+        kaydet_tiklandi = cd2.button(
+            "💾 Bu Tabloyu Buluta Kaydet (Mühürle)",
+            type="primary",
+            use_container_width=True,
+            key="btn_data_cloud_sv",
+            disabled=st.session_state.data_sayfası_df.empty
+        )
+
+        getir_tiklandi = cd3.button(
+            "🔄 Dosya Yüklemeden Buluttan Datayı Getir",
+            type="secondary",
+            use_container_width=True,
+            key="btn_data_cloud_ld"
+        )
+
+        if kaydet_tiklandi:
+            tum_desi_sutunlari_db = []
+            for y in ["2024", "2025", "2026"]:
+                for m in aylar:
+                    tum_desi_sutunlari_db.append(f"{y} {m} Desi")
+                tum_desi_sutunlari_db.append(f"{y} Toplam Desi")
+
+            izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_desi_sutunlari_db
+            mevcut_db_sutunlari = [
+                c for c in izin_verilen_db_sutunlari_data
+                if c in st.session_state.data_sayfası_df.columns
+            ]
+            df_to_save = (
+                st.session_state.data_sayfası_df[mevcut_db_sutunlari]
+                .copy()
+                .assign(revizyon_id=r_id_data)
+                .replace({np.nan: None})
+            )
+            data_records = df_to_save.to_dict(orient="records")
+
+            try:
+                with st.spinner(f"🚀 {len(data_records):,} satır buluta aktarılıyor..."):
+                    client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
+                    for i in range(0, len(data_records), 500):
+                        client.table("data_tablosu").insert(data_records[i:i + 500]).execute()
+                st.success("🎉 Data havuzu bu revizyona başarıyla mühürlendi.")
+            except Exception as ex:
+                st.error(f"Data havuzu buluta kaydedilemedi: {ex}")
+
+        if getir_tiklandi:
+            try:
+                with st.spinner("Kayıtlı Data havuzunun tamamı buluttan getiriliyor..."):
+                    tum_kayitlar = []
+                    baslangic = 0
+                    paket_boyutu = 1000
+
+                    while True:
+                        d_res = (
+                            client.table("data_tablosu")
+                            .select("*")
+                            .eq("revizyon_id", r_id_data)
+                            .range(baslangic, baslangic + paket_boyutu - 1)
+                            .execute()
+                        )
+                        paket = d_res.data or []
+                        tum_kayitlar.extend(paket)
+                        if len(paket) < paket_boyutu:
+                            break
+                        baslangic += paket_boyutu
+
+                if tum_kayitlar:
+                    gelen_d_df = pd.DataFrame(tum_kayitlar)
+                    gelen_d_df = gelen_d_df.drop(
+                        columns=[c for c in ["id", "revizyon_id"] if c in gelen_d_df.columns]
+                    )
+                    gelen_d_df["Müşteri Kodu"] = gelen_d_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+
+                    for y in ["2024", "2025", "2026"]:
+                        yil_aylari = []
+                        for m in aylar:
+                            col = f"{y} {m} Desi"
+                            if col in gelen_d_df.columns:
+                                gelen_d_df[col] = gelen_d_df[col].apply(guvenli_sayi)
+                                yil_aylari.append(col)
+                        if yil_aylari:
+                            gelen_d_df[f"{y} Toplam Desi"] = gelen_d_df[yil_aylari].sum(axis=1)
+
+                    st.session_state.data_sayfası_df = gelen_d_df
+                    st.session_state.data_bulut_yukleme_basarili = True
+                    st.rerun()
+                else:
+                    st.warning("Seçilen revizyona ait mühürlenmiş Data kaydı bulunamadı.")
+            except Exception as ex:
+                st.error(f"Data havuzu buluttan getirilemedi: {ex}")
 
 # ------------------------------------------------------------
 # 2. SEKME: ÇARŞAF LİSTE & BÜTÇE
