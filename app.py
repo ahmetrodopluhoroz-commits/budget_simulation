@@ -983,35 +983,115 @@ with sekmeler[7]:
 # ------------------------------------------------------------
 with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
-    st.markdown("Müşteri listenizi ve kümülatif desilerinizi **1. Sekmedeki Data Havuzundan** otomatik çekebilir veya manuel şablon yükleyebilirsiniz.")
+    
+    # ============================================================
+    # 🗄️ TARİHSEL VERİ YÖNETİMİ VE 31 SÜTUN DÖNÜŞÜM MOTORU
+    # ============================================================
+    NIHAI_SUTUNLAR_9 = [
+        "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
+        "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı",
+        "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
+        "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi",
+        "Ocak Desi", "Şubat Desi", "Mart Desi", "Nisan Desi", "Mayıs Desi", "Haziran Desi",
+        "Temmuz Desi", "Ağustos Desi", "Eylül Desi", "Ekim Desi", "Kasım Desi", "Aralık Desi",
+        "Toplam Desi"
+    ]
+    AY_KOLONLARI_9 = [f"{m} Desi" for m in aylar]
 
-    # 🎯 VERİ KAYNAĞI SEÇİCİ
-    buyume_veri_kaynagi = st.radio("🔄 Simülasyon Listesi Nereden Beslensin?", 
-                                   ["📁 1. Sekmedeki Data Havuzundan Otomatik Çek (Önerilen 🚀)", "Manuel Excel/CSV Dosyası Yükle"], 
-                                   horizontal=True, key="buyume_kaynak_secimi")
+    def optimize_and_conform_schema(df_raw):
+        df = df_raw.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                # "-" veya boşluk gibi tanımsız metinleri 0'a zorla
+                df[col] = df[col].astype(str).str.replace(r'[\s\-\xA0]+', '0', regex=True).str.strip()
+        for c in NIHAI_SUTUNLAR_9:
+            if c not in df.columns: df[c] = np.nan
+        for m in AY_KOLONLARI_9:
+            df[m] = pd.to_numeric(df[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+        df["Toplam Desi"] = df[AY_KOLONLARI_9].sum(axis=1)
+        return df[NIHAI_SUTUNLAR_9]
 
-    if buyume_veri_kaynagi == "Manuel Excel/CSV Dosyası Yükle":
-        yuklenen_buyume = st.file_uploader("Büyüme Müşteri Listesi Yükle", type=["xlsx", "xls", "csv"], key="buyume_up_file")
-        if yuklenen_buyume:
-            df_bg = pd.read_csv(yuklenen_buyume) if yuklenen_buyume.name.lower().endswith(".csv") else pd.read_excel(yuklenen_buyume)
-            df_bg.columns = [str(c).strip() for c in df_bg.columns]
-            if "Müşteri Kodu" in df_bg.columns:
-                df_bg["Müşteri Kodu"] = df_bg["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                st.session_state.buyume_ekran_df = df_bg.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
-                st.success("Müşteri listesi yüklendi.")
+    with st.expander("🗄️ Veri Havuzu Yönetimi (2024-2025 Tarihsel ve 2026 Güncel Yükleme)", expanded=True):
+        st.markdown("Geçmiş yılların verilerini bir kez yükleyip buluta kilitleyebilir, güncel yılı ekleyerek büyüme matrisinizi oluşturabilirsiniz.")
+        
+        if "df_tarihsel_history" not in st.session_state:
+            st.session_state.df_tarihsel_history = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+            if client:
+                try:
+                    res = client.table("tarihsel_desi_tablosu").select("*").execute()
+                    if res.data:
+                        df_db = pd.DataFrame(res.data)
+                        if "id" in df_db.columns: df_db = df_db.drop(columns=["id"])
+                        st.session_state.df_tarihsel_history = df_db[NIHAI_SUTUNLAR_9]
+                except: pass
 
+        t_hist, t_curr, t_fin = st.tabs(["📚 1. Geçmiş Yıllar (2024-2025)", "🚀 2. Güncel Yıl (2026)", "🎯 3. Nihai Simülasyon Havuzu"])
+        
+        with t_hist:
+            st.info(f"Bulut hafızasında **{len(st.session_state.df_tarihsel_history)}** satır kilitli veri var.")
+            up_hist = st.file_uploader("2024 ve 2025 Desi Dosyası (Revize için yükleyin)", type=["xlsx", "csv"], key="up_hist_9")
+            if up_hist:
+                df_raw_h = pd.read_csv(up_hist) if up_hist.name.endswith(".csv") else pd.read_excel(up_hist)
+                df_clean_h = optimize_and_conform_schema(df_raw_h)
+                st.dataframe(df_clean_h.head(3), use_container_width=True)
+                if st.button("💾 Geçmişi Buluta Mühürle (Tek Seferlik)", type="primary", key="btn_save_hist"):
+                    st.session_state.df_tarihsel_history = df_clean_h
+                    if client:
+                        with st.spinner("Buluta yazılıyor..."):
+                            try:
+                                client.table("tarihsel_desi_tablosu").delete().neq("Yıl", "0").execute()
+                                records = df_clean_h.to_dict(orient="records")
+                                for k in range(0, len(records), 1000):
+                                    client.table("tarihsel_desi_tablosu").insert(records[k:k+1000]).execute()
+                                st.success("🎉 Tarihsel veriler kalıcı olarak kaydedildi! Artık her defasında yüklemenize gerek yok.")
+                            except Exception as ex:
+                                st.error(f"Hata: {ex}")
+                            
+        with t_curr:
+            up_2026 = st.file_uploader("2026 Güncel Desi Dosyası", type=["xlsx", "csv"], key="up_2026_9")
+            if up_2026:
+                df_raw_26 = pd.read_csv(up_2026) if up_2026.name.endswith(".csv") else pd.read_excel(up_2026)
+                st.session_state.df_2026_current = optimize_and_conform_schema(df_raw_26)
+                st.success("2026 verisi hafızaya alındı!")
+                st.dataframe(st.session_state.df_2026_current.head(3), use_container_width=True)
+
+        with t_fin:
+            if st.button("🚀 Verileri Birleştir ve Büyüme Motorunu Başlat", type="primary", use_container_width=True):
+                df_h = st.session_state.get("df_tarihsel_history", pd.DataFrame(columns=NIHAI_SUTUNLAR_9))
+                df_c = st.session_state.get("df_2026_current", pd.DataFrame(columns=NIHAI_SUTUNLAR_9))
+                
+                if not df_h.empty or not df_c.empty:
+                    df_master_long = pd.concat([df_h, df_c], ignore_index=True)
+                    
+                    # 🌟 KÖPRÜ: 31 Sütunlu DB Formatını -> Uygulamanın anladığı Geniş (WIDE) formata Pivotluyoruz
+                    static_cols = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"]
+                    ex_static = [c for c in static_cols if c in df_master_long.columns]
+                    
+                    df_g = df_master_long.groupby(ex_static + ["Yıl"], as_index=False)[AY_KOLONLARI_9 + ["Toplam Desi"]].sum()
+                    df_w = df_g.pivot(index=ex_static, columns="Yıl", values=AY_KOLONLARI_9 + ["Toplam Desi"])
+                    
+                    # Hiyerarşik sütunları (Örn: 'Ocak Desi', '2024') -> '2024 Ocak Desi' yapıyoruz
+                    df_w.columns = [f"{yil} {ay_col}" for ay_col, yil in df_w.columns]
+                    df_w = df_w.reset_index().fillna(0.0)
+                    
+                    st.session_state.data_sayfası_df = df_w
+                    st.success("Tüm yıllar başarıyla birleştirildi ve matematiksel modellere beslendi!")
+                    st.rerun()
+                else:
+                    st.warning("Lütfen geçmiş veya güncel yılları yükleyin!")
+
+    # ============================================================
+    # 📈 ESKİ BÜYÜME VE HESAPLAMA MOTORU (AYNEN KORUNDU)
+    # ============================================================
+    if not st.session_state.data_sayfası_df.empty:
+        df_d_src = st.session_state.data_sayfası_df.copy()
+        df_d_src["Müşteri Kodu"] = df_d_src["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        
+        df_distinct_m = df_d_src.drop_duplicates(subset=["Müşteri Kodu"]).copy()
+        st.session_state.buyume_ekran_df = df_distinct_m.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
     else:
-        # 📁 DATA SAYFASINDAN OTOMATİK ÇEKME MOTORU
-        if not st.session_state.data_sayfası_df.empty:
-            df_d_src = st.session_state.data_sayfası_df.copy()
-            df_d_src["Müşteri Kodu"] = df_d_src["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            
-            df_distinct_m = df_d_src.drop_duplicates(subset=["Müşteri Kodu"]).copy()
-            st.session_state.buyume_ekran_df = df_distinct_m.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
-        else:
-            st.info("Büyüme matrisinin otomatik oluşabilmesi için lütfen 1. Sekmede (📁 Data) verilerin yüklü olduğundan emin olun veya alttaki butonla buluttan çağırın.")
+        st.info("Büyüme matrisinin oluşabilmesi için lütfen üstteki menüden verileri birleştirin.")
 
-    # HESAPLAMA VE DEĞİŞİM DAĞITIM MOTORU
     if not st.session_state.buyume_ekran_df.empty:
         df_b_work = st.session_state.buyume_ekran_df.copy()
         df_b_work["Müşteri Kodu"] = df_b_work["Müşteri Kodu"].apply(guvenli_metin_kodu)
@@ -1097,7 +1177,6 @@ with sekmeler[8]:
         hedef_gruplar = ["MP", "HOROZ CÜZDAN", "DİĞER"]
         sezon_sekmeleri = st.tabs(["📅 2024 Dağılım Trendi", "📅 2025 Dağılım Trendi", "📅 2026 Dağılım Trendi (Öngörü Düzeltmeli)"])
 
-        # 1. Adım: Tüm yılların kümülatif toplamlarını önden hesaplayalım (Hız Optimizasyonu)
         if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
             df_g_calc = st.session_state.data_sayfası_df.copy()
             df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
@@ -1117,7 +1196,6 @@ with sekmeler[8]:
         else:
             grup_totals = {"2024": pd.DataFrame(), "2025": pd.DataFrame(), "2026": pd.DataFrame()}
 
-        # 2. Adım: Matrisleri Oluşturma ve 2026 Ortalama Mantığını İşletme
         for i, target_yr in enumerate(["2024", "2025", "2026"]):
             with sezon_sekmeleri[i]:
                 grup_matris_rows = []
@@ -1134,23 +1212,19 @@ with sekmeler[8]:
                         val = 0.0
                         col_name = f"{target_yr} {m} Desi"
                         
-                        # Mevcut değeri al
                         if not df_yr_totals.empty and grp in df_yr_totals.index and col_name in df_yr_totals.columns:
                             val = df_yr_totals.loc[grp, col_name]
                         
                         # 🌟 2026 EKSİK AY ORTALAMA TAMAMLAMA MOTORU 🌟
                         if target_yr == "2026":
                             eksik_aylar = ["Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
-                            # Ay eksik listesindeyse veya verisi 0 gelmişse 2024 ve 2025'ten ortalama çek
                             if m in eksik_aylar or val <= 0:
                                 val_24 = df_24_totals.loc[grp, f"2024 {m} Desi"] if (not df_24_totals.empty and grp in df_24_totals.index and f"2024 {m} Desi" in df_24_totals.columns) else 0.0
                                 val_25 = df_25_totals.loc[grp, f"2025 {m} Desi"] if (not df_25_totals.empty and grp in df_25_totals.index and f"2025 {m} Desi" in df_25_totals.columns) else 0.0
-                                
                                 val = (val_24 + val_25) / 2.0
                                 
                         aylik_ham_degerler.append(val)
                     
-                    # 3. Adım: Yüzdesel Formata Çevirme (Yatayda tam %100 garantisi)
                     yillik_toplam = sum(aylik_ham_degerler)
                     for j, m in enumerate(aylar):
                         r_g[m] = (aylik_ham_degerler[j] / yillik_toplam * 100) if yillik_toplam > 0 else 0.0
