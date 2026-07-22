@@ -575,8 +575,6 @@ with sekmeler[2]:
             # Eğer bulutta veri yoksa şablonu varsayılan değerlerle oluştur
             if not takvim_yuklendi_mi:
                 st.session_state.takvim_verisi_yillar = pd.DataFrame([
-                    {"YIL": "2022", "Ocak": 25, "Şubat": 24, "Mart": 27, "Nisan": 26, "Mayıs": 23, "Haziran": 26, "Temmuz": 22, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 27},
-                    {"YIL": "2023", "Ocak": 26, "Şubat": 24, "Mart": 27, "Nisan": 23, "Mayıs": 26, "Haziran": 24, "Temmuz": 25, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 26},
                     {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
                     {"YIL": "2025", "Ocak": 26, "Şubat": 24, "Mart": 25, "Nisan": 25, "Mayıs": 26, "Haziran": 22, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
                     {"YIL": "2026", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
