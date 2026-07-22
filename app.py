@@ -1404,7 +1404,7 @@ with sekmeler[8]:
         if tahmini_aylar_9:
             st.info(
                 "2026 tahmini tamamlanan aylar: " + ", ".join(tahmini_aylar_9)
-                + ". Bu aylarda 2024 ve 2025 aynı ay Kglerinin ortalaması kullanılır."
+                + ". Tahmini aylarda 2024 ve 2025 aylık dağılım yüzdelerinin ortalaması kullanılır."
             )
 
         sezon_tabs_9 = st.tabs([
@@ -1413,56 +1413,120 @@ with sekmeler[8]:
             "📅 2026 Gerçekleşen + Tahmin"
         ])
 
-        for tab_index_9, target_yil_9 in enumerate(["2024", "2025", "2026"]):
+        def grup_aylik_kg_9(yil, grup, ay):
+            tablo = grup_totals_9.get(yil, pd.DataFrame())
+            kolon = f"{yil} {ay} Kg"
+            if not tablo.empty and grup in tablo.index and kolon in tablo.columns:
+                return guvenli_sayi(tablo.loc[grup, kolon])
+            return 0.0
+
+        def grup_yillik_dagilim_9(yil, grup):
+            aylik_kg = {ay: grup_aylik_kg_9(yil, grup, ay) for ay in aylar}
+            toplam_kg = sum(aylik_kg.values())
+            if toplam_kg <= 0:
+                return {ay: 0.0 for ay in aylar}
+            return {ay: aylik_kg[ay] / toplam_kg * 100.0 for ay in aylar}
+
+        # 2024 ve 2025 gerçekleşen yıllık dağılımları
+        for tab_index_9, target_yil_9 in enumerate(["2024", "2025"]):
             with sezon_tabs_9[tab_index_9]:
                 sezon_rows_9 = []
                 for grp in hedef_gruplar_9:
-                    ham_aylar_9 = []
-                    kaynak_tipi_9 = []
-                    for m in aylar:
-                        col = f"{target_yil_9} {m} Kg"
-                        val = (
-                            guvenli_sayi(grup_totals_9[target_yil_9].loc[grp, col])
-                            if grp in grup_totals_9[target_yil_9].index else 0.0
-                        )
-                        kaynak = "Gerçekleşen"
-
-                        if target_yil_9 == "2026" and m in tahmini_aylar_9:
-                            val24 = (
-                                guvenli_sayi(grup_totals_9["2024"].loc[grp, f"2024 {m} Kg"])
-                                if grp in grup_totals_9["2024"].index else 0.0
-                            )
-                            val25 = (
-                                guvenli_sayi(grup_totals_9["2025"].loc[grp, f"2025 {m} Kg"])
-                                if grp in grup_totals_9["2025"].index else 0.0
-                            )
-                            dolu_gecmis = [v for v in [val24, val25] if v > 0]
-                            val = sum(dolu_gecmis) / len(dolu_gecmis) if dolu_gecmis else 0.0
-                            kaynak = "2024-2025 Ortalaması"
-
-                        ham_aylar_9.append(val)
-                        kaynak_tipi_9.append(kaynak)
-
-                    yillik_toplam_9 = sum(ham_aylar_9)
-                    row_9 = {"Müşteri Grubu": grp}
-                    for j, m in enumerate(aylar):
-                        row_9[m] = (
-                            ham_aylar_9[j] / yillik_toplam_9 * 100.0
-                            if yillik_toplam_9 > 0 else 0.0
-                        )
-                    row_9["Toplam (%)"] = sum(row_9[m] for m in aylar)
+                    yuzdeler_9 = grup_yillik_dagilim_9(target_yil_9, grp)
+                    row_9 = {"Müşteri Grubu": grp, **yuzdeler_9}
+                    row_9["Toplam (%)"] = sum(yuzdeler_9.values())
                     sezon_rows_9.append(row_9)
 
-                sezon_df_9 = pd.DataFrame(sezon_rows_9)
                 st.dataframe(
-                    sezon_df_9,
+                    pd.DataFrame(sezon_rows_9),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar},
-                        "Toplam (%)": st.column_config.NumberColumn("Toplam (%)", format="%.2f%%")
+                        **{
+                            ay: st.column_config.NumberColumn(ay, format="%.3f%%")
+                            for ay in aylar
+                        },
+                        "Toplam (%)": st.column_config.NumberColumn(
+                            "Toplam (%)", format="%.3f%%"
+                        )
                     }
                 )
+
+        # 2026 gerçekleşen aylar + tahmini aylarda 2024/2025 yüzde ortalaması
+        with sezon_tabs_9[2]:
+            sezon_rows_2026_9 = []
+
+            for grp in hedef_gruplar_9:
+                dagilim_2024_9 = grup_yillik_dagilim_9("2024", grp)
+                dagilim_2025_9 = grup_yillik_dagilim_9("2025", grp)
+
+                tahmini_yuzdeler_9 = {
+                    ay: (dagilim_2024_9[ay] + dagilim_2025_9[ay]) / 2.0
+                    for ay in tahmini_aylar_9
+                }
+                tahmini_yuzde_toplami_9 = sum(tahmini_yuzdeler_9.values())
+                gerceklesen_aylara_kalan_9 = max(
+                    0.0, 100.0 - tahmini_yuzde_toplami_9
+                )
+
+                gerceklesen_kg_9 = {
+                    ay: grup_aylik_kg_9("2026", grp, ay)
+                    for ay in gerceklesen_aylar_9
+                }
+                gerceklesen_toplam_kg_9 = sum(gerceklesen_kg_9.values())
+
+                if gerceklesen_toplam_kg_9 > 0:
+                    gerceklesen_yuzdeler_9 = {
+                        ay: (
+                            gerceklesen_kg_9[ay]
+                            / gerceklesen_toplam_kg_9
+                            * gerceklesen_aylara_kalan_9
+                        )
+                        for ay in gerceklesen_aylar_9
+                    }
+                elif gerceklesen_aylar_9:
+                    esit_pay_9 = (
+                        gerceklesen_aylara_kalan_9 / len(gerceklesen_aylar_9)
+                    )
+                    gerceklesen_yuzdeler_9 = {
+                        ay: esit_pay_9 for ay in gerceklesen_aylar_9
+                    }
+                else:
+                    gerceklesen_yuzdeler_9 = {}
+
+                row_2026_9 = {"Müşteri Grubu": grp}
+                for ay in aylar:
+                    row_2026_9[ay] = (
+                        tahmini_yuzdeler_9[ay]
+                        if ay in tahmini_yuzdeler_9
+                        else gerceklesen_yuzdeler_9.get(ay, 0.0)
+                    )
+
+                toplam_once_9 = sum(row_2026_9[ay] for ay in aylar)
+                duzeltme_ayi_9 = (
+                    gerceklesen_aylar_9[-1]
+                    if gerceklesen_aylar_9 else aylar[-1]
+                )
+                row_2026_9[duzeltme_ayi_9] += 100.0 - toplam_once_9
+                row_2026_9["Toplam (%)"] = sum(
+                    row_2026_9[ay] for ay in aylar
+                )
+                sezon_rows_2026_9.append(row_2026_9)
+
+            st.dataframe(
+                pd.DataFrame(sezon_rows_2026_9),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    **{
+                        ay: st.column_config.NumberColumn(ay, format="%.3f%%")
+                        for ay in aylar
+                    },
+                    "Toplam (%)": st.column_config.NumberColumn(
+                        "Toplam (%)", format="%.3f%%"
+                    )
+                }
+            )
 
         # ------------------------------------------------------------
         # BÜYÜME AYARLARINI HAFIZAYA / BULUTA KAYDET
@@ -1480,9 +1544,13 @@ with sekmeler[8]:
                 mk = guvenli_metin_kodu(row["Müşteri Kodu"])
                 st.session_state.buyume_ayarlari[mk] = {
                     "25 kullanılan büyüme": row.get("25 kullanılan büyüme", ""),
-                    "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME", 0.0)),
+                    "KULLANICAK BÜYÜME": guvenli_sayi(
+                        row.get("KULLANICAK BÜYÜME", 0.0)
+                    ),
                     "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi", ""),
-                    "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme", "")
+                    "Müşteriden Gelen Büyüme": row.get(
+                        "Müşteriden Gelen Büyüme", ""
+                    )
                 }
             st.success("Büyüme stratejileri hafızaya kaydedildi ve 12 aya eşit uygulandı.")
             st.rerun()
@@ -1502,9 +1570,10 @@ with sekmeler[8]:
                 key="btn_b_cloud_save"
             ):
                 izin_verilen_b_db = [
-                    "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu",
-                    "Durum", "Kayıt Tarihi", "Müşteri Grubu", "25 kullanılan büyüme",
-                    "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
+                    "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
+                    "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
+                    "25 kullanılan büyüme", "KULLANICAK BÜYÜME",
+                    "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
                 ]
                 b_records = [
                     {
@@ -1515,9 +1584,14 @@ with sekmeler[8]:
                 ]
                 for record in b_records:
                     record["revizyon_id"] = r_id_b
-                client.table("buyume_tablosu").delete().eq("revizyon_id", r_id_b).execute()
+
+                client.table("buyume_tablosu").delete().eq(
+                    "revizyon_id", r_id_b
+                ).execute()
                 for i in range(0, len(b_records), 500):
-                    client.table("buyume_tablosu").insert(b_records[i:i + 500]).execute()
+                    client.table("buyume_tablosu").insert(
+                        b_records[i:i + 500]
+                    ).execute()
                 st.success("🎉 Müşteri büyüme oranları başarıyla kaydedildi.")
 
             if cb_3.button(
@@ -1533,11 +1607,15 @@ with sekmeler[8]:
                     for _, row in gelen_b_df.iterrows():
                         mk = guvenli_metin_kodu(row.get("Müşteri Kodu"))
                         st.session_state.buyume_ayarlari[mk] = {
-                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme", ""),
+                            "25 kullanılan büyüme": row.get(
+                                "25 kullanılan büyüme", ""
+                            ),
                             "KULLANICAK BÜYÜME": guvenli_sayi(
                                 row.get("KULLANICAK BÜYÜME", 0.0)
                             ),
-                            "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi", ""),
+                            "Gelen Özet Bilgi": row.get(
+                                "Gelen Özet Bilgi", ""
+                            ),
                             "Müşteriden Gelen Büyüme": row.get(
                                 "Müşteriden Gelen Büyüme", ""
                             )
@@ -1545,4 +1623,6 @@ with sekmeler[8]:
                     st.success("🎉 Büyüme kartları buluttan getirildi.")
                     st.rerun()
                 else:
-                    st.warning("Seçili revizyonda kayıtlı büyüme kartı bulunamadı.")
+                    st.warning(
+                        "Seçili revizyonda kayıtlı büyüme kartı bulunamadı."
+                    )
