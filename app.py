@@ -544,37 +544,58 @@ with sekmeler[1]:
         st.dataframe(df_nihai, use_container_width=True)
 
 # ------------------------------------------------------------
-# 3. SEKME: ÇALIŞMA GÜNLERİ (DİNAMİK YILLIK MATRİS VE ORANLAR 📅)
+# 3. SEKME: ÇALIŞMA GÜNLERİ (KAYIT VE EXCEL DESTEKLİ DİNAMİK MATRİS 📅)
 # ------------------------------------------------------------
 with sekmeler[2]:
     st.title("📅 Operasyonel Çalışma Günleri Takvimi")
-    st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. **2027** yılını manuel girdiğinizde yıllık toplamlar ve **26to27** oranları anlık olarak hesaplanır.")
+    st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. Yapılan değişiklikleri **Buluta Kaydet** butonu ile kalıcı hale getirebilir veya **Excel** olarak indirebilirsiniz.")
 
-    # 🚀 @st.fragment KALKANI
+    # 🚀 @st.fragment KALKANI: Tüm uygulamayı yormadan sadece takvim işlemlerini ışık hızında yapar
     @st.fragment
     def takvim_modulunu_calistir():
-        # 1. HAFIZA KURULUMU
+        # 1. OTOMATİK BULUT BAĞLANTISI VE HAFIZA KURULUMU
         if "takvim_verisi_yillar" not in st.session_state:
-            st.session_state.takvim_verisi_yillar = pd.DataFrame([
-                {"YIL": "2022", "Ocak": 25, "Şubat": 24, "Mart": 27, "Nisan": 26, "Mayıs": 23, "Haziran": 26, "Temmuz": 22, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 27},
-                {"YIL": "2023", "Ocak": 26, "Şubat": 24, "Mart": 27, "Nisan": 23, "Mayıs": 26, "Haziran": 24, "Temmuz": 25, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 26},
-                {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
-                {"YIL": "2025", "Ocak": 26, "Şubat": 24, "Mart": 25, "Nisan": 25, "Mayıs": 26, "Haziran": 22, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
-                {"YIL": "2026", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
-                {"YIL": "2027", "Ocak": 0, "Şubat": 0, "Mart": 0, "Nisan": 0, "Mayıs": 0, "Haziran": 0, "Temmuz": 0, "Ağustos": 0, "Eylül": 0, "Ekim": 0, "Kasım": 0, "Aralık": 0}
-            ])
+            takvim_yuklendi_mi = False
+            
+            # Uygulama ilk açıldığında veriyi otomatik olarak buluttan çekmeyi dene
+            if client:
+                try:
+                    tk_res = client.table("takvim_tablosu").select("*").execute()
+                    if tk_res.data:
+                        df_cloud_tk = pd.DataFrame(tk_res.data)
+                        if "id" in df_cloud_tk.columns: 
+                            df_cloud_tk = df_cloud_tk.drop(columns=["id"])
+                        # Sütun sıralamasını garanti altına alıyoruz
+                        takvim_sirasi = ["YIL"] + aylar
+                        st.session_state.takvim_verisi_yillar = df_cloud_tk[takvim_sirasi]
+                        takvim_yuklendi_mi = True
+                except:
+                    pass # Bulut tablosu henüz yoksa veya hata verirse varsayılana düşer
+            
+            # Eğer bulutta veri yoksa şablonu varsayılan değerlerle oluştur
+            if not takvim_yuklendi_mi:
+                st.session_state.takvim_verisi_yillar = pd.DataFrame([
+                    {"YIL": "2022", "Ocak": 25, "Şubat": 24, "Mart": 27, "Nisan": 26, "Mayıs": 23, "Haziran": 26, "Temmuz": 22, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 27},
+                    {"YIL": "2023", "Ocak": 26, "Şubat": 24, "Mart": 27, "Nisan": 23, "Mayıs": 26, "Haziran": 24, "Temmuz": 25, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 26},
+                    {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
+                    {"YIL": "2025", "Ocak": 26, "Şubat": 24, "Mart": 25, "Nisan": 25, "Mayıs": 26, "Haziran": 22, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+                    {"YIL": "2026", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+                    {"YIL": "2027", "Ocak": 0, "Şubat": 0, "Mart": 0, "Nisan": 0, "Mayıs": 0, "Haziran": 0, "Temmuz": 0, "Ağustos": 0, "Eylül": 0, "Ekim": 0, "Kasım": 0, "Aralık": 0}
+                ])
 
-        # 2. GÜNCEL MATEMATİKSEL HESAPLAMALAR
+        # 2. CANLI MATEMATİKSEL FORMÜLLERİN ÇALIŞTIRILMASI
         df_yillar = st.session_state.takvim_verisi_yillar.copy()
         for m in aylar:
             df_yillar[m] = pd.to_numeric(df_yillar[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             
+        # Satır bazlı yıllık toplam gün formülü
         df_yillar["Toplam"] = df_yillar[aylar].sum(axis=1)
 
         def yil_satiri_getir(yr_str):
             match = df_yillar[df_yillar["YIL"] == yr_str]
             return match.iloc[0] if not match.empty else None
 
+        # Geçmişe dönük oran satırlarının dinamik hesaplanması
         ratio_rows = []
         oran_kurgulari = [
             ("2026", "2027", "26to27"),
@@ -590,7 +611,6 @@ with sekmeler[2]:
             for m in aylar:
                 v_prev = r_prev[m] if r_prev is not None else 0.0
                 v_curr = r_curr[m] if r_curr is not None else 0.0
-                # Sıfıra bölünme koruması
                 r_dict[m] = (v_curr / v_prev) if v_prev > 0 else 0.0
                 
             r_dict["Toplam"] = np.nan
@@ -599,7 +619,7 @@ with sekmeler[2]:
         df_ratios = pd.DataFrame(ratio_rows)
         combined_calendar_df = pd.concat([df_yillar, df_ratios], ignore_index=True)
 
-        # 3. KULLANICI ARAYÜZÜ (TABLO)
+        # 3. GELİŞMİŞ VERİ EDİTÖRÜ GÖSTERİMİ
         edited_calendar = st.data_editor(
             combined_calendar_df,
             use_container_width=True,
@@ -613,31 +633,63 @@ with sekmeler[2]:
             key="dynamic_operational_calendar_editor"
         )
 
-        # 4. ZIRHLI DEĞİŞİM KONTROL MOTORU (OH NO SAVAR 🚀)
+        # 4. DEĞİŞİKLİKLERİ ANLIK HAFIZAYA İŞLEME MOTORU
         satir_sayisi = len(st.session_state.takvim_verisi_yillar)
-        just_real_years = edited_calendar.iloc[:satir_sayisi] # Sadece gerçek yılları al, oranları at
+        just_real_years = edited_calendar.iloc[:satir_sayisi].copy()
         
         degisim_var = False
         for i in range(satir_sayisi):
             for m in aylar:
-                # Hem eski hem yeni veriyi mutlak saf float sayıya çevir
                 eski = float(guvenli_sayi(st.session_state.takvim_verisi_yillar.iloc[i][m]))
                 yeni = float(guvenli_sayi(just_real_years.iloc[i][m]))
                 
-                # Sadece gerçek bir değişiklik varsa (0.0001 hassasiyetle)
                 if abs(eski - yeni) > 0.0001:
                     degisim_var = True
-                    # Bütün tabloyu değil, sadece değişen o hücreyi noktası noktasına hafızaya yaz (Döngüyü kırar)
+                    st.session_state.takvim_verION_yillar = just_real_years # Güncel matrisi kilitle
                     st.session_state.takvim_verisi_yillar.at[i, m] = yeni
                     
-        # Eğer bir hücre değiştiyse anında tetikle
         if degisim_var:
-            try:
-                st.rerun(scope="fragment")
-            except:
-                st.rerun()
+            try: st.rerun(scope="fragment")
+            except: st.rerun()
 
-    # Modülü sayfaya çağırıyoruz
+        # 5. 📥 EXCEL İNDİRME VE 💾 BULUTA KAYDETME PANELİ
+        st.markdown("<br>", unsafe_allow_html=True)
+        c_tk1, c_tk2 = st.columns(2)
+        
+        # Excel İhracat Motoru (Tüm oranlar ve toplamlar dahil tam döküm verir)
+        with c_tk1:
+            output_tk_excel = io.BytesIO()
+            with pd.ExcelWriter(output_tk_excel, engine="openpyxl") as writer:
+                combined_calendar_df.to_excel(writer, index=False, sheet_name="Çalışma Günleri")
+            st.download_button(
+                label="📥 Tüm Tabloyu Excel Olarak İndir",
+                data=output_tk_excel.getvalue(),
+                file_name="operasyonel_calisma_gunleri_matrisi.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="btn_tk_excel_download"
+            )
+            
+        # Bulut Mühürleme Motoru
+        with c_tk2:
+            if client:
+                if st.button("💾 Değişiklikleri Buluta Kalıcı Kaydet", type="primary", use_container_width=True, key="btn_tk_cloud_save"):
+                    # Oran satırlarını atıp sadece saf yıl verilerini temizce JSON/Sözlük formatına çeviriyoruz
+                    clean_save_df = st.session_state.takvim_verisi_yillar.copy()
+                    tk_records = [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in clean_save_df.iterrows()]
+                    
+                    with st.spinner("Takvim bulut ambarına mühürleniyor..."):
+                        try:
+                            # Eski takvim kayıtlarını sıfırla ve yenilerini yaz
+                            client.table("takvim_tablosu").delete().gte("YIL", "2020").execute()
+                            client.table("takvim_tablosu").insert(tk_records).execute()
+                            st.success("🎉 Harika! Çalışma günleri veritabanına kalıcı olarak mühürlendi. Uygulama kapansa da silinmez.")
+                        except Exception as e:
+                            st.error(f"Kayıt esnasında bulut hatası oluştu: {e}")
+            else:
+                st.info("Bulut bağlantısı aktif olmadığı için kalıcı kayıt devre dışı, verileriniz tarayıcı açık kaldığı sürece korunacaktır.")
+
+    # Modülü güvenli alanda tetikle
     takvim_modulunu_calistir()
 # ------------------------------------------------------------
 # 4. SEKME: BULUT REVİZYON YÖNETİMİ
