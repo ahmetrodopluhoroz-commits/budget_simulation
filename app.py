@@ -550,9 +550,10 @@ with sekmeler[2]:
     st.title("📅 Operasyonel Çalışma Günleri Takvimi")
     st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. **2027** yılını manuel girdiğinizde yıllık toplamlar ve **26to27** oranları anlık olarak hesaplanır.")
 
-    # 🚀 @st.fragment KALKANI: Tüm sistemi dondurup sadece burayı hızla çalıştırır
+    # 🚀 @st.fragment KALKANI
     @st.fragment
     def takvim_modulunu_calistir():
+        # 1. HAFIZA KURULUMU
         if "takvim_verisi_yillar" not in st.session_state:
             st.session_state.takvim_verisi_yillar = pd.DataFrame([
                 {"YIL": "2022", "Ocak": 25, "Şubat": 24, "Mart": 27, "Nisan": 26, "Mayıs": 23, "Haziran": 26, "Temmuz": 22, "Ağustos": 27, "Eylül": 26, "Ekim": 26, "Kasım": 26, "Aralık": 27},
@@ -563,7 +564,7 @@ with sekmeler[2]:
                 {"YIL": "2027", "Ocak": 0, "Şubat": 0, "Mart": 0, "Nisan": 0, "Mayıs": 0, "Haziran": 0, "Temmuz": 0, "Ağustos": 0, "Eylül": 0, "Ekim": 0, "Kasım": 0, "Aralık": 0}
             ])
 
-        # 1. HESAPLAMA AŞAMASI (Güncel Hafızaya Göre)
+        # 2. GÜNCEL MATEMATİKSEL HESAPLAMALAR
         df_yillar = st.session_state.takvim_verisi_yillar.copy()
         for m in aylar:
             df_yillar[m] = pd.to_numeric(df_yillar[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
@@ -589,6 +590,7 @@ with sekmeler[2]:
             for m in aylar:
                 v_prev = r_prev[m] if r_prev is not None else 0.0
                 v_curr = r_curr[m] if r_curr is not None else 0.0
+                # Sıfıra bölünme koruması
                 r_dict[m] = (v_curr / v_prev) if v_prev > 0 else 0.0
                 
             r_dict["Toplam"] = np.nan
@@ -597,7 +599,7 @@ with sekmeler[2]:
         df_ratios = pd.DataFrame(ratio_rows)
         combined_calendar_df = pd.concat([df_yillar, df_ratios], ignore_index=True)
 
-        # 2. ARAYÜZ GÖSTERİMİ
+        # 3. KULLANICI ARAYÜZÜ (TABLO)
         edited_calendar = st.data_editor(
             combined_calendar_df,
             use_container_width=True,
@@ -611,33 +613,31 @@ with sekmeler[2]:
             key="dynamic_operational_calendar_editor"
         )
 
-        # 3. YAKALAMA VE ANINDA TETİKLEME MOTORU
-        # Sadece gerçek yılları filtreleyelim
-        just_real_years = edited_calendar[edited_calendar["YIL"].astype(str).str.isdigit() == True].copy()
-        if "Toplam" in just_real_years.columns:
-            just_real_years = just_real_years.drop(columns=["Toplam"])
-            
-        # Kullanıcının hücreyi değiştirip değiştirmediğini anlık olarak kontrol et
+        # 4. ZIRHLI DEĞİŞİM KONTROL MOTORU (OH NO SAVAR 🚀)
+        satir_sayisi = len(st.session_state.takvim_verisi_yillar)
+        just_real_years = edited_calendar.iloc[:satir_sayisi] # Sadece gerçek yılları al, oranları at
+        
         degisim_var = False
-        for i in range(len(just_real_years)):
+        for i in range(satir_sayisi):
             for m in aylar:
-                eski_val = guvenli_sayi(st.session_state.takvim_verisi_yillar.iloc[i][m])
-                yeni_val = guvenli_sayi(just_real_years.iloc[i][m])
-                if eski_val != yeni_val:
-                    degisim_var = True
-                    break
-            if degisim_var:
-                break
+                # Hem eski hem yeni veriyi mutlak saf float sayıya çevir
+                eski = float(guvenli_sayi(st.session_state.takvim_verisi_yillar.iloc[i][m]))
+                yeni = float(guvenli_sayi(just_real_years.iloc[i][m]))
                 
-        # Eğer bir hücre değiştiyse, yeni değeri hafızaya kaydet ve SADECE BU TABLOYU anında yenile
+                # Sadece gerçek bir değişiklik varsa (0.0001 hassasiyetle)
+                if abs(eski - yeni) > 0.0001:
+                    degisim_var = True
+                    # Bütün tabloyu değil, sadece değişen o hücreyi noktası noktasına hafızaya yaz (Döngüyü kırar)
+                    st.session_state.takvim_verisi_yillar.at[i, m] = yeni
+                    
+        # Eğer bir hücre değiştiyse anında tetikle
         if degisim_var:
-            st.session_state.takvim_verisi_yillar = just_real_years
             try:
                 st.rerun(scope="fragment")
             except:
                 st.rerun()
 
-    # Kalkanlı modülü başlat
+    # Modülü sayfaya çağırıyoruz
     takvim_modulunu_calistir()
 # ------------------------------------------------------------
 # 4. SEKME: BULUT REVİZYON YÖNETİMİ
