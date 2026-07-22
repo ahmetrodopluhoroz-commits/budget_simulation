@@ -979,14 +979,15 @@ with sekmeler[7]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 9. SEKME: MÜŞTERI BÜYÜME ORANLARI (SAYFA BAĞIMSIZ DOĞRUDAN ÇEKME SİSTEMİ 📈)
+# 9. SEKME: MÜŞTERİ BÜYÜME ORANLARI
 # ------------------------------------------------------------
 with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Desi Simülasyonu")
-    
-    # ============================================================
-    # 🗄️ TARİHSEL VERİ YÖNETİMİ VE 31 SÜTUN DÖNÜŞÜM MOTORU
-    # ============================================================
+    st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel desi dosyası yüklenir.")
+
+    # ------------------------------------------------------------
+    # 9. SEKME YARDIMCI TANIMLARI
+    # ------------------------------------------------------------
     NIHAI_SUTUNLAR_9 = [
         "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
         "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı",
@@ -997,285 +998,465 @@ with sekmeler[8]:
         "Toplam Desi"
     ]
     AY_KOLONLARI_9 = [f"{m} Desi" for m in aylar]
+    KIMLIK_KOLONLARI_9 = [
+        "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
+        "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"
+    ]
 
-    def optimize_and_conform_schema(df_raw):
+    def temiz_metin_9(value, varsayilan=""):
+        if value is None:
+            return varsayilan
+        try:
+            if pd.isna(value):
+                return varsayilan
+        except Exception:
+            pass
+        metin = str(value).replace("\\xa0", " ").strip()
+        return varsayilan if metin.lower() in {"", "nan", "none", "null", "nat"} else metin
+
+    def oku_excel_csv_9(uploaded_file):
+        if uploaded_file.name.lower().endswith(".csv"):
+            try:
+                return pd.read_csv(uploaded_file, sep=None, engine="python")
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, sep=None, engine="python", encoding="latin-1")
+        return pd.read_excel(uploaded_file)
+
+    def temizle_2026_31_kolon(df_raw):
+        """31 kolonlu 2026 dosyasını güvenli biçimde temizler; metinleri bozmaz."""
         df = df_raw.copy()
-        for col in df.columns:
-            if df[col].dtype == object:
-                # "-" veya boşluk gibi tanımsız metinleri 0'a zorla
-                df[col] = df[col].astype(str).str.replace(r'[\s\-\xA0]+', '0', regex=True).str.strip()
-        for c in NIHAI_SUTUNLAR_9:
-            if c not in df.columns: df[c] = np.nan
-        for m in AY_KOLONLARI_9:
-            df[m] = pd.to_numeric(df[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
+        df.columns = [str(c).strip() for c in df.columns]
+
+        eksik_kolonlar = [c for c in NIHAI_SUTUNLAR_9 if c not in df.columns]
+        for c in eksik_kolonlar:
+            df[c] = np.nan
+
+        for c in KIMLIK_KOLONLARI_9:
+            varsayilan = "DİĞER" if c == "Müşteri Grubu" else ""
+            df[c] = df[c].apply(lambda v: temiz_metin_9(v, varsayilan))
+
+        df["Müşteri Kodu"] = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        df["Müşteri Grubu"] = df["Müşteri Grubu"].str.upper()
+        df["Durum"] = df["Durum"].replace("", "GEÇERLİ")
+        df["Yıl"] = 2026
+
+        for c in AY_KOLONLARI_9:
+            df[c] = df[c].apply(guvenli_sayi).astype(float)
+
         df["Toplam Desi"] = df[AY_KOLONLARI_9].sum(axis=1)
-        return df[NIHAI_SUTUNLAR_9]
+        df = df[df["Müşteri Kodu"] != ""].reset_index(drop=True)
+        return df[NIHAI_SUTUNLAR_9], eksik_kolonlar
 
-    with st.expander("🗄️ Veri Havuzu Yönetimi (2024-2025 Tarihsel ve 2026 Güncel Yükleme)", expanded=True):
-        st.markdown("Geçmiş yılların verilerini bir kez yükleyip buluta kilitleyebilir, güncel yılı ekleyerek büyüme matrisinizi oluşturabilirsiniz.")
-        
-        if "df_tarihsel_history" not in st.session_state:
-            st.session_state.df_tarihsel_history = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
-            if client:
-                try:
-                    res = client.table("tarihsel_desi_tablosu").select("*").execute()
-                    if res.data:
-                        df_db = pd.DataFrame(res.data)
-                        if "id" in df_db.columns: df_db = df_db.drop(columns=["id"])
-                        st.session_state.df_tarihsel_history = df_db[NIHAI_SUTUNLAR_9]
-                except: pass
+    def musteri_bazinda_ozetle_9(df, yil, kaynak_31_kolon=False):
+        """Kaynağı müşteri bazına indirir ve sütunları '2026 Ocak Desi' biçimine getirir."""
+        if df is None or df.empty or "Müşteri Kodu" not in df.columns:
+            return pd.DataFrame(columns=KIMLIK_KOLONLARI_9)
 
-        t_hist, t_curr, t_fin = st.tabs(["📚 1. Geçmiş Yıllar (2024-2025)", "🚀 2. Güncel Yıl (2026)", "🎯 3. Nihai Simülasyon Havuzu"])
-        
-        with t_hist:
-            st.info(f"Bulut hafızasında **{len(st.session_state.df_tarihsel_history)}** satır kilitli veri var.")
-            up_hist = st.file_uploader("2024 ve 2025 Desi Dosyası (Revize için yükleyin)", type=["xlsx", "csv"], key="up_hist_9")
-            if up_hist:
-                df_raw_h = pd.read_csv(up_hist) if up_hist.name.endswith(".csv") else pd.read_excel(up_hist)
-                df_clean_h = optimize_and_conform_schema(df_raw_h)
-                st.dataframe(df_clean_h.head(3), use_container_width=True)
-                if st.button("💾 Geçmişi Buluta Mühürle (Tek Seferlik)", type="primary", key="btn_save_hist"):
-                    st.session_state.df_tarihsel_history = df_clean_h
-                    if client:
-                        with st.spinner("Buluta yazılıyor..."):
-                            try:
-                                client.table("tarihsel_desi_tablosu").delete().neq("Yıl", "0").execute()
-                                records = df_clean_h.to_dict(orient="records")
-                                for k in range(0, len(records), 1000):
-                                    client.table("tarihsel_desi_tablosu").insert(records[k:k+1000]).execute()
-                                st.success("🎉 Tarihsel veriler kalıcı olarak kaydedildi! Artık her defasında yüklemenize gerek yok.")
-                            except Exception as ex:
-                                st.error(f"Hata: {ex}")
-                            
-        with t_curr:
-            up_2026 = st.file_uploader("2026 Güncel Desi Dosyası", type=["xlsx", "csv"], key="up_2026_9")
-            if up_2026:
-                df_raw_26 = pd.read_csv(up_2026) if up_2026.name.endswith(".csv") else pd.read_excel(up_2026)
-                st.session_state.df_2026_current = optimize_and_conform_schema(df_raw_26)
-                st.success("2026 verisi hafızaya alındı!")
-                st.dataframe(st.session_state.df_2026_current.head(3), use_container_width=True)
+        work = df.copy()
+        work["Müşteri Kodu"] = work["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        work = work[work["Müşteri Kodu"] != ""]
 
-        with t_fin:
-            if st.button("🚀 Verileri Birleştir ve Büyüme Motorunu Başlat", type="primary", use_container_width=True):
-                df_h = st.session_state.get("df_tarihsel_history", pd.DataFrame(columns=NIHAI_SUTUNLAR_9))
-                df_c = st.session_state.get("df_2026_current", pd.DataFrame(columns=NIHAI_SUTUNLAR_9))
-                
-                if not df_h.empty or not df_c.empty:
-                    df_master_long = pd.concat([df_h, df_c], ignore_index=True)
-                    
-                    # 🌟 KÖPRÜ: 31 Sütunlu DB Formatını -> Uygulamanın anladığı Geniş (WIDE) formata Pivotluyoruz
-                    static_cols = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"]
-                    ex_static = [c for c in static_cols if c in df_master_long.columns]
-                    
-                    df_g = df_master_long.groupby(ex_static + ["Yıl"], as_index=False)[AY_KOLONLARI_9 + ["Toplam Desi"]].sum()
-                    df_w = df_g.pivot(index=ex_static, columns="Yıl", values=AY_KOLONLARI_9 + ["Toplam Desi"])
-                    
-                    # Hiyerarşik sütunları (Örn: 'Ocak Desi', '2024') -> '2024 Ocak Desi' yapıyoruz
-                    df_w.columns = [f"{yil} {ay_col}" for ay_col, yil in df_w.columns]
-                    df_w = df_w.reset_index().fillna(0.0)
-                    
-                    st.session_state.data_sayfası_df = df_w
-                    st.success("Tüm yıllar başarıyla birleştirildi ve matematiksel modellere beslendi!")
-                    st.rerun()
-                else:
-                    st.warning("Lütfen geçmiş veya güncel yılları yükleyin!")
+        for c in KIMLIK_KOLONLARI_9:
+            if c not in work.columns:
+                work[c] = "DİĞER" if c == "Müşteri Grubu" else ""
+        work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
+            lambda v: temiz_metin_9(v, "DİĞER").upper()
+        )
 
-    # ============================================================
-    # 📈 ESKİ BÜYÜME VE HESAPLAMA MOTORU (AYNEN KORUNDU)
-    # ============================================================
-    if not st.session_state.data_sayfası_df.empty:
-        df_d_src = st.session_state.data_sayfası_df.copy()
-        df_d_src["Müşteri Kodu"] = df_d_src["Müşteri Kodu"].apply(guvenli_metin_kodu)
-        
-        df_distinct_m = df_d_src.drop_duplicates(subset=["Müşteri Kodu"]).copy()
-        st.session_state.buyume_ekran_df = df_distinct_m.reindex(columns=[c for c in buyume_ekran_sutunlari if c not in aylar + ["2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]).copy()
+        ay_esleme = {}
+        for m in aylar:
+            kaynak = f"{m} Desi" if kaynak_31_kolon else f"{yil} {m} Desi"
+            hedef = f"{yil} {m} Desi"
+            if kaynak not in work.columns:
+                work[kaynak] = 0.0
+            work[kaynak] = work[kaynak].apply(guvenli_sayi).astype(float)
+            ay_esleme[kaynak] = hedef
+
+        kimlik_agg = {
+            c: (lambda s, c=c: next(
+                (temiz_metin_9(v, "DİĞER" if c == "Müşteri Grubu" else "")
+                 for v in s if temiz_metin_9(v, "") != ""),
+                "DİĞER" if c == "Müşteri Grubu" else ""
+            ))
+            for c in KIMLIK_KOLONLARI_9 if c != "Müşteri Kodu"
+        }
+        desi_agg = {c: "sum" for c in ay_esleme}
+        sonuc = work.groupby("Müşteri Kodu", as_index=False).agg({**kimlik_agg, **desi_agg})
+        sonuc = sonuc.rename(columns=ay_esleme)
+        sonuc[f"{yil} Toplam Desi"] = sonuc[[f"{yil} {m} Desi" for m in aylar]].sum(axis=1)
+        return sonuc
+
+    def ilk_dolu_deger_9(row, adaylar, varsayilan=""):
+        for c in adaylar:
+            if c in row.index:
+                value = temiz_metin_9(row.get(c), "")
+                if value:
+                    return value
+        return varsayilan
+
+    # ------------------------------------------------------------
+    # 2024-2025: YALNIZCA ANA DATA HAVUZUNDAN
+    # ------------------------------------------------------------
+    data_havuzu_9 = st.session_state.get("data_sayfası_df", pd.DataFrame()).copy()
+    hist_24_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2024")
+    hist_25_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2025")
+
+    mevcut_yillar_9 = []
+    if any(f"2024 {m} Desi" in data_havuzu_9.columns for m in aylar):
+        mevcut_yillar_9.append("2024")
+    if any(f"2025 {m} Desi" in data_havuzu_9.columns for m in aylar):
+        mevcut_yillar_9.append("2025")
+
+    c_bilgi1, c_bilgi2, c_bilgi3 = st.columns(3)
+    c_bilgi1.metric("Ana Data satırı", f"{len(data_havuzu_9):,}")
+    c_bilgi2.metric("Hazır geçmiş yıllar", ", ".join(mevcut_yillar_9) if mevcut_yillar_9 else "Yok")
+    c_bilgi3.metric(
+        "2026 yükleme durumu",
+        f"{len(st.session_state.get('df_2026_buyume_9', pd.DataFrame())):,} satır"
+        if not st.session_state.get("df_2026_buyume_9", pd.DataFrame()).empty else "Bekleniyor"
+    )
+
+    if len(mevcut_yillar_9) < 2:
+        st.warning("2024 ve/veya 2025 desileri ana Data havuzunda bulunamadı. Önce 📁 Data sekmesinden eksik yılı yükleyin veya buluttaki Data revizyonunu çağırın.")
+
+    # ------------------------------------------------------------
+    # 2026: SADECE BU SEKMEDE 31 KOLONLU DOSYA
+    # ------------------------------------------------------------
+    with st.expander("🚀 2026 Güncel Desi Dosyası (31 kolon)", expanded=True):
+        st.markdown(
+            "Dosya yüklendiğinde otomatik işlenir. 2024–2025 verileri yeniden istenmez ve "
+            "ana havuzdaki geçmiş değerler değiştirilmez."
+        )
+        up_2026_9 = st.file_uploader(
+            "2026 güncel desi dosyasını yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="up_2026_only_9"
+        )
+
+        if up_2026_9 is not None:
+            try:
+                df_raw_26_9 = oku_excel_csv_9(up_2026_9)
+                df_clean_26_9, eksik_26_9 = temizle_2026_31_kolon(df_raw_26_9)
+                st.session_state.df_2026_buyume_9 = df_clean_26_9
+                st.success(f"2026 dosyası işlendi: {len(df_clean_26_9):,} satır.")
+                if eksik_26_9:
+                    st.warning(
+                        "Dosyada bulunmadığı için boş oluşturulan kolonlar: "
+                        + ", ".join(eksik_26_9)
+                    )
+            except Exception as ex:
+                st.error(f"2026 dosyası işlenemedi: {ex}")
+
+        df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
+        if not df_2026_raw_9.empty:
+            st.dataframe(df_2026_raw_9.head(20), use_container_width=True, hide_index=True)
+            if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
+                st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+                st.rerun()
+
+    hist_26_9 = musteri_bazinda_ozetle_9(
+        st.session_state.get("df_2026_buyume_9", pd.DataFrame()),
+        "2026",
+        kaynak_31_kolon=True
+    )
+
+    # ------------------------------------------------------------
+    # ÜÇ YILI MÜŞTERİ KODU ÜZERİNDEN TEK HESAPLAMA KAYNAĞINDA BİRLEŞTİR
+    # ------------------------------------------------------------
+    kaynaklar_9 = [df for df in [hist_24_9, hist_25_9, hist_26_9] if not df.empty]
+    if kaynaklar_9:
+        df_calc_9 = kaynaklar_9[0].copy()
+        for siradaki_9 in kaynaklar_9[1:]:
+            df_calc_9 = pd.merge(
+                df_calc_9,
+                siradaki_9,
+                on="Müşteri Kodu",
+                how="outer",
+                suffixes=("", "_yeni")
+            )
+            for c in KIMLIK_KOLONLARI_9:
+                if c == "Müşteri Kodu":
+                    continue
+                yeni_c = f"{c}_yeni"
+                if yeni_c in df_calc_9.columns:
+                    if c not in df_calc_9.columns:
+                        df_calc_9[c] = df_calc_9[yeni_c]
+                    else:
+                        sol = df_calc_9[c].apply(lambda v: temiz_metin_9(v, ""))
+                        sag = df_calc_9[yeni_c].apply(lambda v: temiz_metin_9(v, ""))
+                        df_calc_9[c] = sol.where(sol != "", sag)
+                    df_calc_9 = df_calc_9.drop(columns=[yeni_c])
+        df_calc_9 = df_calc_9.fillna(0)
     else:
-        st.info("Büyüme matrisinin oluşabilmesi için lütfen üstteki menüden verileri birleştirin.")
+        df_calc_9 = pd.DataFrame()
 
-    if not st.session_state.buyume_ekran_df.empty:
-        df_b_work = st.session_state.buyume_ekran_df.copy()
-        df_b_work["Müşteri Kodu"] = df_b_work["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    # ------------------------------------------------------------
+    # MÜŞTERİ BAZLI BÜYÜME MATRİSİ
+    # ------------------------------------------------------------
+    if df_calc_9.empty:
+        st.info("Büyüme matrisini oluşturmak için ana Data havuzunda 2024–2025 verisi bulunmalıdır.")
+    else:
+        st.subheader("📈 Müşteri Bazlı Büyüme Matrisi")
+        karsilastirma_ay_sayisi_9 = st.selectbox(
+            "Karşılaştırmada kullanılacak gerçekleşen ay sayısı",
+            options=list(range(1, 13)),
+            index=8,
+            format_func=lambda x: f"İlk {x} ay",
+            key="karsilastirma_ay_sayisi_9"
+        )
+        secili_aylar_9 = aylar[:karsilastirma_ay_sayisi_9]
+        donem_24_adi_9 = f"2024 ilk {karsilastirma_ay_sayisi_9} ay desi"
+        donem_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay desi"
+        pay_25_adi_9 = f"2025 ilk {karsilastirma_ay_sayisi_9} ay % desi pay"
 
-        desi_24_map = {}
-        desi_25_map = {}
+        for y in ["2024", "2025", "2026"]:
+            for m in aylar:
+                c = f"{y} {m} Desi"
+                if c not in df_calc_9.columns:
+                    df_calc_9[c] = 0.0
+                df_calc_9[c] = df_calc_9[c].apply(guvenli_sayi)
 
-        if not st.session_state.data_sayfası_df.empty:
-            df_ds_calc = st.session_state.data_sayfası_df.copy()
-            df_ds_calc["Müşteri Kodu"] = df_ds_calc["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            
-            cols_24 = [f"2024 {m} Desi" for m in ilk_9_ay]
-            cols_25 = [f"2025 {m} Desi" for m in ilk_9_ay]
-            
-            if all(c in df_ds_calc.columns for c in cols_24):
-                for c in cols_24: df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
-                df_ds_calc["sum_24"] = df_ds_calc[cols_24].sum(axis=1)
-                desi_24_map = df_ds_calc.groupby("Müşteri Kodu")["sum_24"].sum().to_dict()
-                
-            if all(c in df_ds_calc.columns for c in cols_25):
-                for c in cols_25: df_ds_calc[c] = df_ds_calc[c].apply(guvenli_sayi)
-                df_ds_calc["sum_25"] = df_ds_calc[cols_25].sum(axis=1)
-                desi_25_map = df_ds_calc.groupby("Müşteri Kodu")["sum_25"].sum().to_dict()
+        df_calc_9[donem_24_adi_9] = df_calc_9[[f"2024 {m} Desi" for m in secili_aylar_9]].sum(axis=1)
+        df_calc_9[donem_25_adi_9] = df_calc_9[[f"2025 {m} Desi" for m in secili_aylar_9]].sum(axis=1)
+        toplam_25_9 = df_calc_9[donem_25_adi_9].sum()
+        df_calc_9[pay_25_adi_9] = (
+            df_calc_9[donem_25_adi_9] / toplam_25_9 * 100.0 if toplam_25_9 > 0 else 0.0
+        )
+        df_calc_9["Y To Y Desi (%)"] = np.where(
+            df_calc_9[donem_24_adi_9] > 0,
+            (df_calc_9[donem_25_adi_9] / df_calc_9[donem_24_adi_9] - 1.0) * 100.0,
+            0.0
+        )
 
-        final_rows = []
-        for idx, row in df_b_work.iterrows():
-            mkod = str(row["Müşteri Kodu"])
-            dur_v = st.session_state.musteri_ayarlari.get(mkod, {}).get("Durum_2", row.get("Durum", "GEÇERLİ"))
-            if dur_v is None: dur_v = "GEÇERLİ"
+        final_rows_9 = []
+        for _, row in df_calc_9.iterrows():
+            mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
+            ayar = st.session_state.buyume_ayarlari.get(mkod, {})
+            kullanilacak = guvenli_sayi(ayar.get("KULLANICAK BÜYÜME", 0.0))
+            durum = st.session_state.musteri_ayarlari.get(mkod, {}).get(
+                "Durum_2", ilk_dolu_deger_9(row, ["Durum"], "GEÇERLİ")
+            )
+            r = {
+                "Müşteri Kodu": mkod,
+                "Müşteri Adı": ilk_dolu_deger_9(row, ["Müşteri Adı"]),
+                "Müşteri Temsilcisi": ilk_dolu_deger_9(row, ["Müşteri Temsilcisi"]),
+                "Sap Kodu": ilk_dolu_deger_9(row, ["Sap Kodu"]),
+                "Durum": durum or "GEÇERLİ",
+                "Kayıt Tarihi": ilk_dolu_deger_9(row, ["Kayıt Tarihi"]),
+                "Müşteri Grubu": ilk_dolu_deger_9(row, ["Müşteri Grubu"], "DİĞER"),
+                donem_24_adi_9: row[donem_24_adi_9],
+                donem_25_adi_9: row[donem_25_adi_9],
+                pay_25_adi_9: row[pay_25_adi_9],
+                "Y To Y Desi (%)": row["Y To Y Desi (%)"],
+                "25 kullanılan büyüme": ayar.get("25 kullanılan büyüme", ""),
+                "KULLANICAK BÜYÜME": kullanilacak,
+                "Gelen Özet Bilgi": ayar.get("Gelen Özet Bilgi", ""),
+                "Müşteriden Gelen Büyüme": ayar.get("Müşteriden Gelen Büyüme", "")
+            }
+            for m in aylar:
+                r[m] = kullanilacak
+            final_rows_9.append(r)
 
-            d24 = desi_24_map.get(mkod, guvenli_sayi(row.get("2024 ilk 9 ay desi", 0.0)))
-            d25 = desi_25_map.get(mkod, guvenli_sayi(row.get("2025 ilk 9 ay desi", 0.0)))
+        ekran_kolonlari_9 = (
+            KIMLIK_KOLONLARI_9 + aylar +
+            [donem_24_adi_9, donem_25_adi_9, pay_25_adi_9, "Y To Y Desi (%)",
+             "25 kullanılan büyüme", "KULLANICAK BÜYÜME",
+             "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
+        )
+        df_final_b_9 = pd.DataFrame(final_rows_9).reindex(columns=ekran_kolonlari_9)
+        kilitli_9 = [
+            c for c in ekran_kolonlari_9
+            if c not in ["25 kullanılan büyüme", "KULLANICAK BÜYÜME",
+                         "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
+        ]
 
-            if mkod not in st.session_state.buyume_ayarlari:
-                st.session_state.buyume_ayarlari[mkod] = {
+        edited_b_matris = st.data_editor(
+            df_final_b_9,
+            use_container_width=True,
+            height=430,
+            disabled=kilitli_9,
+            column_config={
+                pay_25_adi_9: st.column_config.NumberColumn(pay_25_adi_9, format="%.2f%%"),
+                "Y To Y Desi (%)": st.column_config.NumberColumn("Y To Y Desi (%)", format="%.2f%%"),
+                "KULLANICAK BÜYÜME": st.column_config.NumberColumn("KULLANICAK BÜYÜME", format="%.2f%%"),
+                **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
+            },
+            key=f"buyume_matris_editoru_{karsilastirma_ay_sayisi_9}"
+        )
+
+        # ------------------------------------------------------------
+        # MÜŞTERİ GRUBU SEZON DAĞILIMLARI
+        # ------------------------------------------------------------
+        st.markdown("---")
+        st.subheader("📊 Müşteri Grubu Sezonluk Dağılım Matrisi (%)")
+
+        grup_calc_9 = df_calc_9.copy()
+        grup_calc_9["Müşteri Grubu"] = grup_calc_9["Müşteri Grubu"].apply(
+            lambda v: temiz_metin_9(v, "DİĞER").upper()
+        )
+        grup_calc_9["Müşteri Grubu"] = grup_calc_9["Müşteri Grubu"].where(
+            grup_calc_9["Müşteri Grubu"].isin(["MP", "HOROZ CÜZDAN"]), "DİĞER"
+        )
+        hedef_gruplar_9 = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+
+        grup_totals_9 = {}
+        for y in ["2024", "2025", "2026"]:
+            y_cols = [f"{y} {m} Desi" for m in aylar]
+            grup_totals_9[y] = grup_calc_9.groupby("Müşteri Grubu")[y_cols].sum()
+
+        toplam_2026_ay_9 = {
+            m: grup_totals_9["2026"][f"2026 {m} Desi"].sum()
+            if f"2026 {m} Desi" in grup_totals_9["2026"].columns else 0.0
+            for m in aylar
+        }
+        gerceklesen_aylar_9 = [m for m in aylar if toplam_2026_ay_9[m] > 0]
+        tahmini_aylar_9 = [m for m in aylar if m not in gerceklesen_aylar_9]
+
+        if gerceklesen_aylar_9:
+            st.success("2026 gerçekleşen kabul edilen aylar: " + ", ".join(gerceklesen_aylar_9))
+        if tahmini_aylar_9:
+            st.info(
+                "2026 tahmini tamamlanan aylar: " + ", ".join(tahmini_aylar_9)
+                + ". Bu aylarda 2024 ve 2025 aynı ay desilerinin ortalaması kullanılır."
+            )
+
+        sezon_tabs_9 = st.tabs([
+            "📅 2024 Dağılımı",
+            "📅 2025 Dağılımı",
+            "📅 2026 Gerçekleşen + Tahmin"
+        ])
+
+        for tab_index_9, target_yil_9 in enumerate(["2024", "2025", "2026"]):
+            with sezon_tabs_9[tab_index_9]:
+                sezon_rows_9 = []
+                for grp in hedef_gruplar_9:
+                    ham_aylar_9 = []
+                    kaynak_tipi_9 = []
+                    for m in aylar:
+                        col = f"{target_yil_9} {m} Desi"
+                        val = (
+                            guvenli_sayi(grup_totals_9[target_yil_9].loc[grp, col])
+                            if grp in grup_totals_9[target_yil_9].index else 0.0
+                        )
+                        kaynak = "Gerçekleşen"
+
+                        if target_yil_9 == "2026" and m in tahmini_aylar_9:
+                            val24 = (
+                                guvenli_sayi(grup_totals_9["2024"].loc[grp, f"2024 {m} Desi"])
+                                if grp in grup_totals_9["2024"].index else 0.0
+                            )
+                            val25 = (
+                                guvenli_sayi(grup_totals_9["2025"].loc[grp, f"2025 {m} Desi"])
+                                if grp in grup_totals_9["2025"].index else 0.0
+                            )
+                            dolu_gecmis = [v for v in [val24, val25] if v > 0]
+                            val = sum(dolu_gecmis) / len(dolu_gecmis) if dolu_gecmis else 0.0
+                            kaynak = "2024-2025 Ortalaması"
+
+                        ham_aylar_9.append(val)
+                        kaynak_tipi_9.append(kaynak)
+
+                    yillik_toplam_9 = sum(ham_aylar_9)
+                    row_9 = {"Müşteri Grubu": grp}
+                    for j, m in enumerate(aylar):
+                        row_9[m] = (
+                            ham_aylar_9[j] / yillik_toplam_9 * 100.0
+                            if yillik_toplam_9 > 0 else 0.0
+                        )
+                    row_9["Toplam (%)"] = sum(row_9[m] for m in aylar)
+                    sezon_rows_9.append(row_9)
+
+                sezon_df_9 = pd.DataFrame(sezon_rows_9)
+                st.dataframe(
+                    sezon_df_9,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar},
+                        "Toplam (%)": st.column_config.NumberColumn("Toplam (%)", format="%.2f%%")
+                    }
+                )
+
+        # ------------------------------------------------------------
+        # BÜYÜME AYARLARINI HAFIZAYA / BULUTA KAYDET
+        # ------------------------------------------------------------
+        st.markdown("---")
+        cb_1, cb_2, cb_3 = st.columns(3)
+
+        if cb_1.button(
+            "💾 Büyüme Kartlarını Hafızaya Kaydet",
+            type="primary",
+            use_container_width=True,
+            key="btn_b_hfz_save"
+        ):
+            for _, row in edited_b_matris.iterrows():
+                mk = guvenli_metin_kodu(row["Müşteri Kodu"])
+                st.session_state.buyume_ayarlari[mk] = {
                     "25 kullanılan büyüme": row.get("25 kullanılan büyüme", ""),
                     "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYÜME", 0.0)),
                     "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi", ""),
                     "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme", "")
                 }
-
-            b_set = st.session_state.buyume_ayarlari[mkod]
-            kb_orani = guvenli_sayi(b_set["KULLANICAK BÜYÜME"])
-
-            r_dict = {
-                "Müşteri Kodu": mkod, "Müşteri Adı": row.get("Müşteri Adı", row.get("Ünvan", "")),
-                "Müşteri Temsilcisi": row.get("Müşteri Temsilcisi", row.get("Müşteri Temsilcisi 1", "")),
-                "Sap Kodu": row.get("Sap Kodu", row.get("Sap No", "")), "Durum": dur_v,
-                "Kayıt Tarihi": row.get("Kayıt Tarihi", ""), "Müşteri Grubu": row.get("Müşteri Grubu", ""),
-                "2024 ilk 9 ay desi": d24, "2025 ilk 9 ay desi": d25,
-                "25 kullanılan büyüme": b_set["25 kullanılan büyüme"], "KULLANICAK BÜYÜME": kb_orani,
-                "Gelen Özet Bilgi": b_set["Gelen Özet Bilgi"], "Müşteriden Gelen Büyüme": b_set["Müşteriden Gelen Büyüme"]
-            }
-
-            for m in aylar: r_dict[m] = kb_orani / 100.0
-            final_rows.append(r_dict)
-
-        df_final_b = pd.DataFrame(final_rows)
-        total_25_desi = df_final_b["2025 ilk 9 ay desi"].sum()
-        df_final_b["2025 % desi pay"] = df_final_b["2025 ilk 9 ay desi"] / total_25_desi if total_25_desi > 0 else 0.0
-        df_final_b["Y To Y Desi"] = df_final_b.apply(lambda r: (r["2025 ilk 9 ay desi"] / r["2024 ilk 9 ay desi"] - 1) if r["2024 ilk 9 ay desi"] > 0 else 0.0, axis=1)
-        df_final_b = df_final_b.reindex(columns=buyume_ekran_sutunlari)
-
-        kilitli_b_cols = [c for c in buyume_ekran_sutunlari if c not in ["25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]]
-
-        edited_b_matris = st.data_editor(
-            df_final_b, use_container_width=True, height=400, disabled=kilitli_b_cols,
-            column_config={
-                "2025 % desi pay": st.column_config.NumberColumn("2025 % desi pay", format="%.2f%%"),
-                "Y To Y Desi": st.column_config.NumberColumn("Y To Y Desi", format="%.2f%%"),
-                "KULLANICAK BÜYÜME": st.column_config.NumberColumn("KULLANICAK BÜYÜME", format="%.2f"),
-                **{m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
-            }, key="buyume_matris_editoru"
-        )
-
-        # ============================================================
-        # 📊 MÜŞTERİ GRUBU SEZONSELLİK DAĞILIM MATRİSİ (%100 BAZLI) - ÖNGÖRÜ DOLGULU 🚀
-        # ============================================================
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.subheader("📊 Müşteri Grubu Sezonluk Dağılım Matrisi (%)")
-        st.markdown("1. Sekmedeki veri havuzuna göre müşteri gruplarının kendi içindeki aylık yük dağılım yüzdeleri. *(Not: 2026'nın henüz gerçekleşmemiş ayları 2024 ve 2025 ortalamasıyla tamamlanarak yatayda %100 dengesi kurulmuştur.)*")
-
-        hedef_gruplar = ["MP", "HOROZ CÜZDAN", "DİĞER"]
-        sezon_sekmeleri = st.tabs(["📅 2024 Dağılım Trendi", "📅 2025 Dağılım Trendi", "📅 2026 Dağılım Trendi (Öngörü Düzeltmeli)"])
-
-        if not st.session_state.data_sayfası_df.empty and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
-            df_g_calc = st.session_state.data_sayfası_df.copy()
-            df_g_calc["Müşteri Grubu"] = df_g_calc["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
-            
-            grup_totals = {}
-            for y in ["2024", "2025", "2026"]:
-                hedef_sutunlar = [f"{y} {m} Desi" for m in aylar]
-                mevcut_sutunlar = [c for c in hedef_sutunlar if c in df_g_calc.columns]
-                
-                for c in mevcut_sutunlar:
-                    df_g_calc[c] = pd.to_numeric(df_g_calc[c].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-                    
-                if mevcut_sutunlar:
-                    grup_totals[y] = df_g_calc.groupby("Müşteri Grubu")[mevcut_sutunlar].sum()
-                else:
-                    grup_totals[y] = pd.DataFrame()
-        else:
-            grup_totals = {"2024": pd.DataFrame(), "2025": pd.DataFrame(), "2026": pd.DataFrame()}
-
-        for i, target_yr in enumerate(["2024", "2025", "2026"]):
-            with sezon_sekmeleri[i]:
-                grup_matris_rows = []
-                
-                df_yr_totals = grup_totals.get(target_yr, pd.DataFrame())
-                df_24_totals = grup_totals.get("2024", pd.DataFrame())
-                df_25_totals = grup_totals.get("2025", pd.DataFrame())
-
-                for grp in hedef_gruplar:
-                    r_g = {"Müşteri Grubu": grp}
-                    aylik_ham_degerler = []
-                    
-                    for m in aylar:
-                        val = 0.0
-                        col_name = f"{target_yr} {m} Desi"
-                        
-                        if not df_yr_totals.empty and grp in df_yr_totals.index and col_name in df_yr_totals.columns:
-                            val = df_yr_totals.loc[grp, col_name]
-                        
-                        # 🌟 2026 EKSİK AY ORTALAMA TAMAMLAMA MOTORU 🌟
-                        if target_yr == "2026":
-                            eksik_aylar = ["Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
-                            if m in eksik_aylar or val <= 0:
-                                val_24 = df_24_totals.loc[grp, f"2024 {m} Desi"] if (not df_24_totals.empty and grp in df_24_totals.index and f"2024 {m} Desi" in df_24_totals.columns) else 0.0
-                                val_25 = df_25_totals.loc[grp, f"2025 {m} Desi"] if (not df_25_totals.empty and grp in df_25_totals.index and f"2025 {m} Desi" in df_25_totals.columns) else 0.0
-                                val = (val_24 + val_25) / 2.0
-                                
-                        aylik_ham_degerler.append(val)
-                    
-                    yillik_toplam = sum(aylik_ham_degerler)
-                    for j, m in enumerate(aylar):
-                        r_g[m] = (aylik_ham_degerler[j] / yillik_toplam * 100) if yillik_toplam > 0 else 0.0
-                        
-                    grup_matris_rows.append(r_g)
-                
-                df_grup_sezonsallik_view = pd.DataFrame(grup_matris_rows)
-                st.dataframe(
-                    df_grup_sezonsallik_view,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={m: st.column_config.NumberColumn(m, format="%.2f%%") for m in aylar}
-                )
-
-        # Bulut akış butonları grubu
-        st.markdown("---")
-        cb_1, cb_2, cb_3 = st.columns(3)
-
-        if cb_1.button("💾 Büyüme Kartlarını Hafızaya Kaydet", type="primary", use_container_width=True, key="btn_b_hfz_save"):
-            for idx, row in edited_b_matris.iterrows():
-                mk = str(row["Müşteri Kodu"])
-                st.session_state.buyume_ayarlari[mk] = {
-                    "25 kullanılan büyüme": row["25 kullanılan büyüme"], "KULLANICAK BÜYÜME": guvenli_sayi(row["KULLANICAK BÜYÜME"]),
-                    "Gelen Özet Bilgi": row["Gelen Özet Bilgi"], "Müşteriden Gelen Büyüme": row["Müşteriden Gelen Büyüme"]
-                }
-            st.success("Büyüme stratejileri hafızaya mühürlendi! (12 aya flat yayılım uygulandı)")
+            st.success("Büyüme stratejileri hafızaya kaydedildi ve 12 aya eşit uygulandı.")
             st.rerun()
 
         if rev_secenekleri:
-            r_id_b = rev_secenekleri[cb_2.selectbox("Büyüme İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_b_rev_box")]
-            
-            if cb_2.button("💾 Büyüme Verilerini Buluta Gönder", use_container_width=True, key="btn_b_cloud_save"):
-                izin_verilen_b_db = ["Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu", "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"]
-                b_records = [{col: json_uyumlu_deger(row[col]) for col in izin_verilen_b_db if col in row} for _, row in edited_b_matris.iterrows()]
-                for r in b_records: r["revizyon_id"] = r_id_b
-                client.table("buyume_tablosu").delete().eq("revizyon_id", r_id_b).execute()
-                for i in range(0, len(b_records), 500): client.table("buyume_tablosu").insert(b_records[i:i+500]).execute()
-                st.success("🎉 Müşteri büyüme oranları başarıyla mühürlendi!")
+            r_id_b = rev_secenekleri[
+                cb_2.selectbox(
+                    "Büyüme İçin Bulut Versiyonu:",
+                    list(rev_secenekleri.keys()),
+                    key="sb_b_rev_box"
+                )
+            ]
 
-            if cb_3.button("🔄 Dosyasız Buluttan Büyüme Kartlarını Çek", use_container_width=True, key="btn_b_cloud_load"):
-                b_res = client.table("buyume_tablosu").select("*").eq("revizyon_id", r_id_b).execute()
+            if cb_2.button(
+                "💾 Büyüme Verilerini Buluta Gönder",
+                use_container_width=True,
+                key="btn_b_cloud_save"
+            ):
+                izin_verilen_b_db = [
+                    "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu",
+                    "Durum", "Kayıt Tarihi", "Müşteri Grubu", "25 kullanılan büyüme",
+                    "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
+                ]
+                b_records = [
+                    {
+                        col: json_uyumlu_deger(row[col])
+                        for col in izin_verilen_b_db if col in row.index
+                    }
+                    for _, row in edited_b_matris.iterrows()
+                ]
+                for record in b_records:
+                    record["revizyon_id"] = r_id_b
+                client.table("buyume_tablosu").delete().eq("revizyon_id", r_id_b).execute()
+                for i in range(0, len(b_records), 500):
+                    client.table("buyume_tablosu").insert(b_records[i:i + 500]).execute()
+                st.success("🎉 Müşteri büyüme oranları başarıyla kaydedildi.")
+
+            if cb_3.button(
+                "🔄 Dosyasız Buluttan Büyüme Kartlarını Çek",
+                use_container_width=True,
+                key="btn_b_cloud_load"
+            ):
+                b_res = client.table("buyume_tablosu").select("*").eq(
+                    "revizyon_id", r_id_b
+                ).execute()
                 if b_res.data:
                     gelen_b_df = pd.DataFrame(b_res.data)
-                    if "id" in gelen_b_df.columns: gelen_b_df = gelen_b_df.drop(columns=["id"])
-                    st.session_state.buyume_ekran_df = gelen_b_df.copy()
                     for _, row in gelen_b_df.iterrows():
-                        mk = str(row["Müşteri Kodu"])
+                        mk = guvenli_metin_kodu(row.get("Müşteri Kodu"))
                         st.session_state.buyume_ayarlari[mk] = {
-                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme"), "KULLANICAK BÜYÜME": guvenli_sayi(row.get("KULLANICAK BÜYUBME")),
-                            "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi"), "Müşteriden Gelen Büyüme": row.get("Müşteriden Gelen Büyüme")
+                            "25 kullanılan büyüme": row.get("25 kullanılan büyüme", ""),
+                            "KULLANICAK BÜYÜME": guvenli_sayi(
+                                row.get("KULLANICAK BÜYÜME", 0.0)
+                            ),
+                            "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi", ""),
+                            "Müşteriden Gelen Büyüme": row.get(
+                                "Müşteriden Gelen Büyüme", ""
+                            )
                         }
-                    st.success("🎉 Senaryo bağımsız olarak buluttan çekildi.")
+                    st.success("🎉 Büyüme kartları buluttan getirildi.")
                     st.rerun()
-                else: st.warning("Bu revizyona ait büyüme kaydı bulunamadı.")
+                else:
+                    st.warning("Seçili revizyonda kayıtlı büyüme kartı bulunamadı.")
