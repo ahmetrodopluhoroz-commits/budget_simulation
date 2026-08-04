@@ -1053,7 +1053,7 @@ with sekmeler[8]:
         "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
         "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi",
         "Ocak Kg", "Şubat Kg", "Mart Kg", "Nisan Kg", "Mayıs Kg", "Haziran Kg",
-        "Temmuz Kg", "Ağustos Kg", "Eylüll Kg", "Ekim Kg", "Kasım Kg", "Aralık Kg",
+        "Temmuz Kg", "Ağustos Kg", "Eylül Kg", "Ekim Kg", "Kasım Kg", "Aralık Kg",
         "Toplam Kg"
     ]
     AY_KOLONLARI_9 = [f"{m} Kg" for m in aylar]
