@@ -1209,10 +1209,12 @@ with sekmeler[8]:
 
         df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
         if not df_2026_raw_9.empty:
-            # 🌟 EN ALT SATIRA TÜM SATIRLARI KAPSAYAN GENEL TOPLAM EKLEME
+            # 🌟 DİNAMİK ALT TOPLAM HESAPLAMA MOTORU
             df_display_2026 = df_2026_raw_9.copy()
             toplam_satiri = {}
+            
             for col in df_display_2026.columns:
+                # Sütun adında 'Kg' geçen tüm aylık ve toplam sütunları topla
                 if "Kg" in col:
                     toplam_satiri[col] = df_display_2026[col].apply(guvenli_sayi).sum()
                 elif col in ["Müşteri Adı", "Müşteri Kodu"]:
@@ -1220,9 +1222,12 @@ with sekmeler[8]:
                 else:
                     toplam_satiri[col] = ""
             
+            # Oluşturulan genel toplam satırını tablonun en altına ekle
             df_display_2026 = pd.concat([df_display_2026, pd.DataFrame([toplam_satiri])], ignore_index=True)
             
+            # Tabloyu göster
             st.dataframe(df_display_2026, use_container_width=True, hide_index=True)
+            
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
                 st.rerun()
