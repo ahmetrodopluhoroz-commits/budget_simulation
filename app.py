@@ -3,35 +3,14 @@ import pandas as pd
 import numpy as np
 import io
 import json
+import os
 from datetime import date, datetime
 
-# Kalıcı dosya yolları
-FILE_2024_PATH = "data_2024_cache.parquet"
-FILE_2025_PATH = "data_2025_cache.parquet"
-
-# --- 2024 VERİSİ OTOMATİK HAFİZAYA ALMA ---
-if "df_2024_buyume_9" not in st.session_state or st.session_state["df_2024_buyume_9"].empty:
-    if os.path.exists(FILE_2024_PATH):
-        st.session_state["df_2024_buyume_9"] = pd.read_parquet(FILE_2024_PATH)
-
-# --- 2025 VERİSİ OTOMATİK HAFİZAYA ALMA ---
-if "df_2025_buyume_9" not in st.session_state or st.session_state["df_2025_buyume_9"].empty:
-    if os.path.exists(FILE_2025_PATH):
-        st.session_state["df_2025_buyume_9"] = pd.read_parquet(FILE_2025_PATH)
-
-# Excel okunup dataframe (df_2024) oluştuktan hemen sonra:
-st.session_state["df_2024_buyume_9"] = df_2024
-
-# 🌟 EKLEYECEĞİN SATIR: Disk üzerine kalıcı kaydet
-df_2024.to_parquet(FILE_2024_PATH, index=False)
-st.success("✅ 2024 verisi kalıcı olarak kaydedildi! Artık F5 yapsanız da silinmeyecek.")
-
-# Excel okunup dataframe (df_2025) oluştuktan hemen sonra:
-st.session_state["df_2025_buyume_9"] = df_2025
-
-# 🌟 EKLEYECEĞİN SATIR: Disk üzerine kalıcı kaydet
-df_2025.to_parquet(FILE_2025_PATH, index=False)
-st.success("✅ 2025 verisi kalıcı olarak kaydedildi! Artık F5 yapsanız da silinmeyecek.")
+# ============================================================
+# 💾 YEREL ÖNBELLEK (CACHE) DOSYA YOLLARI (F5 KORUMASI)
+# ============================================================
+CACHE_DATA_MASTER = "cache_data_master.parquet"
+CACHE_2026_B = "cache_2026_buyume.parquet"
 
 try:
     from supabase import create_client, Client
@@ -125,9 +104,20 @@ buyume_ekran_sutunlari = [
 ]
 
 # ============================================================
-# SESSION STATE & BULUT BAĞLANTISI
+# SESSION STATE & BULUT BAĞLANTISI (OTOMATİK YÜKLEME DAHİL)
 # ============================================================
-if "data_sayfası_df" not in st.session_state: st.session_state.data_sayfası_df = pd.DataFrame(columns=data_ekran_sutunlari)
+if "data_sayfası_df" not in st.session_state: 
+    if os.path.exists(CACHE_DATA_MASTER):
+        st.session_state.data_sayfası_df = pd.read_parquet(CACHE_DATA_MASTER)
+    else:
+        st.session_state.data_sayfası_df = pd.DataFrame(columns=data_ekran_sutunlari)
+
+if "df_2026_buyume_9" not in st.session_state:
+    if os.path.exists(CACHE_2026_B):
+        st.session_state.df_2026_buyume_9 = pd.read_parquet(CACHE_2026_B)
+    else:
+        st.session_state.df_2026_buyume_9 = pd.DataFrame()
+
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "editor_key" not in st.session_state: st.session_state.editor_key = 0
 if "musteri_ayarlari" not in st.session_state: st.session_state.musteri_ayarlari = {}
@@ -241,7 +231,7 @@ if client:
     except: pass
 
 # ------------------------------------------------------------
-# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU (ULTRA HIZLI METRİK KALKANI 🚀)
+# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU
 # ------------------------------------------------------------
 with sekmeler[0]:
     st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
@@ -252,7 +242,7 @@ with sekmeler[0]:
     with c_cfg1:
         secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
     with c_cfg2:
-        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Kg Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Kg (Örn: Ocak Kg)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
+        metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Kg Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
 
     sabit_data_sutunlari = [
         "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
@@ -270,9 +260,9 @@ with sekmeler[0]:
             df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
             df_d_giren["Müşteri Kodu"] = df_d_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
             
-            sonek = " Kg" if "Kg" in metrik_tipi else (" Kg" if "Kg" in metrik_tipi else " Tutar")
+            sonek = " Kg" if "Kg" in metrik_tipi else " Tutar"
             
-            # 🎯 EN HIZLI RAM OPTİMİZASYONU: GEÇMİŞ YILLARDA (2024-2025) VERİYİ MÜŞTERİ BAZINDA ÖZETLEYEREK SIKIŞTIRMA
+            # 🎯 EN HIZLI RAM OPTİMİZASYONU
             if secilen_yil in ["2024", "2025"]:
                 mapped_cols = {}
                 for ay in aylar:
@@ -322,6 +312,8 @@ with sekmeler[0]:
                             st.session_state.data_sayfası_df = st.session_state.data_sayfası_df.drop(columns=[f"{col}_new"])
                 
                 st.success(f"🎉 {secilen_yil} yılı geçmiş verisi Müşteri bazında özetlenerek hafızaya sıkıştırıldı! RAM yükü engellendi.")
+                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
+                st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
 
             else:
                 join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
@@ -396,6 +388,8 @@ with sekmeler[0]:
                     st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
                     
                 st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
+                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
+                st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
 
     if st.session_state.pop("data_bulut_yukleme_basarili", False):
         st.success("🎉 Kayıtlı Data havuzu buluttan getirildi. 2024 ve 2025 değerleri artık büyüme sayfasında kullanılabilir.")
@@ -533,6 +527,8 @@ with sekmeler[0]:
 
                     st.session_state.data_sayfası_df = gelen_d_df
                     st.session_state.data_bulut_yukleme_basarili = True
+                    # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI İÇİN YEREL KOPYA)
+                    st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
                     st.rerun()
                 else:
                     st.warning("Seçilen revizyona ait mühürlenmiş Data kaydı bulunamadı.")
@@ -735,7 +731,7 @@ with sekmeler[2]:
                 
                 if abs(eski - yeni) > 0.0001:
                     degisim_var = True
-                    st.session_state.takvim_verION_yillar = just_real_years
+                    st.session_state.takvim_verisi_yillar = just_real_years
                     st.session_state.takvim_verisi_yillar.at[i, m] = yeni
                     
         if degisim_var:
@@ -1072,9 +1068,6 @@ with sekmeler[8]:
     st.title("📈 Müşteri Büyüme Oranları ve Kg Simülasyonu")
     st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel Kg dosyası yüklenir.")
 
-    # ------------------------------------------------------------
-    # 9. SEKME YARDIMCI TANIMLARI
-    # ------------------------------------------------------------
     NIHAI_SUTUNLAR_9 = [
         "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
         "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı",
@@ -1111,7 +1104,6 @@ with sekmeler[8]:
         return pd.read_excel(uploaded_file)
 
     def temizle_2026_31_kolon(df_raw):
-        """31 kolonlu 2026 dosyasını güvenli biçimde temizler; metinleri bozmaz."""
         df = df_raw.copy()
         df.columns = [str(c).strip() for c in df.columns]
 
@@ -1136,7 +1128,6 @@ with sekmeler[8]:
         return df[NIHAI_SUTUNLAR_9], eksik_kolonlar
 
     def musteri_bazinda_ozetle_9(df, yil, kaynak_31_kolon=False):
-        """Kaynağı müşteri bazına indirir ve sütunları '2026 Ocak Kg' biçimine getirir."""
         if df is None or df.empty or "Müşteri Kodu" not in df.columns:
             return pd.DataFrame(columns=KIMLIK_KOLONLARI_9)
 
@@ -1226,6 +1217,9 @@ with sekmeler[8]:
                 df_raw_26_9 = oku_excel_csv_9(up_2026_9)
                 df_clean_26_9, eksik_26_9 = temizle_2026_31_kolon(df_raw_26_9)
                 st.session_state.df_2026_buyume_9 = df_clean_26_9
+                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
+                df_clean_26_9.to_parquet(CACHE_2026_B, index=False)
+                
                 st.success(f"2026 dosyası işlendi: {len(df_clean_26_9):,} satır.")
                 if eksik_26_9:
                     st.warning(
@@ -1239,13 +1233,11 @@ with sekmeler[8]:
         if not df_2026_raw_9.empty:
             df_work_2026 = df_2026_raw_9.copy()
             
-            # 1. Tüm Kg sütunlarını sayısal tipe dönüştür ve toplamlarını hesapla
             kg_sutunlari = [c for c in df_work_2026.columns if "Kg" in c]
             toplam_dict = {}
             
             for col in df_work_2026.columns:
                 if col in kg_sutunlari:
-                    # Sayıları güvenli şekilde float'a çevirip topla
                     sayisal_seri = pd.to_numeric(
                         df_work_2026[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False),
                         errors='coerce'
@@ -1257,18 +1249,15 @@ with sekmeler[8]:
                 else:
                     toplam_dict[col] = "-"
             
-            # 2. Üst Özet Metrik Kartı
             genel_toplam_kg = toplam_dict.get("Toplam Kg", 0.0)
             st.metric(
                 label="📊 2026 YILI TOPLAM SEVKİYAT (Kg)", 
                 value=f"{genel_toplam_kg:,.0f} Kg".replace(",", " ")
             )
 
-            # 3. Genel Toplam Satırını Oluştur ve TABLONUN EN ÜSTÜNE (Index 0) Ekle
             df_toplam_satiri = pd.DataFrame([toplam_dict])
             df_gosterim = pd.concat([df_toplam_satiri, df_work_2026], ignore_index=True)
             
-            # 4. Tabloyu Ekrana Bas (Genel Toplam ilk satırda görünecek)
             st.dataframe(
                 df_gosterim, 
                 use_container_width=True, 
@@ -1280,6 +1269,8 @@ with sekmeler[8]:
             
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+                if os.path.exists(CACHE_2026_B):
+                    os.remove(CACHE_2026_B)
                 st.rerun()
 
     hist_26_9 = musteri_bazinda_ozetle_9(
