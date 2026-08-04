@@ -246,7 +246,6 @@ with sekmeler[0]:
             
             # 🎯 EN HIZLI RAM OPTİMİZASYONU: GEÇMİŞ YILLARDA (2024-2025) VERİYİ MÜŞTERİ BAZINDA ÖZETLEYEREK SIKIŞTIRMA
             if secilen_yil in ["2024", "2025"]:
-                # Geçmiş yıllar için ham dosyadan sadece hacim içeren kolonları bul ve sayıya çevir
                 mapped_cols = {}
                 for ay in aylar:
                     for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
@@ -255,7 +254,6 @@ with sekmeler[0]:
                             mapped_cols[col] = f"{secilen_yil} {ay} Kg"
                             break
                 
-                # Sadece Müşteri Kodu, Müşteri Grubu ve Hacimleri filtrele ve gruplayarak topla
                 grup_sutunlari = ["Müşteri Kodu"]
                 if "Müşteri Grubu" in df_d_giren.columns:
                     grup_sutunlari.append("Müşteri Grubu")
@@ -265,11 +263,9 @@ with sekmeler[0]:
                 df_compressed = df_d_giren[keep_cols].rename(columns=mapped_cols)
                 df_summary = df_compressed.groupby(grup_sutunlari, as_index=False).sum()
                 
-                # Toplam kolonunu vektörel ekle
                 calc_cols = [v for v in mapped_cols.values()]
                 df_summary[f"{secilen_yil} Toplam Kg"] = df_summary[calc_cols].sum(axis=1)
                 
-                # Mevcut veri havuzu boş ise şablonu ata, dolu ise sadece Müşteri Kodu bazında yanal merge yap
                 if st.session_state.data_sayfası_df.empty:
                     df_base = pd.DataFrame(columns=data_ekran_sutunlari)
                     df_base["Müşteri Kodu"] = df_summary["Müşteri Kodu"]
@@ -292,7 +288,6 @@ with sekmeler[0]:
                         how="left",
                         suffixes=('', '_new')
                     )
-                    # Çakışan kolonları temizle
                     for col in calc_cols + [f"{secilen_yil} Toplam Kg"]:
                         if f"{col}_new" in st.session_state.data_sayfası_df.columns:
                             st.session_state.data_sayfası_df[col] = st.session_state.data_sayfası_df[col].fillna(0.0) + st.session_state.data_sayfası_df[f"{col}_new"].fillna(0.0)
@@ -301,7 +296,6 @@ with sekmeler[0]:
                 st.success(f"🎉 {secilen_yil} yılı geçmiş verisi Müşteri bazında özetlenerek hafızaya sıkıştırıldı! RAM yükü engellendi.")
 
             else:
-                # 🎯 2026 ASIL DETAYLI İŞLEM YILI YÜKLEME STRATEJİSİ
                 join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
                 for c in join_cols:
                     if c not in df_d_giren.columns: df_d_giren[c] = ""
@@ -326,7 +320,6 @@ with sekmeler[0]:
 
                 fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
                 if not st.session_state.ana_veri.empty:
-                    # ÇÖZÜM: assign() yerine köşeli parantez ile standart atama yapıyoruz
                     av_df = st.session_state.ana_veri.copy()
                     av_df["Müşteri Kodu"] = av_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
                     
@@ -376,7 +369,6 @@ with sekmeler[0]:
                     
                 st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
 
-    # Arayüz Gösterim Ekranı
     if st.session_state.pop("data_bulut_yukleme_basarili", False):
         st.success("🎉 Kayıtlı Data havuzu buluttan getirildi. 2024 ve 2025 değerleri artık büyüme sayfasında kullanılabilir.")
 
@@ -399,8 +391,6 @@ with sekmeler[0]:
     else:
         st.info("Lütfen işlem yapmak istediğiniz ham operasyonel Excel/CSV dosyanızı yükleyin ya da alttaki butondan bulut yedeğinizi çağırın.")
 
-    # Bu bölüm özellikle veri havuzu boşken de görünür. Böylece uygulama ilk
-    # açıldığında dosya yüklemeden daha önce mühürlenmiş kayıt çağrılabilir.
     st.markdown("---")
     st.subheader("☁️ Bulut Data Kaydı")
     st.caption("2024 ve 2025'i bir kez mühürleyin; sonraki oturumlarda aynı versiyonu seçip buluttan getirin.")
@@ -578,7 +568,6 @@ with sekmeler[1]:
         df_nihai.columns = [str(c).strip() for c in df_nihai.columns]
         df_nihai = df_nihai.reindex(columns=tum_kolonlar)
         
-        # ⚡ VEKTÖREL HESAPLAMA MOTORU (HIZ OPTİMİZE)
         for ay in aylar:
             Kg_col, fiyat_col, tutar_col = f"2025 {ay} Kg", f"2025 {ay} Fiyat", f"2025 {ay} Tutar"
             df_nihai[Kg_col] = pd.to_numeric(df_nihai[Kg_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
@@ -636,14 +625,10 @@ with sekmeler[2]:
     st.title("📅 Operasyonel Çalışma Günleri Takvimi")
     st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. Yapılan değişiklikleri **Buluta Kaydet** butonu ile kalıcı hale getirebilir veya **Excel** olarak indirebilirsiniz.")
 
-    # 🚀 @st.fragment KALKANI: Tüm uygulamayı yormadan sadece takvim işlemlerini ışık hızında yapar
     @st.fragment
     def takvim_modulunu_calistir():
-        # 1. OTOMATİK BULUT BAĞLANTISI VE HAFIZA KURULUMU
         if "takvim_verisi_yillar" not in st.session_state:
             takvim_yuklendi_mi = False
-            
-            # Uygulama ilk açıldığında veriyi otomatik olarak buluttan çekmeyi dene
             if client:
                 try:
                     tk_res = client.table("takvim_tablosu").select("*").execute()
@@ -651,14 +636,12 @@ with sekmeler[2]:
                         df_cloud_tk = pd.DataFrame(tk_res.data)
                         if "id" in df_cloud_tk.columns: 
                             df_cloud_tk = df_cloud_tk.drop(columns=["id"])
-                        # Sütun sıralamasını garanti altına alıyoruz
                         takvim_sirasi = ["YIL"] + aylar
                         st.session_state.takvim_verisi_yillar = df_cloud_tk[takvim_sirasi]
                         takvim_yuklendi_mi = True
                 except:
-                    pass # Bulut tablosu henüz yoksa veya hata verirse varsayılana düşer
+                    pass
             
-            # Eğer bulutta veri yoksa şablonu varsayılan değerlerle oluştur
             if not takvim_yuklendi_mi:
                 st.session_state.takvim_verisi_yillar = pd.DataFrame([
                     {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
@@ -667,19 +650,16 @@ with sekmeler[2]:
                     {"YIL": "2027", "Ocak": 0, "Şubat": 0, "Mart": 0, "Nisan": 0, "Mayıs": 0, "Haziran": 0, "Temmuz": 0, "Ağustos": 0, "Eylül": 0, "Ekim": 0, "Kasım": 0, "Aralık": 0}
                 ])
 
-        # 2. CANLI MATEMATİKSEL FORMÜLLERİN ÇALIŞTIRILMASI
         df_yillar = st.session_state.takvim_verisi_yillar.copy()
         for m in aylar:
             df_yillar[m] = pd.to_numeric(df_yillar[m].apply(guvenli_sayi), errors='coerce').fillna(0.0)
             
-        # Satır bazlı yıllık toplam gün formülü
         df_yillar["Toplam"] = df_yillar[aylar].sum(axis=1)
 
         def yil_satiri_getir(yr_str):
             match = df_yillar[df_yillar["YIL"] == yr_str]
             return match.iloc[0] if not match.empty else None
 
-        # Geçmişe dönük oran satırlarının dinamik hesaplanması
         ratio_rows = []
         oran_kurgulari = [
             ("2026", "2027", "26to27"),
@@ -703,7 +683,6 @@ with sekmeler[2]:
         df_ratios = pd.DataFrame(ratio_rows)
         combined_calendar_df = pd.concat([df_yillar, df_ratios], ignore_index=True)
 
-        # 3. GELİŞMİŞ VERİ EDİTÖRÜ GÖSTERİMİ
         edited_calendar = st.data_editor(
             combined_calendar_df,
             use_container_width=True,
@@ -717,7 +696,6 @@ with sekmeler[2]:
             key="dynamic_operational_calendar_editor"
         )
 
-        # 4. DEĞİŞİKLİKLERİ ANLIK HAFIZAYA İŞLEME MOTORU
         satir_sayisi = len(st.session_state.takvim_verisi_yillar)
         just_real_years = edited_calendar.iloc[:satir_sayisi].copy()
         
@@ -729,18 +707,16 @@ with sekmeler[2]:
                 
                 if abs(eski - yeni) > 0.0001:
                     degisim_var = True
-                    st.session_state.takvim_verION_yillar = just_real_years # Güncel matrisi kilitle
+                    st.session_state.takvim_verION_yillar = just_real_years
                     st.session_state.takvim_verisi_yillar.at[i, m] = yeni
                     
         if degisim_var:
             try: st.rerun(scope="fragment")
             except: st.rerun()
 
-        # 5. 📥 EXCEL İNDİRME VE 💾 BULUTA KAYDETME PANELİ
         st.markdown("<br>", unsafe_allow_html=True)
         c_tk1, c_tk2 = st.columns(2)
         
-        # Excel İhracat Motoru (Tüm oranlar ve toplamlar dahil tam döküm verir)
         with c_tk1:
             output_tk_excel = io.BytesIO()
             with pd.ExcelWriter(output_tk_excel, engine="openpyxl") as writer:
@@ -754,17 +730,14 @@ with sekmeler[2]:
                 key="btn_tk_excel_download"
             )
             
-        # Bulut Mühürleme Motoru
         with c_tk2:
             if client:
                 if st.button("💾 Değişiklikleri Buluta Kalıcı Kaydet", type="primary", use_container_width=True, key="btn_tk_cloud_save"):
-                    # Oran satırlarını atıp sadece saf yıl verilerini temizce JSON/Sözlük formatına çeviriyoruz
                     clean_save_df = st.session_state.takvim_verisi_yillar.copy()
                     tk_records = [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in clean_save_df.iterrows()]
                     
                     with st.spinner("Takvim bulut ambarına mühürleniyor..."):
                         try:
-                            # Eski takvim kayıtlarını sıfırla ve yenilerini yaz
                             client.table("takvim_tablosu").delete().gte("YIL", "2020").execute()
                             client.table("takvim_tablosu").insert(tk_records).execute()
                             st.success("🎉 Harika! Çalışma günleri veritabanına kalıcı olarak mühürlendi. Uygulama kapansa da silinmez.")
@@ -773,8 +746,8 @@ with sekmeler[2]:
             else:
                 st.info("Bulut bağlantısı aktif olmadığı için kalıcı kayıt devre dışı, verileriniz tarayıcı açık kaldığı sürece korunacaktır.")
 
-    # Modülü güvenli alanda tetikle
     takvim_modulunu_calistir()
+
 # ------------------------------------------------------------
 # 4. SEKME: BULUT REVİZYON YÖNETİMİ
 # ------------------------------------------------------------
@@ -1080,7 +1053,7 @@ with sekmeler[8]:
         "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
         "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi",
         "Ocak Kg", "Şubat Kg", "Mart Kg", "Nisan Kg", "Mayıs Kg", "Haziran Kg",
-        "Temmuz Kg", "Ağustos Kg", "Eylül Kg", "Ekim Kg", "Kasım Kg", "Aralık Kg",
+        "Temmuz Kg", "Ağustos Kg", "Eylüll Kg", "Ekim Kg", "Kasım Kg", "Aralık Kg",
         "Toplam Kg"
     ]
     AY_KOLONLARI_9 = [f"{m} Kg" for m in aylar]
@@ -1236,7 +1209,20 @@ with sekmeler[8]:
 
         df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
         if not df_2026_raw_9.empty:
-            st.dataframe(df_2026_raw_9.head(20), use_container_width=True, hide_index=True)
+            # 🌟 EN ALT SATIRA TÜM SATIRLARI KAPSAYAN GENEL TOPLAM EKLEME
+            df_display_2026 = df_2026_raw_9.copy()
+            toplam_satiri = {}
+            for col in df_display_2026.columns:
+                if "Kg" in col:
+                    toplam_satiri[col] = df_display_2026[col].apply(guvenli_sayi).sum()
+                elif col in ["Müşteri Adı", "Müşteri Kodu"]:
+                    toplam_satiri[col] = "GENEL TOPLAM"
+                else:
+                    toplam_satiri[col] = ""
+            
+            df_display_2026 = pd.concat([df_display_2026, pd.DataFrame([toplam_satiri])], ignore_index=True)
+            
+            st.dataframe(df_display_2026, use_container_width=True, hide_index=True)
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
                 st.rerun()
@@ -1427,7 +1413,6 @@ with sekmeler[8]:
                 return {ay: 0.0 for ay in aylar}
             return {ay: aylik_kg[ay] / toplam_kg * 100.0 for ay in aylar}
 
-        # 2024 ve 2025 gerçekleşen yıllık dağılımları
         for tab_index_9, target_yil_9 in enumerate(["2024", "2025"]):
             with sezon_tabs_9[tab_index_9]:
                 sezon_rows_9 = []
@@ -1452,7 +1437,6 @@ with sekmeler[8]:
                     }
                 )
 
-        # 2026 gerçekleşen aylar + tahmini aylarda 2024/2025 yüzde ortalaması
         with sezon_tabs_9[2]:
             sezon_rows_2026_9 = []
 
