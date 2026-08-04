@@ -5,6 +5,34 @@ import io
 import json
 from datetime import date, datetime
 
+# Kalıcı dosya yolları
+FILE_2024_PATH = "data_2024_cache.parquet"
+FILE_2025_PATH = "data_2025_cache.parquet"
+
+# --- 2024 VERİSİ OTOMATİK HAFİZAYA ALMA ---
+if "df_2024_buyume_9" not in st.session_state or st.session_state["df_2024_buyume_9"].empty:
+    if os.path.exists(FILE_2024_PATH):
+        st.session_state["df_2024_buyume_9"] = pd.read_parquet(FILE_2024_PATH)
+
+# --- 2025 VERİSİ OTOMATİK HAFİZAYA ALMA ---
+if "df_2025_buyume_9" not in st.session_state or st.session_state["df_2025_buyume_9"].empty:
+    if os.path.exists(FILE_2025_PATH):
+        st.session_state["df_2025_buyume_9"] = pd.read_parquet(FILE_2025_PATH)
+
+# Excel okunup dataframe (df_2024) oluştuktan hemen sonra:
+st.session_state["df_2024_buyume_9"] = df_2024
+
+# 🌟 EKLEYECEĞİN SATIR: Disk üzerine kalıcı kaydet
+df_2024.to_parquet(FILE_2024_PATH, index=False)
+st.success("✅ 2024 verisi kalıcı olarak kaydedildi! Artık F5 yapsanız da silinmeyecek.")
+
+# Excel okunup dataframe (df_2025) oluştuktan hemen sonra:
+st.session_state["df_2025_buyume_9"] = df_2025
+
+# 🌟 EKLEYECEĞİN SATIR: Disk üzerine kalıcı kaydet
+df_2025.to_parquet(FILE_2025_PATH, index=False)
+st.success("✅ 2025 verisi kalıcı olarak kaydedildi! Artık F5 yapsanız da silinmeyecek.")
+
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
