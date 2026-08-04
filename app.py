@@ -1209,24 +1209,46 @@ with sekmeler[8]:
 
         df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
         if not df_2026_raw_9.empty:
-            # 🌟 DİNAMİK ALT TOPLAM HESAPLAMA MOTORU
-            df_display_2026 = df_2026_raw_9.copy()
-            toplam_satiri = {}
+            df_work_2026 = df_2026_raw_9.copy()
             
-            for col in df_display_2026.columns:
-                # Sütun adında 'Kg' geçen tüm aylık ve toplam sütunları topla
-                if "Kg" in col:
-                    toplam_satiri[col] = df_display_2026[col].apply(guvenli_sayi).sum()
-                elif col in ["Müşteri Adı", "Müşteri Kodu"]:
-                    toplam_satiri[col] = "GENEL TOPLAM"
+            # 1. Tüm Kg sütunlarını sayısal tipe dönüştür ve toplamlarını hesapla
+            kg_sutunlari = [c for c in df_work_2026.columns if "Kg" in c]
+            toplam_dict = {}
+            
+            for col in df_work_2026.columns:
+                if col in kg_sutunlari:
+                    # Sayıları güvenli şekilde float'a çevirip topla
+                    sayisal_seri = pd.to_numeric(
+                        df_work_2026[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False),
+                        errors='coerce'
+                    ).fillna(0.0)
+                    df_work_2026[col] = sayisal_seri
+                    toplam_dict[col] = sayisal_seri.sum()
+                elif col in ["Müşteri Kodu", "Müşteri Adı"]:
+                    toplam_dict[col] = "🔥 GENEL TOPLAM"
                 else:
-                    toplam_satiri[col] = ""
+                    toplam_dict[col] = "-"
             
-            # Oluşturulan genel toplam satırını tablonun en altına ekle
-            df_display_2026 = pd.concat([df_display_2026, pd.DataFrame([toplam_satiri])], ignore_index=True)
+            # 2. Üst Özet Metrik Kartı
+            genel_toplam_kg = toplam_dict.get("Toplam Kg", 0.0)
+            st.metric(
+                label="📊 2026 YILI TOPLAM SEVKİYAT (Kg)", 
+                value=f"{genel_toplam_kg:,.0f} Kg".replace(",", " ")
+            )
+
+            # 3. Genel Toplam Satırını Oluştur ve TABLONUN EN ÜSTÜNE (Index 0) Ekle
+            df_toplam_satiri = pd.DataFrame([toplam_dict])
+            df_gosterim = pd.concat([df_toplam_satiri, df_work_2026], ignore_index=True)
             
-            # Tabloyu göster
-            st.dataframe(df_display_2026, use_container_width=True, hide_index=True)
+            # 4. Tabloyu Ekrana Bas (Genel Toplam ilk satırda görünecek)
+            st.dataframe(
+                df_gosterim, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    c: st.column_config.NumberColumn(c, format="%d Kg") for c in kg_sutunlari
+                }
+            )
             
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
