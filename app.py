@@ -134,8 +134,26 @@ if "mazot_giriş_veri" not in st.session_state:
         "Ekim": 52.92, "Kasım": 53.76, "Aralık": 54.60
     }])
 
+# --- EKSİK OLAN / YUKARIDA OLMASI GEREKEN KISIM ---
 GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
+
+def get_supabase_client():
+    if not SUPABASE_AVAILABLE: return None
+    try: return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
+    except: return None
+
+# ============================================================
+# ARAYÜZ SEKMELERİ (9 SEKMELİ YAPI 🎉)
+# ============================================================
+sekmeler = st.tabs([
+    "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
+    "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
+    "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları"
+])
+
+# Hata aldığın satır tam olarak burada olmalı:
+client = get_supabase_client()
 
 client = get_supabase_client()
 rev_secenekleri = {}
