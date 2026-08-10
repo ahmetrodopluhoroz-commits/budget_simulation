@@ -86,7 +86,6 @@ NUMERIC_KOLONLAR = (["Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim O
                     kolonlar_25_Kg + kolonlar_25_tutar + kolonlar_25_fiyat + kolonlar_26_buyume + kolonlar_26_esk +
                     kolonlar_26_Kg + kolonlar_26_tutar + kolonlar_26_fiyat)
 
-# Özel Sayfa Şablon Sütun Tanımları
 data_ekran_sutunlari = [
     "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
     "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
@@ -104,7 +103,7 @@ buyume_ekran_sutunlari = [
 ]
 
 # ============================================================
-# SESSION STATE & BULUT BAĞLANTISI (OTOMATİK YÜKLEME DAHİL)
+# SESSION STATE (OTOMATİK YÜKLEME DAHİL)
 # ============================================================
 if "data_sayfası_df" not in st.session_state: 
     if os.path.exists(CACHE_DATA_MASTER):
@@ -134,7 +133,9 @@ if "mazot_giriş_veri" not in st.session_state:
         "Ekim": 52.92, "Kasım": 53.76, "Aralık": 54.60
     }])
 
-# --- EKSİK OLAN / YUKARIDA OLMASI GEREKEN KISIM ---
+# ============================================================
+# BULUT BAĞLANTISI VE REVİZYONLARI ÇEKME (TEK SEFER)
+# ============================================================
 GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
 
@@ -143,39 +144,22 @@ def get_supabase_client():
     try: return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
     except: return None
 
-# ============================================================
-# ARAYÜZ SEKMELERİ (9 SEKMELİ YAPI 🎉)
-# ============================================================
-sekmeler = st.tabs([
-    "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
-    "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
-    "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları"
-])
-
-# Hata aldığın satır tam olarak burada olmalı:
-client = get_supabase_client()
-
 client = get_supabase_client()
 rev_secenekleri = {}
 
 if client:
     try:
-        # 1. Veriyi sıralama dayatması yapmadan (hatasız) çek
         log_res = client.table("revizyon_log").select("*").execute()
         
         if log_res.data:
-            # 2. Veritabanındaki tarih kolonunun adını otomatik tespit et
             siralama_kolonu = "kayit_zamani" if "kayit_zamani" in log_res.data[0] else "created_at"
             
-            # 3. Veriyi Python tarafında tarihe göre yeniden eskiye sırala
             if siralama_kolonu in log_res.data[0]:
                 sirali_data = sorted(log_res.data, key=lambda x: str(x.get(siralama_kolonu, "")), reverse=True)
             else:
                 sirali_data = log_res.data
 
-            # 4. Seçenekleri oluştur
             for r in sirali_data:
-                # Tarih formatını daha okunaklı hale getir (T'yi boşluğa çevir)
                 tarih = str(r.get(siralama_kolonu, ""))[:16].replace("T", " ") if siralama_kolonu in r else "Tarih Yok"
                 kisi = r.get('olusturan_kisi', 'Bilinmiyor')
                 not_ = r.get('revizyon_notu', 'Not Yok')
@@ -184,7 +168,6 @@ if client:
                 rev_secenekleri[etiket] = r['revizyon_id']
                 
     except Exception as e:
-        # Eğer bağlantıda veya tabloda bir sorun varsa artık bunu ekranda göreceğiz
         st.error(f"☁️ Bulut (Supabase) geçmişi çekilirken bir hata oluştu: {e}")
 
 # ============================================================
@@ -258,22 +241,13 @@ def supabase_verisini_hazirla(dataframe):
     return df, [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in df.iterrows()]
 
 # ============================================================
-# ARAYÜZ SEKMELERİ (9 SEKMELİ YAPI 🎉)
+# ARAYÜZ SEKMELERİ (9 SEKMELİ YAPI 🎉 - TEK SEFER TANIMLANDI)
 # ============================================================
 sekmeler = st.tabs([
     "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları"
 ])
-
-client = get_supabase_client()
-rev_secenekleri = {}
-if client:
-    try:
-        log_res = client.table("revizyon_log").select("*").order("kayit_zamani", desc=True).execute()
-        if log_res.data:
-            rev_secenekleri = {f"{r['kayit_zamani'][:16]} | {r['olusturan_kisi']} - {r['revizyon_notu']}": r['revizyon_id'] for r in log_res.data}
-    except: pass
 
 # ------------------------------------------------------------
 # 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU
@@ -282,7 +256,6 @@ with sekmeler[0]:
     st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
     st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Yıl ve dosyanızdaki metrik tipini seçerek veri ambarını dinamik olarak besleyebilirsiniz.")
 
-    # 🎯 DİNAMİK SEÇİCİLER
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1:
         secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
@@ -307,7 +280,6 @@ with sekmeler[0]:
             
             sonek = " Kg" if "Kg" in metrik_tipi else " Tutar"
             
-            # 🎯 EN HIZLI RAM OPTİMİZASYONU
             if secilen_yil in ["2024", "2025"]:
                 mapped_cols = {}
                 for ay in aylar:
@@ -357,7 +329,6 @@ with sekmeler[0]:
                             st.session_state.data_sayfası_df = st.session_state.data_sayfası_df.drop(columns=[f"{col}_new"])
                 
                 st.success(f"🎉 {secilen_yil} yılı geçmiş verisi Müşteri bazında özetlenerek hafızaya sıkıştırıldı! RAM yükü engellendi.")
-                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
                 st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
 
             else:
@@ -433,7 +404,6 @@ with sekmeler[0]:
                     st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
                     
                 st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
-                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
                 st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
 
     if st.session_state.pop("data_bulut_yukleme_basarili", False):
@@ -572,7 +542,6 @@ with sekmeler[0]:
 
                     st.session_state.data_sayfası_df = gelen_d_df
                     st.session_state.data_bulut_yukleme_basarili = True
-                    # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI İÇİN YEREL KOPYA)
                     st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
                     st.rerun()
                 else:
@@ -851,6 +820,8 @@ with sekmeler[3]:
                 client.table("data_tablosu").delete().eq("revizyon_id", secili_rev).execute()
                 st.success("Silindi.")
                 st.rerun()
+    else:
+        st.info("Bulut tabanlı bir kayıt bulunmuyor.")
 
 # ------------------------------------------------------------
 # 5. SEKME: YENİ-BÜTÇE MÜŞTERİ
@@ -1262,7 +1233,6 @@ with sekmeler[8]:
                 df_raw_26_9 = oku_excel_csv_9(up_2026_9)
                 df_clean_26_9, eksik_26_9 = temizle_2026_31_kolon(df_raw_26_9)
                 st.session_state.df_2026_buyume_9 = df_clean_26_9
-                # 🔥 YENİ EKLENEN OTOMATİK KAYIT BÖLÜMÜ (F5 KORUMASI)
                 df_clean_26_9.to_parquet(CACHE_2026_B, index=False)
                 
                 st.success(f"2026 dosyası işlendi: {len(df_clean_26_9):,} satır.")
