@@ -137,10 +137,37 @@ if "mazot_giriş_veri" not in st.session_state:
 GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
 GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
 
-def get_supabase_client():
-    if not SUPABASE_AVAILABLE: return None
-    try: return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
-    except: return None
+client = get_supabase_client()
+rev_secenekleri = {}
+
+if client:
+    try:
+        # 1. Veriyi sıralama dayatması yapmadan (hatasız) çek
+        log_res = client.table("revizyon_log").select("*").execute()
+        
+        if log_res.data:
+            # 2. Veritabanındaki tarih kolonunun adını otomatik tespit et
+            siralama_kolonu = "kayit_zamani" if "kayit_zamani" in log_res.data[0] else "created_at"
+            
+            # 3. Veriyi Python tarafında tarihe göre yeniden eskiye sırala
+            if siralama_kolonu in log_res.data[0]:
+                sirali_data = sorted(log_res.data, key=lambda x: str(x.get(siralama_kolonu, "")), reverse=True)
+            else:
+                sirali_data = log_res.data
+
+            # 4. Seçenekleri oluştur
+            for r in sirali_data:
+                # Tarih formatını daha okunaklı hale getir (T'yi boşluğa çevir)
+                tarih = str(r.get(siralama_kolonu, ""))[:16].replace("T", " ") if siralama_kolonu in r else "Tarih Yok"
+                kisi = r.get('olusturan_kisi', 'Bilinmiyor')
+                not_ = r.get('revizyon_notu', 'Not Yok')
+                
+                etiket = f"{tarih} | {kisi} - {not_}"
+                rev_secenekleri[etiket] = r['revizyon_id']
+                
+    except Exception as e:
+        # Eğer bağlantıda veya tabloda bir sorun varsa artık bunu ekranda göreceğiz
+        st.error(f"☁️ Bulut (Supabase) geçmişi çekilirken bir hata oluştu: {e}")
 
 # ============================================================
 # VERİ TEMİZLEME MOTORU
