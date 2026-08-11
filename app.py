@@ -1250,6 +1250,7 @@ with sekmeler[8]:
             
             kg_sutunlari = [c for c in df_work_2026.columns if "Kg" in c]
             toplam_dict = {}
+            kg_formatlari = {c: lambda v: f"{guvenli_sayi(v):,.0f} Kg".replace(",", ".") for c in kg_sutunlari}
             
             for col in df_work_2026.columns:
                 if col in kg_sutunlari:
@@ -1276,7 +1277,7 @@ with sekmeler[8]:
                 hide_index=True,
                 height=430,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="%,d Kg") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format="kg_formatlari") for c in kg_sutunlari
                 }
             )
 
@@ -1289,7 +1290,7 @@ with sekmeler[8]:
                 hide_index=True,
                 height=85,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="%,d Kg") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format="kg_formatlari") for c in kg_sutunlari
                 }
             )
             
