@@ -185,9 +185,27 @@ def guvenli_sayi(value):
         except: return 0.0
     value = str(value).strip()
     if value.lower() in {"", "-", "nan", "none", "null", "nat"}: return 0.0
-    value = value.replace("₺", "").replace("%", "").replace(" ", "")
-    if "," in value and "." in value: value = value.replace(".", "").replace(",", ".")
-    elif "," in value: value = value.replace(",", ".")
+    value = (
+        value.replace("₺", "")
+        .replace("%", "")
+        .replace("\xa0", "")
+        .replace(" ", "")
+    )
+
+    # 85.0 ve 85,0 değerlerini 85 olarak korur.
+    # Türkçe ve İngilizce binlik/ondalık biçimlerini güvenli okur.
+    if "," in value and "." in value:
+        if value.rfind(",") > value.rfind("."):
+            value = value.replace(".", "").replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif "," in value:
+        if value.count(",") == 1:
+            value = value.replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif value.count(".") > 1:
+        value = value.replace(".", "")
     try:
         val = float(value)
         return val if np.isfinite(val) else 0.0
@@ -1247,67 +1265,67 @@ with sekmeler[8]:
         df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
         if not df_2026_raw_9.empty:
             df_work_2026 = df_2026_raw_9.copy()
-            
             kg_sutunlari = [c for c in df_work_2026.columns if "Kg" in c]
             toplam_dict = {}
-            def kg_gosterim_formatla(value):
-    return f"{guvenli_sayi(value):,.0f} Kg".replace(",", ".")
 
-
-# Yalnızca gösterim için kopyalar oluşturulur.
-# Asıl sayısal veriler ve hesaplamalar değişmez.
-df_gosterim_formatli = df_gosterim.copy()
-df_toplam_formatli = df_toplam_satiri.copy()
-
-for col in kg_sutunlari:
-    if col in df_gosterim_formatli.columns:
-        df_gosterim_formatli[col] = (
-            df_gosterim_formatli[col].map(kg_gosterim_formatla)
-        )
-
-    if col in df_toplam_formatli.columns:
-        df_toplam_formatli[col] = (
-            df_toplam_formatli[col].map(kg_gosterim_formatla)
-        )
-            
+            # Bütün Kg kolonları tek sayı motoruyla temizlenir.
+            # Böylece 85.0 değeri 850'ye dönüşmez; boşlar ve gerçek 0'lar 0 kalır.
             for col in df_work_2026.columns:
                 if col in kg_sutunlari:
                     sayisal_seri = df_work_2026[col].apply(guvenli_sayi).astype(float)
                     df_work_2026[col] = sayisal_seri
                     toplam_dict[col] = sayisal_seri.sum()
                 elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                    toplam_dict[col] = "GENEL TOPLAM"
+                    toplam_dict[col] = "🔥 GENEL TOPLAM"
                 else:
                     toplam_dict[col] = "-"
-            
-            genel_toplam_kg = toplam_dict.get("Toplam Kg", 0.0)
+
+            genel_toplam_kg = guvenli_sayi(toplam_dict.get("Toplam Kg", 0.0))
+            genel_toplam_metin = f"{genel_toplam_kg:,.0f}".replace(",", ".")
             st.metric(
-                label="📊 2026 YILI TOPLAM SEVKİYAT (Kg)", 
-                value=f"{genel_toplam_kg:,.0f} Kg".replace(",", " ")
+                label="📊 2026 YILI TOPLAM SEVKİYAT (Kg)",
+                value=f"{genel_toplam_metin} Kg"
             )
 
-            df_toplam_satiri = pd.DataFrame([toplam_dict])
             df_gosterim = df_work_2026.copy()
+            df_toplam_satiri = pd.DataFrame([toplam_dict])
 
+            def kg_gosterim_formatla(value):
+                sayi = guvenli_sayi(value)
+                return f"{sayi:,.0f} Kg".replace(",", ".")
+
+            # Sadece ekranda gösterilecek kopyalar metne çevrilir.
+            # Hesaplamalarda kullanılan df_work_2026 sayısal kalır.
+            df_gosterim_formatli = df_gosterim.copy()
+            df_toplam_formatli = df_toplam_satiri.copy()
+
+            for col in kg_sutunlari:
+                if col in df_gosterim_formatli.columns:
+                    df_gosterim_formatli[col] = (
+                        df_gosterim_formatli[col].map(kg_gosterim_formatla)
+                    )
+                if col in df_toplam_formatli.columns:
+                    df_toplam_formatli[col] = (
+                        df_toplam_formatli[col].map(kg_gosterim_formatla)
+                    )
+
+            # Kaydırılabilir ana tablo. Styler kullanılmadığı için büyük veri hatası vermez.
             st.dataframe(
-    df_gosterim_formatli,
-    use_container_width=True,
-    hide_index=True,
-    height=430
-)
+                df_gosterim_formatli,
+                use_container_width=True,
+                hide_index=True,
+                height=430
+            )
 
-# Ana tablonun altında sabit genel toplam
-            st.markdown("##### GENEL TOPLAM")
-
+            # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
             st.markdown("##### 🔥 GENEL TOPLAM")
+            st.dataframe(
+                df_toplam_formatli,
+                use_container_width=True,
+                hide_index=True,
+                height=85
+            )
 
-st.dataframe(
-    df_toplam_formatli,
-    use_container_width=True,
-    hide_index=True,
-    height=85
-)
-            
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
                 if os.path.exists(CACHE_2026_B):
