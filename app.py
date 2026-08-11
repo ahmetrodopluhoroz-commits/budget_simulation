@@ -1268,14 +1268,28 @@ with sekmeler[8]:
             )
 
             df_toplam_satiri = pd.DataFrame([toplam_dict])
-            df_gosterim = pd.concat([df_toplam_satiri, df_work_2026], ignore_index=True)
-            
+            df_gosterim = df_work_2026.copy()
+
             st.dataframe(
-                df_gosterim, 
-                use_container_width=True, 
+                df_gosterim,
+                use_container_width=True,
                 hide_index=True,
+                height=430,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="%,d Kg") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format="%.d Kg") for c in kg_sutunlari
+                }
+            )
+
+# Ana tablonun altında sabit genel toplam
+            st.markdown("##### 🔥 GENEL TOPLAM")
+
+            st.dataframe(
+                df_toplam_satiri,
+                use_container_width=True,
+                hide_index=True,
+                height=85,
+                column_config={
+                    c: st.column_config.NumberColumn(c, format="%.d Kg") for c in kg_sutunlari
                 }
             )
             
