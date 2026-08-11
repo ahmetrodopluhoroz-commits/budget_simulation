@@ -1275,7 +1275,7 @@ with sekmeler[8]:
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="%d Kg") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format="%,d Kg") for c in kg_sutunlari
                 }
             )
             
