@@ -1277,7 +1277,7 @@ with sekmeler[8]:
                 hide_index=True,
                 height=430,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="kg_formatlari") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format=kg_formatlari) for c in kg_sutunlari
                 }
             )
 
@@ -1290,7 +1290,7 @@ with sekmeler[8]:
                 hide_index=True,
                 height=85,
                 column_config={
-                    c: st.column_config.NumberColumn(c, format="kg_formatlari") for c in kg_sutunlari
+                    c: st.column_config.NumberColumn(c, format=kg_formatlari) for c in kg_sutunlari
                 }
             )
             
