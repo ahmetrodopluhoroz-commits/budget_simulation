@@ -1272,27 +1272,23 @@ with sekmeler[8]:
             df_gosterim = df_work_2026.copy()
 
             st.dataframe(
-                df_gosterim,
-                use_container_width=True,
-                hide_index=True,
-                height=430,
-                column_config={
-                    c: st.column_config.NumberColumn(c, format=kg_formatlari) for c in kg_sutunlari
-                }
-            )
+    df_gosterim.style.format(kg_formatlari),
+    use_container_width=True,
+    hide_index=True,
+    height=430
+)
 
 # Ana tablonun altında sabit genel toplam
             st.markdown("##### GENEL TOPLAM")
 
-            st.dataframe(
-                df_toplam_satiri,
-                use_container_width=True,
-                hide_index=True,
-                height=85,
-                column_config={
-                    c: st.column_config.NumberColumn(c, format=kg_formatlari) for c in kg_sutunlari
-                }
-            )
+            st.markdown("##### 🔥 GENEL TOPLAM")
+
+st.dataframe(
+    df_toplam_satiri.style.format(kg_formatlari),
+    use_container_width=True,
+    hide_index=True,
+    height=85
+)
             
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
