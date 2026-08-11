@@ -1250,7 +1250,25 @@ with sekmeler[8]:
             
             kg_sutunlari = [c for c in df_work_2026.columns if "Kg" in c]
             toplam_dict = {}
-            kg_formatlari = {c: lambda v: f"{guvenli_sayi(v):,.0f} Kg".replace(",", ".") for c in kg_sutunlari}
+            def kg_gosterim_formatla(value):
+    return f"{guvenli_sayi(value):,.0f} Kg".replace(",", ".")
+
+
+# Yalnızca gösterim için kopyalar oluşturulur.
+# Asıl sayısal veriler ve hesaplamalar değişmez.
+df_gosterim_formatli = df_gosterim.copy()
+df_toplam_formatli = df_toplam_satiri.copy()
+
+for col in kg_sutunlari:
+    if col in df_gosterim_formatli.columns:
+        df_gosterim_formatli[col] = (
+            df_gosterim_formatli[col].map(kg_gosterim_formatla)
+        )
+
+    if col in df_toplam_formatli.columns:
+        df_toplam_formatli[col] = (
+            df_toplam_formatli[col].map(kg_gosterim_formatla)
+        )
             
             for col in df_work_2026.columns:
                 if col in kg_sutunlari:
@@ -1272,23 +1290,23 @@ with sekmeler[8]:
             df_gosterim = df_work_2026.copy()
 
             st.dataframe(
-                df_gosterim.style.format(kg_formatlari),
-                use_container_width=True,
-                hide_index=True,
-                height=430
-            )
+    df_gosterim_formatli,
+    use_container_width=True,
+    hide_index=True,
+    height=430
+)
 
 # Ana tablonun altında sabit genel toplam
             st.markdown("##### GENEL TOPLAM")
 
             st.markdown("##### 🔥 GENEL TOPLAM")
 
-            st.dataframe(
-                df_toplam_satiri.style.format(kg_formatlari),
-                use_container_width=True,
-                hide_index=True,
-                height=85
-            )
+st.dataframe(
+    df_toplam_formatli,
+    use_container_width=True,
+    hide_index=True,
+    height=85
+)
             
             if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                 st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
