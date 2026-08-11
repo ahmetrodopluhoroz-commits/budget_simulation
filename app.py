@@ -846,31 +846,91 @@ with sekmeler[3]:
 # ------------------------------------------------------------
 with sekmeler[4]:
     st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
+
+    MUSTERI_9_AY_TOPLAM_KOLONU = "9 Ay Toplam Desi"
+    MUSTERI_DETAY_KOLONLARI = [
+        "Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
+        "Durum", "Kayıt Tarihi", "Müşteri Grubu", MUSTERI_9_AY_TOPLAM_KOLONU,
+        "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not",
+        "Değişim kontrol"
+    ]
+    MUSTERI_DUZENLENEBILIR_KOLONLAR = [
+        "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not"
+    ]
+
+    def musteri_9_ay_toplamini_ekle(hedef_df):
+        """Ocak-Eylül 2026 toplamını müşteri bazında ekler."""
+        sonuc = hedef_df.copy()
+        if "Müşteri Kodu" not in sonuc.columns:
+            sonuc["Müşteri Kodu"] = ""
+        sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        sonuc = sonuc.drop(columns=[MUSTERI_9_AY_TOPLAM_KOLONU], errors="ignore")
+
+        if st.session_state.ana_veri.empty or "Müşteri Kodu" not in st.session_state.ana_veri.columns:
+            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = 0.0
+            return sonuc
+
+        kaynak = st.session_state.ana_veri.copy()
+        kaynak["Müşteri Kodu"] = kaynak["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        dokuz_ay_kolonlari = [
+            f"2026 {ay} Kg" for ay in ilk_9_ay
+            if f"2026 {ay} Kg" in kaynak.columns
+        ]
+        if not dokuz_ay_kolonlari:
+            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = 0.0
+            return sonuc
+
+        for col in dokuz_ay_kolonlari:
+            kaynak[col] = kaynak[col].apply(guvenli_sayi).astype(float)
+        kaynak[MUSTERI_9_AY_TOPLAM_KOLONU] = kaynak[dokuz_ay_kolonlari].sum(axis=1)
+        musteri_toplamlari = (
+            kaynak.groupby("Müşteri Kodu", as_index=False)[MUSTERI_9_AY_TOPLAM_KOLONU]
+            .sum()
+        )
+        sonuc = pd.merge(sonuc, musteri_toplamlari, on="Müşteri Kodu", how="left")
+        sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = (
+            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU].fillna(0.0).apply(guvenli_sayi)
+        )
+        return sonuc
+
+    def musteri_detay_gorunumunu_hazirla(df):
+        """Tabloyu yalnızca istenen 13 kolona ve sabit sıraya getirir."""
+        sonuc = df.copy()
+        sonuc.columns = [str(c).strip() for c in sonuc.columns]
+        if "Sap Kodu" not in sonuc.columns and "Sap No" in sonuc.columns:
+            sonuc = sonuc.rename(columns={"Sap No": "Sap Kodu"})
+        sonuc = musteri_9_ay_toplamini_ekle(sonuc)
+
+        varsayilanlar = {
+            "Müşteri Kodu": "", "Sap Kodu": "", "Müşteri Adı": "",
+            "Müşteri Temsilcisi": "", "Durum": "GEÇERLİ", "Kayıt Tarihi": "",
+            "Müşteri Grubu": "DİĞER", MUSTERI_9_AY_TOPLAM_KOLONU: 0.0,
+            "Yeni/Bütçelenen Müşteri": "03.Bütçelenen", "Durum_2": None,
+            "Durum_3": "", "Serbest Not": ""
+        }
+        for col, varsayilan in varsayilanlar.items():
+            if col not in sonuc.columns:
+                sonuc[col] = varsayilan
+
+        sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        sonuc["Değişim kontrol"] = sonuc.apply(
+            lambda row: "DOĞRU"
+            if str(row.get("Durum", "")).strip().upper()
+            == str(row.get("Durum_2", "")).strip().upper()
+            else "YANLIŞ",
+            axis=1
+        )
+        return sonuc.reindex(columns=MUSTERI_DETAY_KOLONLARI)
+
     yuklenen_musteri = st.file_uploader("Müşteri Listenizi Yükleyin", type=["xlsx", "xls", "csv"], key="m_sablon_up")
 
     if yuklenen_musteri:
         df_hedef = pd.read_csv(yuklenen_musteri) if yuklenen_musteri.name.lower().endswith(".csv") else pd.read_excel(yuklenen_musteri)
+        df_hedef.columns = [str(c).strip() for c in df_hedef.columns]
+        if "Sap Kodu" not in df_hedef.columns and "Sap No" in df_hedef.columns:
+            df_hedef = df_hedef.rename(columns={"Sap No": "Sap Kodu"})
         if "Müşteri Kodu" in df_hedef.columns:
             df_hedef["Müşteri Kodu"] = df_hedef["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            aktif_aylar_2026 = []
-            dolu_ay_sayisi = 0
-            if not st.session_state.ana_veri.empty:
-                df_m_tmp = st.session_state.ana_veri.copy()
-                df_m_tmp["Müşteri Kodu"] = df_m_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                for ay in aylar:
-                    col_Kg = f"2026 {ay} Kg"
-                    if col_Kg in df_m_tmp.columns and df_m_tmp[col_Kg].apply(guvenli_sayi).sum() > 0:
-                        aktif_aylar_2026.append(col_Kg)
-                dolu_ay_sayisi = len(aktif_aylar_2026)
-            
-            Kg_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Kg"
-            if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                df_m_tmp[Kg_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
-                Kg_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[Kg_toplam_kolon_adi].sum()
-                df_hedef = pd.merge(df_hedef, Kg_grouped, on="Müşteri Kodu", how="left")
-            else: df_hedef[Kg_toplam_kolon_adi] = 0.0
-
-            df_hedef[Kg_toplam_kolon_adi] = df_hedef[Kg_toplam_kolon_adi].fillna(0.0)
 
             for idx, row in df_hedef.iterrows():
                 m_kod = str(row["Müşteri Kodu"])
@@ -886,21 +946,38 @@ with sekmeler[4]:
             df_hedef["Durum_2"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_2", None))
             df_hedef["Durum_3"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_3", ""))
             df_hedef["Serbest Not"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Serbest Not", ""))
-            st.session_state.musteri_ekran_df = df_hedef.copy()
+            st.session_state.musteri_ekran_df = musteri_detay_gorunumunu_hazirla(df_hedef)
 
     if not st.session_state.musteri_ekran_df.empty:
-        df_gosterim = st.session_state.musteri_ekran_df.copy()
-        df_gosterim["Değişim kontrol"] = df_gosterim.apply(lambda r: "DOĞRU" if str(r.get("Durum", "")).strip().upper() == str(r.get("Durum_2", "")).strip().upper() else "YANLIŞ", axis=1)
-        gosterilecek_kolonlar = [c for c in df_gosterim.columns if not any(m in str(c) for m in aylar)]
-        df_gosterim = df_gosterim[gosterilecek_kolonlar]
-
-        kilitli = [c for c in df_gosterim.columns if c not in ["Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not"]]
-        edited_m = st.data_editor(df_gosterim, use_container_width=True, height=400, disabled=kilitli,
-                                  column_config={
-                                      "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn("Yeni/Bütçelenen Müşteri", options=["01.Yeni Müşteri", "02.DOP Bütçe Dışı", "03.Bütçelenen"]),
-                                      "Durum_2": st.column_config.SelectboxColumn("Durum_2", options=["GEÇERLİ", "GEÇERSİZ", None])
-                                  }, key="ed_m_t4")
-        st.session_state.musteri_ekran_df = edited_m.copy()
+        df_gosterim = musteri_detay_gorunumunu_hazirla(
+            st.session_state.musteri_ekran_df
+        )
+        kilitli = [
+            col for col in MUSTERI_DETAY_KOLONLARI
+            if col not in MUSTERI_DUZENLENEBILIR_KOLONLAR
+        ]
+        edited_m = st.data_editor(
+            df_gosterim,
+            use_container_width=True,
+            height=400,
+            disabled=kilitli,
+            column_config={
+                MUSTERI_9_AY_TOPLAM_KOLONU: st.column_config.NumberColumn(
+                    MUSTERI_9_AY_TOPLAM_KOLONU, format="%.0f"
+                ),
+                "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn(
+                    "Yeni/Bütçelenen Müşteri",
+                    options=["01.Yeni Müşteri", "02.DOP Bütçe Dışı", "03.Bütçelenen"]
+                ),
+                "Durum_2": st.column_config.SelectboxColumn(
+                    "Durum_2", options=["GEÇERLİ", "GEÇERSİZ", None]
+                )
+            },
+            key="ed_m_t4_exact_v2"
+        )
+        st.session_state.musteri_ekran_df = (
+            edited_m.reindex(columns=MUSTERI_DETAY_KOLONLARI).copy()
+        )
 
     st.markdown("---")
     c_m1, c_m2, c_m3 = st.columns(3)
@@ -929,25 +1006,10 @@ with sekmeler[4]:
             m_res = client.table("musteri_detay_tablosu").select("*").eq("revizyon_id", r_id_m).execute()
             if m_res.data:
                 gelen_df = pd.DataFrame(m_res.data)
-                if "id" in gelen_df.columns: gelen_df = gelen_df.drop(columns=["id"])
-                aktif_aylar_2026 = []
-                dolu_ay_sayisi = 0
-                if not st.session_state.ana_veri.empty:
-                    df_m_tmp = st.session_state.ana_veri.copy()
-                    df_m_tmp["Müşteri Kodu"] = df_m_tmp["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                    for ay in aylar:
-                        c_d = f"2026 {ay} Kg"
-                        if c_d in df_m_tmp.columns and df_m_tmp[c_d].apply(guvenli_sayi).sum() > 0: aktif_aylar_2026.append(c_d)
-                    dolu_ay_sayisi = len(aktif_aylar_2026)
-                
-                Kg_toplam_kolon_adi = f"{max(1, dolu_ay_sayisi)} Ay Toplam Kg"
-                if not st.session_state.ana_veri.empty and aktif_aylar_2026:
-                    df_m_tmp[Kg_toplam_kolon_adi] = df_m_tmp[aktif_aylar_2026].sum(axis=1)
-                    Kg_grouped = df_m_tmp.groupby("Müşteri Kodu", as_index=False)[Kg_toplam_kolon_adi].sum()
-                    gelen_df = pd.merge(gelen_df, Kg_grouped, on="Müşteri Kodu", how="left")
-                else: gelen_df[Kg_toplam_kolon_adi] = 0.0
-                
-                gelen_df[Kg_toplam_kolon_adi] = gelen_df[Kg_toplam_kolon_adi].fillna(0.0)
+                gelen_df = gelen_df.drop(
+                    columns=[c for c in ["id", "revizyon_id"] if c in gelen_df.columns]
+                )
+                gelen_df = musteri_detay_gorunumunu_hazirla(gelen_df)
                 st.session_state.musteri_ekran_df = gelen_df.copy()
                 for _, row in gelen_df.iterrows():
                     k = str(row["Müşteri Kodu"])
@@ -1276,7 +1338,7 @@ with sekmeler[8]:
                     df_work_2026[col] = sayisal_seri
                     toplam_dict[col] = sayisal_seri.sum()
                 elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                    toplam_dict[col] = "GENEL TOPLAM"
+                    toplam_dict[col] = "🔥 GENEL TOPLAM"
                 else:
                     toplam_dict[col] = "-"
 
@@ -1318,7 +1380,7 @@ with sekmeler[8]:
             )
 
             # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
-            st.markdown("##### GENEL TOPLAM")
+            st.markdown("##### 🔥 GENEL TOPLAM")
             st.dataframe(
                 df_toplam_formatli,
                 use_container_width=True,
