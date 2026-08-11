@@ -1276,7 +1276,7 @@ with sekmeler[8]:
                     df_work_2026[col] = sayisal_seri
                     toplam_dict[col] = sayisal_seri.sum()
                 elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                    toplam_dict[col] = "🔥 GENEL TOPLAM"
+                    toplam_dict[col] = "GENEL TOPLAM"
                 else:
                     toplam_dict[col] = "-"
 
@@ -1318,7 +1318,7 @@ with sekmeler[8]:
             )
 
             # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
-            st.markdown("##### 🔥 GENEL TOPLAM")
+            st.markdown("##### GENEL TOPLAM")
             st.dataframe(
                 df_toplam_formatli,
                 use_container_width=True,
