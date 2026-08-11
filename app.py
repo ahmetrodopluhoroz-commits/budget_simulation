@@ -206,6 +206,15 @@ def guvenli_sayi(value):
             value = value.replace(",", "")
     elif value.count(".") > 1:
         value = value.replace(".", "")
+    elif value.count(".") == 1:
+        sol_taraf, sag_taraf = value.split(".", 1)
+        # Türkçe biçimde 2.325 binlik gösterimdir; 85.0 ise ondalık değerdir.
+        if (
+            sol_taraf.lstrip("-").isdigit()
+            and sag_taraf.isdigit()
+            and len(sag_taraf) == 3
+        ):
+            value = sol_taraf + sag_taraf
     try:
         val = float(value)
         return val if np.isfinite(val) else 0.0
@@ -859,37 +868,96 @@ with sekmeler[4]:
     ]
 
     def musteri_9_ay_toplamini_ekle(hedef_df):
-        """Ocak-Eylül 2026 toplamını müşteri bazında ekler."""
+        """9 aylık toplamı doğru kaynaktan bulup müşteri koduna bağlar."""
         sonuc = hedef_df.copy()
         if "Müşteri Kodu" not in sonuc.columns:
             sonuc["Müşteri Kodu"] = ""
         sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
-        sonuc = sonuc.drop(columns=[MUSTERI_9_AY_TOPLAM_KOLONU], errors="ignore")
 
-        if st.session_state.ana_veri.empty or "Müşteri Kodu" not in st.session_state.ana_veri.columns:
-            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = 0.0
-            return sonuc
+        musteri_kodlari = pd.Index(sonuc["Müşteri Kodu"].dropna().unique())
+        bulunan_toplam = pd.Series(np.nan, index=musteri_kodlari, dtype=float)
 
-        kaynak = st.session_state.ana_veri.copy()
-        kaynak["Müşteri Kodu"] = kaynak["Müşteri Kodu"].apply(guvenli_metin_kodu)
-        dokuz_ay_kolonlari = [
-            f"2026 {ay} Kg" for ay in ilk_9_ay
-            if f"2026 {ay} Kg" in kaynak.columns
-        ]
-        if not dokuz_ay_kolonlari:
-            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = 0.0
-            return sonuc
+        def eksikleri_doldur(kaynak_seri):
+            nonlocal bulunan_toplam
+            if kaynak_seri is None or kaynak_seri.empty:
+                return
+            kaynak_seri = kaynak_seri.apply(guvenli_sayi).astype(float)
+            kaynak_seri = kaynak_seri[kaynak_seri != 0.0]
+            kaynak_seri = kaynak_seri.reindex(bulunan_toplam.index)
+            eksik_maskesi = bulunan_toplam.isna() | (bulunan_toplam == 0.0)
+            bulunan_toplam.loc[eksik_maskesi] = kaynak_seri.loc[eksik_maskesi]
 
-        for col in dokuz_ay_kolonlari:
-            kaynak[col] = kaynak[col].apply(guvenli_sayi).astype(float)
-        kaynak[MUSTERI_9_AY_TOPLAM_KOLONU] = kaynak[dokuz_ay_kolonlari].sum(axis=1)
-        musteri_toplamlari = (
-            kaynak.groupby("Müşteri Kodu", as_index=False)[MUSTERI_9_AY_TOPLAM_KOLONU]
-            .sum()
+        def aylik_kaynaktan_toplam(kaynak_df, yil_sirasi, toplama_tipi="sum", genel_ay_adi=False):
+            if kaynak_df is None or kaynak_df.empty or "Müşteri Kodu" not in kaynak_df.columns:
+                return pd.Series(dtype=float)
+
+            work = kaynak_df.copy()
+            work.columns = [str(c).strip() for c in work.columns]
+            work["Müşteri Kodu"] = work["Müşteri Kodu"].apply(guvenli_metin_kodu)
+
+            for yil in yil_sirasi:
+                secilen_kolonlar = []
+                for ay in ilk_9_ay:
+                    adaylar = [
+                        f"{yil} {ay} Desi", f"{yil} {ay} Kg",
+                        f"{ay} Desi", f"{ay} Kg"
+                    ] if genel_ay_adi else [f"{yil} {ay} Desi", f"{yil} {ay} Kg"]
+                    bulunan = next((c for c in adaylar if c in work.columns), None)
+                    if bulunan:
+                        secilen_kolonlar.append(bulunan)
+
+                if not secilen_kolonlar:
+                    continue
+
+                sayisal = work[secilen_kolonlar].apply(
+                    lambda seri: seri.apply(guvenli_sayi).astype(float)
+                )
+                if sayisal.abs().to_numpy().sum() <= 0:
+                    continue
+
+                work["_9_ay_gecici_toplam"] = sayisal.sum(axis=1)
+                grouped = work.groupby("Müşteri Kodu")["_9_ay_gecici_toplam"]
+                return grouped.max() if toplama_tipi == "max" else grouped.sum()
+
+            return pd.Series(dtype=float)
+
+        # 1) Yüklenen dosyada hazır 9 Ay Toplam Desi varsa önce onu koru.
+        if MUSTERI_9_AY_TOPLAM_KOLONU in sonuc.columns:
+            hazir = sonuc[["Müşteri Kodu", MUSTERI_9_AY_TOPLAM_KOLONU]].copy()
+            hazir[MUSTERI_9_AY_TOPLAM_KOLONU] = (
+                hazir[MUSTERI_9_AY_TOPLAM_KOLONU].apply(guvenli_sayi).astype(float)
+            )
+
+            def tekrar_etmeyen_toplam(seri):
+                degerler = seri[seri != 0.0]
+                if degerler.empty:
+                    return 0.0
+                benzersiz = degerler.drop_duplicates()
+                return float(benzersiz.iloc[0]) if len(benzersiz) == 1 else float(degerler.sum())
+
+            eksikleri_doldur(
+                hazir.groupby("Müşteri Kodu")[MUSTERI_9_AY_TOPLAM_KOLONU]
+                .apply(tekrar_etmeyen_toplam)
+            )
+
+        # 2) Yüklenen dosyanın içinde aylık Desi/Kg kolonları varsa onları kullan.
+        eksikleri_doldur(
+            aylik_kaynaktan_toplam(sonuc, ["2025", "2026"], toplama_tipi="sum", genel_ay_adi=True)
         )
-        sonuc = pd.merge(sonuc, musteri_toplamlari, on="Müşteri Kodu", how="left")
+
+        # 3) Data havuzundaki müşteri bazlı 2025 Ocak-Eylül değerlerini kullan.
+        data_havuzu = st.session_state.get("data_sayfası_df", pd.DataFrame())
+        eksikleri_doldur(
+            aylik_kaynaktan_toplam(data_havuzu, ["2025", "2024"], toplama_tipi="max")
+        )
+
+        # 4) Son çare olarak ana bütçe verisindeki 2025/2026 Ocak-Eylül değerlerini kullan.
+        eksikleri_doldur(
+            aylik_kaynaktan_toplam(st.session_state.ana_veri, ["2025", "2026"], toplama_tipi="sum")
+        )
+
         sonuc[MUSTERI_9_AY_TOPLAM_KOLONU] = (
-            sonuc[MUSTERI_9_AY_TOPLAM_KOLONU].fillna(0.0).apply(guvenli_sayi)
+            sonuc["Müşteri Kodu"].map(bulunan_toplam).fillna(0.0).apply(guvenli_sayi)
         )
         return sonuc
 
@@ -913,6 +981,10 @@ with sekmeler[4]:
                 sonuc[col] = varsayilan
 
         sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
+
+        # Aynı müşteri kodu dosyada birden fazla kez geçse bile ekranda tek satır göster.
+        sonuc = sonuc.drop_duplicates(subset=["Müşteri Kodu"], keep="first").reset_index(drop=True)
         sonuc["Değişim kontrol"] = sonuc.apply(
             lambda row: "DOĞRU"
             if str(row.get("Durum", "")).strip().upper()
@@ -963,7 +1035,7 @@ with sekmeler[4]:
             disabled=kilitli,
             column_config={
                 MUSTERI_9_AY_TOPLAM_KOLONU: st.column_config.NumberColumn(
-                    MUSTERI_9_AY_TOPLAM_KOLONU, format="%.0f"
+                    MUSTERI_9_AY_TOPLAM_KOLONU, format="localized"
                 ),
                 "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn(
                     "Yeni/Bütçelenen Müşteri",
@@ -973,7 +1045,7 @@ with sekmeler[4]:
                     "Durum_2", options=["GEÇERLİ", "GEÇERSİZ", None]
                 )
             },
-            key="ed_m_t4_exact_v2"
+            key="ed_m_t4_exact_v3"
         )
         st.session_state.musteri_ekran_df = (
             edited_m.reindex(columns=MUSTERI_DETAY_KOLONLARI).copy()
