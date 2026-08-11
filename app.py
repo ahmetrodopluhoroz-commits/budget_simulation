@@ -1253,10 +1253,7 @@ with sekmeler[8]:
             
             for col in df_work_2026.columns:
                 if col in kg_sutunlari:
-                    sayisal_seri = pd.to_numeric(
-                        df_work_2026[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False),
-                        errors='coerce'
-                    ).fillna(0.0)
+                    sayisal_seri = df_work_2026[col].apply(guvenli_sayi).astype(float)
                     df_work_2026[col] = sayisal_seri
                     toplam_dict[col] = sayisal_seri.sum()
                 elif col in ["Müşteri Kodu", "Müşteri Adı"]:
