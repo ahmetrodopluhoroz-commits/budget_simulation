@@ -429,7 +429,7 @@ def mazot_degisim_matrisi_olustur(mazot_verisi=None):
             else:
                 onceki_fiyat = guvenli_sayi(mz_base.get(aylar[onceki_index], 0.0))
             row_data[ay] = (
-                ((guncel_fiyat / onceki_fiyat) - 1)*100
+                ((guncel_fiyat / onceki_fiyat) - 1)*1
                 if onceki_fiyat > 0 and guncel_fiyat > 0 else np.nan
             )
         matris_rows.append(row_data)
