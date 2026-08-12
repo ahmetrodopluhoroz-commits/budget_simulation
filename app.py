@@ -1822,7 +1822,7 @@ if sekme_acik_mi[8]:
                     val_curr = guvenli_sayi(mz_base.get(ay, 0.0))
                     idx_prev = j - k
                     val_prev = guvenli_sayi(mz_base.get("Baz Motorin", 0.0)) if idx_prev == -1 else (0.0 if idx_prev < -1 else guvenli_sayi(mz_base.get(aylar[idx_prev], 0.0)))
-                    row_data[ay] = ((val_curr / val_prev) - 1)*100 if val_prev > 0 and val_curr > 0 else None
+                    row_data[ay] = (val_curr / val_prev) - 1 if val_prev > 0 and val_curr > 0 else None
                 matris_rows.append(row_data)
 
             df_mazot_matris = pd.DataFrame(matris_rows)
