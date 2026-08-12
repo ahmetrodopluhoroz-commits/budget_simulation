@@ -1541,8 +1541,9 @@ if sekme_acik_mi[7]:
     with sekmeler[7]:
         st.title("🧾 Eskalasyon ve Master Data Yönetimi")
         st.caption(
-            "Müşteri kimlikleri Yeni-Bütçe sayfasından, Değişim Anahtarı/KDV/Baz fiyat "
-            "kaynak sayfalardan gelir. Eskalasyon parametreleri bu tabloda manuel girilir."
+            "Müşteri kimlikleri ve Durum (Durum_2) Yeni-Bütçe sayfasından; "
+            "Değişim Anahtarı/KDV/Baz fiyat kaynak sayfalardan gelir. Durum GEÇERSİZ "
+            "ise Değişim Anahtarı da otomatik GEÇERSİZ olur."
         )
 
         def master_data_tablosunu_olustur():
@@ -1550,8 +1551,18 @@ if sekme_acik_mi[7]:
             if musteri_df.empty or "Müşteri Kodu" not in musteri_df.columns:
                 return pd.DataFrame(columns=master_data_sutunlari)
 
-            musteri_df.columns = [str(c).strip() for c in musteri_df.columns]
+            musteri_df = sutun_adlarini_standartlastir(musteri_df)
             musteri_df["Müşteri Kodu"] = musteri_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+
+            # Master Data'daki Durum, Yeni-Bütçe sayfasında kullanıcının
+            # yönettiği Durum_2 alanından gelir; ilk kaynaktaki Durum kullanılmaz.
+            if "Durum_2" in musteri_df.columns:
+                musteri_df["Durum"] = musteri_df["Durum_2"].apply(
+                    lambda v: "" if pd.isna(v) else str(v).strip().upper()
+                )
+            else:
+                musteri_df["Durum"] = ""
+
             for col in master_data_kimlik_sutunlari:
                 if col not in musteri_df.columns:
                     musteri_df[col] = ""
@@ -1562,7 +1573,9 @@ if sekme_acik_mi[7]:
                 .reset_index(drop=True)
             )
 
-            parametre_df = st.session_state.get("deg_anah_veri", pd.DataFrame()).copy()
+            parametre_df = sutun_adlarini_standartlastir(
+                st.session_state.get("deg_anah_veri", pd.DataFrame())
+            )
             if not parametre_df.empty and "Müşteri Kodu" in parametre_df.columns:
                 parametre_df["Müşteri Kodu"] = parametre_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
                 if "Değişim Anahtarı" not in parametre_df.columns:
@@ -1574,6 +1587,17 @@ if sekme_acik_mi[7]:
                 sonuc = pd.merge(sonuc, degisim_df, on="Müşteri Kodu", how="left")
             else:
                 sonuc["Değişim Anahtarı"] = ""
+
+            # Excel mantığı:
+            # EĞER(Durum="GEÇERSİZ"; "GEÇERSİZ"; DÜŞEYARA(Müşteri Kodu; ...))
+            sonuc["Değişim Anahtarı"] = sonuc["Değişim Anahtarı"].apply(
+                lambda v: "" if pd.isna(v) else str(v).strip()
+            )
+            gecersiz_musteriler = (
+                sonuc["Durum"].fillna("").astype(str).str.strip().str.upper()
+                == "GEÇERSİZ"
+            )
+            sonuc.loc[gecersiz_musteriler, "Değişim Anahtarı"] = "GEÇERSİZ"
 
             baz_df = otomatik_baz_yakit_tablosu_olustur()
             st.session_state.baz_yakit_veri = baz_df.copy()
@@ -1798,7 +1822,7 @@ if sekme_acik_mi[8]:
                     val_curr = guvenli_sayi(mz_base.get(ay, 0.0))
                     idx_prev = j - k
                     val_prev = guvenli_sayi(mz_base.get("Baz Motorin", 0.0)) if idx_prev == -1 else (0.0 if idx_prev < -1 else guvenli_sayi(mz_base.get(aylar[idx_prev], 0.0)))
-                    row_data[ay] = ((val_curr / val_prev) - 1)*100 if val_prev > 0 and val_curr > 0 else None
+                    row_data[ay] = (val_curr / val_prev) - 1 if val_prev > 0 and val_curr > 0 else None
                 matris_rows.append(row_data)
 
             df_mazot_matris = pd.DataFrame(matris_rows)
