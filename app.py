@@ -12,6 +12,7 @@ from datetime import date, datetime
 # ============================================================
 CACHE_DATA_MASTER = "cache_data_master.parquet"
 CACHE_2026_B = "cache_2026_buyume.parquet"
+CACHE_2026_GERCEK_B = "cache_2026_buyume_gercek.parquet"
 
 try:
     from supabase import create_client, Client
@@ -117,6 +118,25 @@ if "df_2026_buyume_9" not in st.session_state:
         st.session_state.df_2026_buyume_9 = pd.read_parquet(CACHE_2026_B)
     else:
         st.session_state.df_2026_buyume_9 = pd.DataFrame()
+
+if "df_2026_gercek_9" not in st.session_state:
+    if os.path.exists(CACHE_2026_GERCEK_B):
+        st.session_state.df_2026_gercek_9 = pd.read_parquet(CACHE_2026_GERCEK_B)
+    else:
+        # Eski önbellekle uyumluluk: yeni bir dosya yüklenene kadar mevcut 2026
+        # verisi gerçekleşen kaynak olarak kabul edilir.
+        st.session_state.df_2026_gercek_9 = (
+            st.session_state.df_2026_buyume_9.copy()
+        )
+
+if "son_gerceklesen_ay_2026_9" not in st.session_state:
+    st.session_state.son_gerceklesen_ay_2026_9 = "Ağustos"
+if "upload_2026_imza_9" not in st.session_state:
+    st.session_state.upload_2026_imza_9 = None
+if "tahmin_uygulama_imza_9" not in st.session_state:
+    st.session_state.tahmin_uygulama_imza_9 = None
+if "eksik_2026_kolonlari_9" not in st.session_state:
+    st.session_state.eksik_2026_kolonlari_9 = []
 
 if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
 if "editor_key" not in st.session_state: st.session_state.editor_key = 0
@@ -276,6 +296,42 @@ def supabase_verisini_hazirla(dataframe):
     for c in BIGINT_KOLONLAR: df[c] = df[c].apply(lambda v: guvenli_tamsayi(v, nullable=True))
     for c in NUMERIC_KOLONLAR: df[c] = df[c].apply(lambda v: float(guvenli_sayi(v)))
     return df, [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in df.iterrows()]
+
+def takvim_verisini_hazirla():
+    """Çalışma günü tablosunu bütün sekmeler için tek kez hazırlar."""
+    if "takvim_verisi_yillar" in st.session_state:
+        return
+
+    takvim_df = pd.DataFrame()
+    if client:
+        try:
+            tk_res = client.table("takvim_tablosu").select("*").execute()
+            if tk_res.data:
+                takvim_df = pd.DataFrame(tk_res.data)
+                if "id" in takvim_df.columns:
+                    takvim_df = takvim_df.drop(columns=["id"])
+        except Exception:
+            takvim_df = pd.DataFrame()
+
+    if takvim_df.empty:
+        takvim_df = pd.DataFrame([
+            {"YIL": "2024", "Ocak": 26, "Şubat": 25, "Mart": 26, "Nisan": 23, "Mayıs": 26, "Haziran": 22, "Temmuz": 27, "Ağustos": 27, "Eylül": 25, "Ekim": 27, "Kasım": 26, "Aralık": 26},
+            {"YIL": "2025", "Ocak": 26, "Şubat": 24, "Mart": 25, "Nisan": 25, "Mayıs": 26, "Haziran": 22, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+            {"YIL": "2026", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27},
+            {"YIL": "2027", "Ocak": 26, "Şubat": 24, "Mart": 23, "Nisan": 26, "Mayıs": 21, "Haziran": 26, "Temmuz": 26, "Ağustos": 26, "Eylül": 26, "Ekim": 26, "Kasım": 25, "Aralık": 27}
+        ])
+
+    for kolon in ["YIL"] + aylar:
+        if kolon not in takvim_df.columns:
+            takvim_df[kolon] = "" if kolon == "YIL" else 0.0
+    takvim_df["YIL"] = takvim_df["YIL"].astype(str).str.strip()
+    for ay in aylar:
+        takvim_df[ay] = takvim_df[ay].apply(guvenli_sayi).astype(float)
+    st.session_state.takvim_verisi_yillar = (
+        takvim_df[["YIL"] + aylar].reset_index(drop=True)
+    )
+
+takvim_verisini_hazirla()
 
 # ============================================================
 # ARAYÜZ SEKMELERİ (YALNIZCA AÇIK SEKMEYİ HESAPLAYAN HIZLI YAPI)
@@ -1399,6 +1455,128 @@ if sekme_acik_mi[8]:
         hist_24_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2024")
         hist_25_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2025")
 
+        HEDEF_GRUPLAR_9 = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+
+        def grup_adi_standartlastir_9(value):
+            grup = temiz_metin_9(value, "DİĞER").upper()
+            return grup if grup in {"MP", "HOROZ CÜZDAN"} else "DİĞER"
+
+        def tarihsel_grup_dagilimlarini_hazirla_9():
+            """2024 ve 2025'in grup bazlı aylık dağılım ortalamasını üretir."""
+            yil_dagilimlari = {}
+            for yil, kaynak in [("2024", hist_24_9), ("2025", hist_25_9)]:
+                aylik_kolonlar = [f"{yil} {ay} Kg" for ay in aylar]
+                if kaynak is None or kaynak.empty:
+                    grup_toplamlari = pd.DataFrame(
+                        0.0, index=HEDEF_GRUPLAR_9, columns=aylik_kolonlar
+                    )
+                else:
+                    work = kaynak.copy()
+                    work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
+                        grup_adi_standartlastir_9
+                    )
+                    for kolon in aylik_kolonlar:
+                        if kolon not in work.columns:
+                            work[kolon] = 0.0
+                        work[kolon] = work[kolon].apply(guvenli_sayi).astype(float)
+                    grup_toplamlari = (
+                        work.groupby("Müşteri Grubu")[aylik_kolonlar]
+                        .sum()
+                        .reindex(HEDEF_GRUPLAR_9, fill_value=0.0)
+                    )
+
+                dagilimlar = {}
+                for grup in HEDEF_GRUPLAR_9:
+                    degerler = grup_toplamlari.loc[grup].to_numpy(dtype=float)
+                    toplam = float(degerler.sum())
+                    dagilimlar[grup] = (
+                        degerler / toplam if toplam > 0 else np.zeros(len(aylar))
+                    )
+                yil_dagilimlari[yil] = dagilimlar
+
+            return {
+                grup: (
+                    yil_dagilimlari["2024"][grup]
+                    + yil_dagilimlari["2025"][grup]
+                ) / 2.0
+                for grup in HEDEF_GRUPLAR_9
+            }
+
+        def calisma_gunu_25to26_oranlari_9():
+            takvim = st.session_state.get("takvim_verisi_yillar", pd.DataFrame())
+            oranlar = {ay: 1.0 for ay in aylar}
+            if takvim is None or takvim.empty or "YIL" not in takvim.columns:
+                return oranlar
+
+            yil_serisi = takvim["YIL"].astype(str).str.strip()
+            satir_2025 = takvim[yil_serisi == "2025"]
+            satir_2026 = takvim[yil_serisi == "2026"]
+            if satir_2025.empty or satir_2026.empty:
+                return oranlar
+
+            for ay in aylar:
+                gun_2025 = guvenli_sayi(satir_2025.iloc[0].get(ay, 0.0))
+                gun_2026 = guvenli_sayi(satir_2026.iloc[0].get(ay, 0.0))
+                oranlar[ay] = gun_2026 / gun_2025 if gun_2025 > 0 else 0.0
+            return oranlar
+
+        def detay_satirlarina_2026_tahmini_uygula_9(
+            df_gercek, son_gerceklesen_ay, grup_dagilimlari, gun_oranlari
+        ):
+            """Sabit baz tahminini detay satırlarında hesaplayıp boş aylara yazar."""
+            if df_gercek is None or df_gercek.empty:
+                return pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+
+            sonuc = df_gercek.copy().reindex(columns=NIHAI_SUTUNLAR_9)
+            for kolon in AY_KOLONLARI_9:
+                sonuc[kolon] = sonuc[kolon].apply(guvenli_sayi).astype(float)
+
+            son_ay_index = aylar.index(son_gerceklesen_ay)
+            gercek_kolonlar = [f"{ay} Kg" for ay in aylar[:son_ay_index + 1]]
+            sabit_baz_toplami = sonuc[gercek_kolonlar].sum(axis=1).to_numpy(float)
+
+            satir_gruplari = sonuc["Müşteri Grubu"].apply(
+                grup_adi_standartlastir_9
+            )
+            grup_paydalari = {
+                grup: float(grup_dagilimlari[grup][:son_ay_index + 1].sum())
+                for grup in HEDEF_GRUPLAR_9
+            }
+            payda = satir_gruplari.map(grup_paydalari).fillna(0.0).to_numpy(float)
+            yillik_baz = np.divide(
+                sabit_baz_toplami,
+                payda,
+                out=np.zeros_like(sabit_baz_toplami, dtype=float),
+                where=payda > 0
+            )
+
+            for hedef_index in range(son_ay_index + 1, len(aylar)):
+                hedef_ay = aylar[hedef_index]
+                onceki_uc_ay = [
+                    f"{ay} Kg"
+                    for ay in aylar[max(0, hedef_index - 3):hedef_index]
+                ]
+                hareket_toplami = (
+                    sonuc[onceki_uc_ay].sum(axis=1).to_numpy(float)
+                    if onceki_uc_ay else np.zeros(len(sonuc), dtype=float)
+                )
+                hedef_grup_payi = satir_gruplari.map({
+                    grup: float(grup_dagilimlari[grup][hedef_index])
+                    for grup in HEDEF_GRUPLAR_9
+                }).fillna(0.0).to_numpy(float)
+                calisma_gunu_orani = float(gun_oranlari.get(hedef_ay, 1.0))
+
+                tahmin = yillik_baz * hedef_grup_payi * calisma_gunu_orani
+                sonuc[f"{hedef_ay} Kg"] = np.where(
+                    np.isclose(hareket_toplami, 0.0), 0.0, tahmin
+                )
+
+            sonuc["Toplam Kg"] = sonuc[AY_KOLONLARI_9].sum(axis=1)
+            return sonuc[NIHAI_SUTUNLAR_9]
+
+        ortalama_grup_dagilimlari_9 = tarihsel_grup_dagilimlarini_hazirla_9()
+        gun_oranlari_25to26_9 = calisma_gunu_25to26_oranlari_9()
+
         mevcut_yillar_9 = []
         if any(f"2024 {m} Kg" in data_havuzu_9.columns for m in aylar):
             mevcut_yillar_9.append("2024")
@@ -1425,6 +1603,16 @@ if sekme_acik_mi[8]:
                 "Dosya yüklendiğinde otomatik işlenir. 2024–2025 verileri yeniden istenmez ve "
                 "ana havuzdaki geçmiş değerler değiştirilmez."
             )
+
+            son_gerceklesen_ay_9 = st.selectbox(
+                "📅 2026 Gerçekleşen Son Ay",
+                aylar,
+                key="son_gerceklesen_ay_2026_9",
+                help=(
+                    "Seçilen aya kadar dosyadaki Kg değerleri gerçekleşen olarak korunur. "
+                    "Sonraki aylar detay satırı bazında tahmin edilerek ilgili Kg kolonlarına yazılır."
+                )
+            )
             up_2026_9 = st.file_uploader(
                 "2026 güncel Kg dosyasını yükleyin",
                 type=["xlsx", "xls", "csv"],
@@ -1432,20 +1620,73 @@ if sekme_acik_mi[8]:
             )
 
             if up_2026_9 is not None:
-                try:
-                    df_raw_26_9 = oku_excel_csv_9(up_2026_9)
-                    df_clean_26_9, eksik_26_9 = temizle_2026_31_kolon(df_raw_26_9)
-                    st.session_state.df_2026_buyume_9 = df_clean_26_9
-                    df_clean_26_9.to_parquet(CACHE_2026_B, index=False)
-                
-                    st.success(f"2026 dosyası işlendi: {len(df_clean_26_9):,} satır.")
-                    if eksik_26_9:
-                        st.warning(
-                            "Dosyada bulunmadığı için boş oluşturulan kolonlar: "
-                            + ", ".join(eksik_26_9)
-                        )
-                except Exception as ex:
-                    st.error(f"2026 dosyası işlenemedi: {ex}")
+                upload_imza_9 = (
+                    up_2026_9.name,
+                    getattr(up_2026_9, "size", None),
+                    getattr(up_2026_9, "file_id", None)
+                )
+                if upload_imza_9 != st.session_state.upload_2026_imza_9:
+                    try:
+                        df_raw_26_9 = oku_excel_csv_9(up_2026_9)
+                        df_clean_26_9, eksik_26_9 = temizle_2026_31_kolon(df_raw_26_9)
+                        st.session_state.df_2026_gercek_9 = df_clean_26_9.copy()
+                        st.session_state.upload_2026_imza_9 = upload_imza_9
+                        st.session_state.eksik_2026_kolonlari_9 = eksik_26_9
+                        st.session_state.tahmin_uygulama_imza_9 = None
+                        df_clean_26_9.to_parquet(CACHE_2026_GERCEK_B, index=False)
+                    except Exception as ex:
+                        st.error(f"2026 dosyası işlenemedi: {ex}")
+
+            df_2026_gercek_9 = st.session_state.get(
+                "df_2026_gercek_9", pd.DataFrame()
+            )
+            if not df_2026_gercek_9.empty:
+                dagilim_imzasi_9 = tuple(
+                    round(float(deger), 12)
+                    for grup in HEDEF_GRUPLAR_9
+                    for deger in ortalama_grup_dagilimlari_9[grup]
+                )
+                gun_imzasi_9 = tuple(
+                    round(float(gun_oranlari_25to26_9[ay]), 12) for ay in aylar
+                )
+                tahmin_imzasi_9 = (
+                    st.session_state.upload_2026_imza_9,
+                    len(df_2026_gercek_9),
+                    son_gerceklesen_ay_9,
+                    dagilim_imzasi_9,
+                    gun_imzasi_9
+                )
+
+                if (
+                    tahmin_imzasi_9 != st.session_state.tahmin_uygulama_imza_9
+                    or st.session_state.get("df_2026_buyume_9", pd.DataFrame()).empty
+                ):
+                    df_tahminli_2026_9 = detay_satirlarina_2026_tahmini_uygula_9(
+                        df_2026_gercek_9,
+                        son_gerceklesen_ay_9,
+                        ortalama_grup_dagilimlari_9,
+                        gun_oranlari_25to26_9
+                    )
+                    st.session_state.df_2026_buyume_9 = df_tahminli_2026_9
+                    st.session_state.tahmin_uygulama_imza_9 = tahmin_imzasi_9
+                    df_tahminli_2026_9.to_parquet(CACHE_2026_B, index=False)
+
+                tahmin_aylari_9 = aylar[aylar.index(son_gerceklesen_ay_9) + 1:]
+                st.success(
+                    f"2026 dosyası işlendi: {len(df_2026_gercek_9):,} satır."
+                )
+                if tahmin_aylari_9:
+                    st.info(
+                        f"Gerçekleşen son ay: {son_gerceklesen_ay_9}. "
+                        + ", ".join(f"{ay} Kg" for ay in tahmin_aylari_9)
+                        + " kolonları sabit baz tahminiyle tamamlandı."
+                    )
+                eksik_26_9 = st.session_state.get("eksik_2026_kolonlari_9", [])
+                if eksik_26_9:
+                    st.warning(
+                        "Dosyada bulunmadığı için boş oluşturulan kolonlar: "
+                        + ", ".join(eksik_26_9)
+                    )
 
             df_2026_raw_9 = st.session_state.get("df_2026_buyume_9", pd.DataFrame())
             if not df_2026_raw_9.empty:
@@ -1513,8 +1754,14 @@ if sekme_acik_mi[8]:
 
                 if st.button("🧹 2026 yüklemesini hafızadan temizle", key="clear_2026_9"):
                     st.session_state.df_2026_buyume_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+                    st.session_state.df_2026_gercek_9 = pd.DataFrame(columns=NIHAI_SUTUNLAR_9)
+                    st.session_state.upload_2026_imza_9 = None
+                    st.session_state.tahmin_uygulama_imza_9 = None
+                    st.session_state.eksik_2026_kolonlari_9 = []
                     if os.path.exists(CACHE_2026_B):
                         os.remove(CACHE_2026_B)
+                    if os.path.exists(CACHE_2026_GERCEK_B):
+                        os.remove(CACHE_2026_GERCEK_B)
                     st.rerun()
 
         hist_26_9 = musteri_bazinda_ozetle_9(
@@ -1785,13 +2032,11 @@ if sekme_acik_mi[8]:
                 y_cols = [f"{y} {m} Kg" for m in aylar]
                 grup_totals_9[y] = grup_calc_9.groupby("Müşteri Grubu")[y_cols].sum()
 
-            toplam_2026_ay_9 = {
-                m: grup_totals_9["2026"][f"2026 {m} Kg"].sum()
-                if f"2026 {m} Kg" in grup_totals_9["2026"].columns else 0.0
-                for m in aylar
-            }
-            gerceklesen_aylar_9 = [m for m in aylar if toplam_2026_ay_9[m] > 0]
-            tahmini_aylar_9 = [m for m in aylar if m not in gerceklesen_aylar_9]
+            son_ay_index_9 = aylar.index(
+                st.session_state.get("son_gerceklesen_ay_2026_9", "Ağustos")
+            )
+            gerceklesen_aylar_9 = aylar[:son_ay_index_9 + 1]
+            tahmini_aylar_9 = aylar[son_ay_index_9 + 1:]
 
             if gerceklesen_aylar_9:
                 st.success("2026 gerçekleşen kabul edilen aylar: " + ", ".join(gerceklesen_aylar_9))
