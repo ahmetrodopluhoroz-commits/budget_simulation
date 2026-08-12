@@ -115,10 +115,12 @@ master_data_manuel_sutunlari = [
     "Esk. Baz Yakıt Fiyatı (KDV Hariç)",
     "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
+master_data_mazot_sutunlari = [f"Mazot {ay} (%)" for ay in aylar]
 master_data_sutunlari = (
     master_data_kimlik_sutunlari
     + master_data_kaynak_sutunlari
     + master_data_manuel_sutunlari
+    + master_data_mazot_sutunlari
 )
 mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
 buyume_ekran_sutunlari = [
@@ -169,6 +171,8 @@ if "deg_anah_veri" not in st.session_state: st.session_state.deg_anah_veri = pd.
 if "baz_yakit_veri" not in st.session_state: st.session_state.baz_yakit_veri = pd.DataFrame(columns=baz_yakit_sutunlari)
 if "master_data_df" not in st.session_state: st.session_state.master_data_df = pd.DataFrame(columns=master_data_sutunlari)
 if "master_data_ayarlari" not in st.session_state: st.session_state.master_data_ayarlari = {}
+if "master_mazot_ayarlari" not in st.session_state: st.session_state.master_mazot_ayarlari = {}
+if "master_editor_nonce" not in st.session_state: st.session_state.master_editor_nonce = 0
 if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
@@ -401,6 +405,55 @@ def otomatik_baz_yakit_tablosu_olustur():
         sonuc.apply(fiyat_ve_kdv_hazirla, axis=1)
     )
     return sonuc.reindex(columns=baz_yakit_sutunlari)
+
+def mazot_degisim_matrisi_olustur(mazot_verisi=None):
+    """Baz motorin ve aylık fiyatlardan 1-6 aylık değişim matrisini üretir."""
+    kaynak = (
+        st.session_state.get("mazot_giriş_veri", pd.DataFrame())
+        if mazot_verisi is None else mazot_verisi
+    )
+    if kaynak is None or kaynak.empty:
+        return pd.DataFrame(columns=["Periyot"] + aylar)
+
+    mz_base = kaynak.iloc[0]
+    matris_rows = []
+    for periyot in range(1, 7):
+        row_data = {"Periyot": f"{periyot} ay"}
+        for ay_index, ay in enumerate(aylar):
+            guncel_fiyat = guvenli_sayi(mz_base.get(ay, 0.0))
+            onceki_index = ay_index - periyot
+            if onceki_index == -1:
+                onceki_fiyat = guvenli_sayi(mz_base.get("Baz Motorin", 0.0))
+            elif onceki_index < -1:
+                onceki_fiyat = 0.0
+            else:
+                onceki_fiyat = guvenli_sayi(mz_base.get(aylar[onceki_index], 0.0))
+            row_data[ay] = (
+                (guncel_fiyat / onceki_fiyat) - 1
+                if onceki_fiyat > 0 and guncel_fiyat > 0 else np.nan
+            )
+        matris_rows.append(row_data)
+    return pd.DataFrame(matris_rows)
+
+def musteri_mazot_oranlarini_getir(periyot):
+    """Seçilen periyodun mazot oranlarını yüzde puanı olarak getirir."""
+    periyot_sayisi = guvenli_tamsayi(periyot, nullable=True)
+    sonuc = {f"Mazot {ay} (%)": np.nan for ay in aylar}
+    sonuc["Mazot Ocak (%)"] = 0.0
+    if periyot_sayisi not in range(1, 7):
+        return sonuc
+
+    matris = mazot_degisim_matrisi_olustur()
+    satir = matris[matris["Periyot"] == f"{periyot_sayisi} ay"]
+    if satir.empty:
+        return sonuc
+    for ay in aylar:
+        oran = satir.iloc[0].get(ay)
+        if not pd.isna(oran):
+            sonuc[f"Mazot {ay} (%)"] = float(oran) * 100.0
+    # Bütçe başlangıç kuralı: Ocak her periyotta %0 ile başlar.
+    sonuc["Mazot Ocak (%)"] = 0.0
+    return sonuc
 
 def takvim_verisini_hazirla():
     """Çalışma günü tablosunu bütün sekmeler için tek kez hazırlar."""
@@ -1644,6 +1697,28 @@ if sekme_acik_mi[7]:
                 "Enf. Değişim Periyodu (Ay)"
             ]:
                 sonuc[col] = sonuc[col].apply(guvenli_sayi).astype(float)
+
+            # Mazot ayları, müşterinin Yakıt Değişim Periyodu ile 2026 Mazot
+            # matrisindeki aynı periyot satırından otomatik başlatılır.
+            for col in master_data_mazot_sutunlari:
+                sonuc[col] = np.nan
+            for idx, row in sonuc.iterrows():
+                mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
+                otomatik_oranlar = musteri_mazot_oranlarini_getir(
+                    row["Yakıt Değişim Periyodu (Ay)"]
+                )
+                manuel_oranlar = st.session_state.master_mazot_ayarlari.get(mkod, {})
+                for col in master_data_mazot_sutunlari:
+                    deger = otomatik_oranlar[col]
+                    if col in manuel_oranlar:
+                        manuel_deger = manuel_oranlar[col]
+                        try:
+                            manuel_bos = bool(pd.isna(manuel_deger))
+                        except (TypeError, ValueError):
+                            manuel_bos = False
+                        deger = np.nan if manuel_bos else guvenli_sayi(manuel_deger)
+                    sonuc.at[idx, col] = deger
+
             sonuc["Baz Yakıt Fiyatı (Girilen)"] = pd.to_numeric(
                 sonuc["Baz Yakıt Fiyatı (Girilen)"], errors="coerce"
             )
@@ -1706,16 +1781,76 @@ if sekme_acik_mi[7]:
                     ),
                     "Esk. Enf. Başlangıç Tarihi": st.column_config.DateColumn(
                         "Esk. Enf. Başlangıç Tarihi", format="DD.MM.YYYY"
-                    )
+                    ),
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="%.2f%%"
+                        )
+                        for col in master_data_mazot_sutunlari
+                    }
                 },
-                key="master_data_editor_v1"
+                key=f"master_data_editor_v2_{st.session_state.master_editor_nonce}"
             )
             st.session_state.master_data_df = edited_master.copy()
+
+            def mazot_degerleri_esit_mi(sol, sag):
+                try:
+                    sol_bos, sag_bos = bool(pd.isna(sol)), bool(pd.isna(sag))
+                except (TypeError, ValueError):
+                    sol_bos, sag_bos = False, False
+                if sol_bos or sag_bos:
+                    return sol_bos and sag_bos
+                return bool(np.isclose(guvenli_sayi(sol), guvenli_sayi(sag)))
+
+            eski_master_kodlu = master_df.copy()
+            eski_master_kodlu["Müşteri Kodu"] = eski_master_kodlu[
+                "Müşteri Kodu"
+            ].apply(guvenli_metin_kodu)
+            eski_master_kodlu = eski_master_kodlu.set_index("Müşteri Kodu")
+            periyot_degisti = False
             for _, row in edited_master.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
                 st.session_state.master_data_ayarlari[mkod] = {
                     col: row.get(col) for col in master_data_manuel_sutunlari
                 }
+
+                eski_row = eski_master_kodlu.loc[mkod]
+                eski_periyot = guvenli_tamsayi(
+                    eski_row.get("Yakıt Değişim Periyodu (Ay)"), nullable=True
+                )
+                yeni_periyot = guvenli_tamsayi(
+                    row.get("Yakıt Değişim Periyodu (Ay)"), nullable=True
+                )
+                periyot_satirda_degisti = eski_periyot != yeni_periyot
+                if periyot_satirda_degisti:
+                    periyot_degisti = True
+                    # Periyot değiştiğinde eski otomatik oranlar taşınmaz.
+                    yeni_manuel_oranlar = {}
+                    for col in master_data_mazot_sutunlari:
+                        if not mazot_degerleri_esit_mi(row.get(col), eski_row.get(col)):
+                            yeni_manuel_oranlar[col] = (
+                                None if pd.isna(row.get(col))
+                                else guvenli_sayi(row.get(col))
+                            )
+                    st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
+                else:
+                    otomatik_oranlar = musteri_mazot_oranlarini_getir(yeni_periyot)
+                    yeni_manuel_oranlar = {}
+                    for col in master_data_mazot_sutunlari:
+                        girilen_deger = row.get(col)
+                        if not mazot_degerleri_esit_mi(
+                            girilen_deger, otomatik_oranlar[col]
+                        ):
+                            yeni_manuel_oranlar[col] = (
+                                None if pd.isna(girilen_deger)
+                                else guvenli_sayi(girilen_deger)
+                            )
+                    st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
+
+            if periyot_degisti:
+                # Editörü yeni periyodun otomatik oranlarıyla anında yeniden kur.
+                st.session_state.master_editor_nonce += 1
+                st.rerun()
 
             st.markdown("---")
             md1, md2, md3 = st.columns(3)
@@ -1726,6 +1861,15 @@ if sekme_acik_mi[7]:
                 key="btn_master_memory"
             ):
                 st.success("Master Data manuel değerleri hafızaya kaydedildi.")
+
+            if md1.button(
+                "♻️ Mazot Oranlarını Otomatiğe Döndür",
+                use_container_width=True,
+                key="btn_master_mazot_reset"
+            ):
+                st.session_state.master_mazot_ayarlari = {}
+                st.session_state.master_editor_nonce += 1
+                st.rerun()
 
             master_excel = io.BytesIO()
             with pd.ExcelWriter(master_excel, engine="openpyxl") as writer:
@@ -1788,6 +1932,12 @@ if sekme_acik_mi[7]:
                                 st.session_state.master_data_ayarlari[mkod] = {
                                     col: row.get(col) for col in master_data_manuel_sutunlari
                                 }
+                                st.session_state.master_mazot_ayarlari[mkod] = {
+                                    col: row.get(col)
+                                    for col in master_data_mazot_sutunlari
+                                    if col in gelen_master.columns
+                                }
+                            st.session_state.master_editor_nonce += 1
                             st.success("Master Data buluttan getirildi.")
                             st.rerun()
                         else:
@@ -1814,18 +1964,7 @@ if sekme_acik_mi[8]:
         st.session_state.mazot_giriş_veri = edited_mazot_input.copy()
 
         if not edited_mazot_input.empty:
-            mz_base = edited_mazot_input.iloc[0]
-            matris_rows = []
-            for k in range(1, 7):
-                row_data = {"Periyot": f"{k} ay"}
-                for j, ay in enumerate(aylar):
-                    val_curr = guvenli_sayi(mz_base.get(ay, 0.0))
-                    idx_prev = j - k
-                    val_prev = guvenli_sayi(mz_base.get("Baz Motorin", 0.0)) if idx_prev == -1 else (0.0 if idx_prev < -1 else guvenli_sayi(mz_base.get(aylar[idx_prev], 0.0)))
-                    row_data[ay] = (val_curr / val_prev) - 1 if val_prev > 0 and val_curr > 0 else None
-                matris_rows.append(row_data)
-
-            df_mazot_matris = pd.DataFrame(matris_rows)
+            df_mazot_matris = mazot_degisim_matrisi_olustur(edited_mazot_input)
             st.subheader("📈 Hesaplanan Aylık Değişim Matrisi (%)")
             st.dataframe(df_mazot_matris, use_container_width=True, hide_index=True, column_config={ay: st.column_config.NumberColumn(ay, format="%.2f%%") for ay in aylar})
 
