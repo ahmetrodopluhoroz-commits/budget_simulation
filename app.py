@@ -1726,9 +1726,27 @@ if sekme_acik_mi[7]:
                 sonuc["Baz Yakıt Fiyatı (Girilen)"] = np.nan
                 sonuc["Esk. Baz Yakıt Fiyatı (KDV Hariç)"] = np.nan
 
-            for col in master_data_manuel_sutunlari:
+            master_tarih_sutunlari = [
+                "Esk. Yakıt Başlangıç Tarihi",
+                "Esk. Enf. Başlangıç Tarihi"
+            ]
+            master_sayisal_sutunlari = [
+                col for col in master_data_manuel_sutunlari
+                if col not in master_tarih_sutunlari
+            ]
+
+            # Arrow string sütununa datetime.date yazılması TypeError üretir.
+            # Kayıtlı manuel değerleri uygulamadan önce kesin veri tiplerini kur.
+            for col in master_tarih_sutunlari:
                 if col not in sonuc.columns:
-                    sonuc[col] = "" if "Tarihi" in col else 0.0
+                    sonuc[col] = pd.NaT
+                sonuc[col] = pd.to_datetime(
+                    sonuc[col], errors="coerce", dayfirst=True
+                )
+            for col in master_sayisal_sutunlari:
+                if col not in sonuc.columns:
+                    sonuc[col] = np.nan
+                sonuc[col] = pd.to_numeric(sonuc[col], errors="coerce").astype(float)
 
             # Daha önce kaydedilen manuel değerler kaynaklardan yeniden üretim sırasında korunur.
             for idx, row in sonuc.iterrows():
@@ -1746,7 +1764,12 @@ if sekme_acik_mi[7]:
                     except (TypeError, ValueError):
                         pass
                     if not kayitli_bos:
-                        sonuc.at[idx, col] = kayitli_deger
+                        if col in master_tarih_sutunlari:
+                            sonuc.at[idx, col] = pd.to_datetime(
+                                kayitli_deger, errors="coerce", dayfirst=True
+                            )
+                        else:
+                            sonuc.at[idx, col] = guvenli_sayi(kayitli_deger)
 
             for col in [
                 "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)",
