@@ -1,3 +1,5 @@
+# SÜRÜM: 2026-08-13 / TAM ESKALASYON (12 AY)
+# Bu dosyada master_data_eskalasyon_sutunlari tanımı ve ağırlıklı hesap aktiftir.
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -121,12 +123,14 @@ master_data_mazot_sutunlari = [f"Mazot {ay} (%)" for ay in aylar]
 MASTER_MAZOT_MANUEL_ALANLAR_DB = "Mazot Manuel Alanlar"
 master_data_enflasyon_sutunlari = [f"Enflasyon {ay} (%)" for ay in aylar]
 MASTER_ENFLASYON_MANUEL_ALANLAR_DB = "Enflasyon Manuel Alanlar"
+master_data_eskalasyon_sutunlari = [f"Eskalasyon {ay} (%)" for ay in aylar]
 master_data_sutunlari = (
     master_data_kimlik_sutunlari
     + master_data_kaynak_sutunlari
     + master_data_manuel_sutunlari
     + master_data_mazot_sutunlari
     + master_data_enflasyon_sutunlari
+    + master_data_eskalasyon_sutunlari
 )
 mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
 buyume_ekran_sutunlari = [
@@ -810,11 +814,39 @@ def musteri_enflasyon_oranlarini_getir(
     return sonuc
 
 
+def musteri_eskalasyon_oranlarini_getir(
+    row, durum_gecersiz=False, anahtar_gecersiz=False
+):
+    """Aylık mazot ve enflasyon oranlarını müşteri ağırlıklarıyla birleştirir."""
+    sonuc = {f"Eskalasyon {ay} (%)": 0.0 for ay in aylar}
+    if durum_gecersiz or anahtar_gecersiz:
+        return sonuc
+
+    yakit_agirligi = nullable_sayi(row.get("Yakıt Değişim Yüzdesi (%)"))
+    enflasyon_agirligi = nullable_sayi(row.get("Enf. Değişim Yüzdesi (%)"))
+    yakit_agirligi = 0.0 if yakit_agirligi is None else yakit_agirligi / 100.0
+    enflasyon_agirligi = (
+        0.0 if enflasyon_agirligi is None else enflasyon_agirligi / 100.0
+    )
+
+    for ay in aylar:
+        mazot_orani = nullable_sayi(row.get(f"Mazot {ay} (%)"))
+        enflasyon_orani = nullable_sayi(row.get(f"Enflasyon {ay} (%)"))
+        mazot_orani = 0.0 if mazot_orani is None else mazot_orani
+        enflasyon_orani = 0.0 if enflasyon_orani is None else enflasyon_orani
+        sonuc[f"Eskalasyon {ay} (%)"] = (
+            mazot_orani * yakit_agirligi
+            + enflasyon_orani * enflasyon_agirligi
+        )
+    return sonuc
+
+
 def manuel_enflasyon_hucrelerini_kaydet(edited_rows, edited_master):
     """Gerçekten değiştirilen enflasyon hücrelerini ve sürücüleri takip eder."""
     if not isinstance(edited_rows, dict) or edited_master is None:
         return False
     enflasyon_surucu_sutunlari = {
+        "Enf. Değişim Yüzdesi (%)",
         "Enf. Değişim Periyodu (Ay)",
         "Esk. Enf. Başlangıç Tarihi"
     }
@@ -1052,6 +1084,7 @@ def manuel_mazot_hucrelerini_kaydet(edited_rows, edited_master):
     if not isinstance(edited_rows, dict) or edited_master is None:
         return False
     mazot_surucu_sutunlari = {
+        "Yakıt Değişim Yüzdesi (%)",
         "Yakıt Anlık Değişim Oranı (%)",
         "Yakıt Değişim Periyodu (Ay)",
         "Esk. Yakıt Başlangıç Tarihi"
@@ -2232,6 +2265,9 @@ if sekme_acik_mi[7]:
             "hesaplanır; aylık sonuçlar elle değiştirilebilir. Enflasyon oranları "
             "ÜFE–TÜFE sayfasındaki kullanılan verilerden sabit periyoda göre "
             "hesaplanır ve Mazot Aralık sütununun sağında gösterilir."
+            " Eskalasyon Ocak–Aralık alanları; ilgili ayın mazot ve enflasyon "
+            "oranlarının müşteri bazlı değişim yüzdeleriyle ağırlıklandırılmış "
+            "toplamıdır."
         )
 
         try:
@@ -2446,6 +2482,28 @@ if sekme_acik_mi[7]:
                         )
                     sonuc.at[idx, col] = deger
 
+            # Nihai eskalasyon, aylık enflasyon ve mazot oranlarının müşteriye
+            # girilen ağırlıklarıyla birleştirilmesidir. O ayda uygulama yoksa
+            # kaynak hücre boş olsa bile nihai sonuç yüzde 0,00 gösterilir.
+            for col in master_data_eskalasyon_sutunlari:
+                sonuc[col] = 0.0
+            for idx, row in sonuc.iterrows():
+                durum_gecersiz = (
+                    str(row.get("Durum", "")).strip().upper() == "GEÇERSİZ"
+                )
+                anahtar_gecersiz = (
+                    "GECERSIZ" in degisim_anahtarini_normallestir(
+                        row.get("Değişim Anahtarı", "")
+                    )
+                )
+                eskalasyon_oranlari = musteri_eskalasyon_oranlarini_getir(
+                    row,
+                    durum_gecersiz=durum_gecersiz,
+                    anahtar_gecersiz=anahtar_gecersiz
+                )
+                for col, deger in eskalasyon_oranlari.items():
+                    sonuc.at[idx, col] = deger
+
             sonuc["Baz Yakıt Fiyatı (Girilen)"] = pd.to_numeric(
                 sonuc["Baz Yakıt Fiyatı (Girilen)"], errors="coerce"
             )
@@ -2487,7 +2545,11 @@ if sekme_acik_mi[7]:
                     "veya Baz Yakıt Fiyatı eksik. Eksikler sıfırla doldurulmadı."
                 )
 
-            kilitli_master = master_data_kimlik_sutunlari + master_data_kaynak_sutunlari
+            kilitli_master = (
+                master_data_kimlik_sutunlari
+                + master_data_kaynak_sutunlari
+                + master_data_eskalasyon_sutunlari
+            )
             master_editor_key = (
                 f"master_data_editor_v3_{st.session_state.master_editor_nonce}"
             )
@@ -2535,6 +2597,12 @@ if sekme_acik_mi[7]:
                             col, format="%.2f%%"
                         )
                         for col in master_data_enflasyon_sutunlari
+                    },
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="%.2f%%"
+                        )
+                        for col in master_data_eskalasyon_sutunlari
                     }
                 },
                 key=master_editor_key
@@ -2567,9 +2635,11 @@ if sekme_acik_mi[7]:
                 # Bunun yerine yalnızca hesap sürücülerinin güncel değerlerini
                 # imzalayıp aynı editör anahtarıyla bir kez yeniden hesapla.
                 surucu_sutunlari = [
+                    "Yakıt Değişim Yüzdesi (%)",
                     "Yakıt Anlık Değişim Oranı (%)",
                     "Yakıt Değişim Periyodu (Ay)",
                     "Esk. Yakıt Başlangıç Tarihi",
+                    "Enf. Değişim Yüzdesi (%)",
                     "Enf. Değişim Periyodu (Ay)",
                     "Esk. Enf. Başlangıç Tarihi"
                 ]
