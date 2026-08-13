@@ -119,11 +119,14 @@ master_data_manuel_sutunlari = [
 ]
 master_data_mazot_sutunlari = [f"Mazot {ay} (%)" for ay in aylar]
 MASTER_MAZOT_MANUEL_ALANLAR_DB = "Mazot Manuel Alanlar"
+master_data_enflasyon_sutunlari = [f"Enflasyon {ay} (%)" for ay in aylar]
+MASTER_ENFLASYON_MANUEL_ALANLAR_DB = "Enflasyon Manuel Alanlar"
 master_data_sutunlari = (
     master_data_kimlik_sutunlari
     + master_data_kaynak_sutunlari
     + master_data_manuel_sutunlari
     + master_data_mazot_sutunlari
+    + master_data_enflasyon_sutunlari
 )
 mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
 buyume_ekran_sutunlari = [
@@ -175,12 +178,16 @@ if "baz_yakit_veri" not in st.session_state: st.session_state.baz_yakit_veri = p
 if "master_data_df" not in st.session_state: st.session_state.master_data_df = pd.DataFrame(columns=master_data_sutunlari)
 if "master_data_ayarlari" not in st.session_state: st.session_state.master_data_ayarlari = {}
 if "master_mazot_ayarlari" not in st.session_state: st.session_state.master_mazot_ayarlari = {}
+if "master_enflasyon_ayarlari" not in st.session_state: st.session_state.master_enflasyon_ayarlari = {}
 if "master_editor_nonce" not in st.session_state: st.session_state.master_editor_nonce = 0
 # Eski sürüm otomatik değerleri manuel sanabiliyordu. Yeni izleme modeline ilk
 # geçişte yalnızca bir kez eski oturum işaretlerini temizle.
 if st.session_state.get("master_mazot_izleme_surumu") != 2:
     st.session_state.master_mazot_ayarlari = {}
     st.session_state.master_mazot_izleme_surumu = 2
+if st.session_state.get("master_enflasyon_izleme_surumu") != 1:
+    st.session_state.master_enflasyon_ayarlari = {}
+    st.session_state.master_enflasyon_izleme_surumu = 1
 if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
@@ -614,6 +621,229 @@ def enflasyon_editor_tablosu_olustur(baslangic_yili, bitis_yili, bulut_df):
         "ÜFE Manuel (%)", "TÜFE Manuel (%)",
         "ÜFE Kullanılan (%)", "TÜFE Kullanılan (%)", "Veri Durumu"
     ]]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def master_enflasyon_kaynaklarini_getir():
+    """Master Data hesapları için ekonomik verileri Supabase'den tek kez okur."""
+    bulut_client = get_supabase_client()
+    if not bulut_client:
+        return [], []
+    enflasyon_kayitlari = (
+        bulut_client.table(ENFLASYON_DB_TABLOSU)
+        .select("*")
+        .order("yil")
+        .order("ay")
+        .execute()
+    ).data or []
+    try:
+        asgari_kayitlari = (
+            bulut_client.table("asgari_ucret_hesaplanan")
+            .select("*")
+            .order("donem_baslangic")
+            .execute()
+        ).data or []
+    except Exception:
+        # Asgari ücret tablosu boş/erişilemez olsa da ÜFE+TÜFE hesabı çalışır.
+        asgari_kayitlari = []
+    return enflasyon_kayitlari, asgari_kayitlari
+
+
+def degisim_anahtarini_normallestir(value):
+    return (
+        str(value or "").strip().upper()
+        .replace("İ", "I").replace("Ş", "S").replace("Ğ", "G")
+        .replace("Ü", "U").replace("Ö", "O").replace("Ç", "C")
+    )
+
+
+def aylik_oranlari_bilesik_hesapla(oranlar):
+    """Yüzde puan listesini bileşik dönemsel yüzde değişime dönüştürür."""
+    if not oranlar:
+        return None
+    carpim = 1.0
+    for oran in oranlar:
+        sayi = nullable_sayi(oran)
+        if sayi is None:
+            return None
+        carpim *= 1.0 + (sayi / 100.0)
+    return (carpim - 1.0) * 100.0
+
+
+def sabit_enflasyon_uygulama_tarihleri(
+    periyot, baslangic_tarihi, hedef_yil=2026
+):
+    """Başlangıca bağlı ve yıl içinde değişmeyen enflasyon uygulama takvimidir."""
+    periyot_sayisi = guvenli_tamsayi(periyot, nullable=True)
+    baslangic = yakit_baslangic_tarihini_hazirla(baslangic_tarihi)
+    if periyot_sayisi is None or periyot_sayisi <= 0 or baslangic is None:
+        return []
+
+    baslangic = pd.Timestamp(
+        year=baslangic.year, month=baslangic.month, day=1
+    )
+    yil_basi = pd.Timestamp(year=hedef_yil, month=1, day=1)
+    yil_sonu = pd.Timestamp(year=hedef_yil, month=12, day=1)
+    uygulama = baslangic + pd.DateOffset(months=periyot_sayisi)
+    guvenlik = 0
+    while uygulama < yil_basi and guvenlik < 240:
+        uygulama += pd.DateOffset(months=periyot_sayisi)
+        guvenlik += 1
+
+    tarihler = []
+    while uygulama <= yil_sonu and guvenlik < 480:
+        tarihler.append(pd.Timestamp(uygulama).normalize())
+        uygulama += pd.DateOffset(months=periyot_sayisi)
+        guvenlik += 1
+    return tarihler
+
+
+def enflasyon_kaynak_haritasi_olustur(enflasyon_kayitlari):
+    """DB satırlarını (yıl, ay) -> (kullanılan ÜFE, kullanılan TÜFE) yapar."""
+    harita = {}
+    for row in enflasyon_kayitlari or []:
+        try:
+            yil = int(row.get("yil"))
+            ay_no = int(row.get("ay"))
+        except (TypeError, ValueError):
+            continue
+        ufe = nullable_sayi(row.get("ufe_kullanilan_oran"))
+        if ufe is None:
+            ufe = next((
+                nullable_sayi(row.get(c))
+                for c in [
+                    "ufe_manuel_oran", "ufe_gerceklesen_oran", "ufe_tahmin_oran"
+                ]
+                if nullable_sayi(row.get(c)) is not None
+            ), None)
+        tufe = nullable_sayi(row.get("tufe_kullanilan_oran"))
+        if tufe is None:
+            tufe = next((
+                nullable_sayi(row.get(c))
+                for c in [
+                    "tufe_manuel_oran", "tufe_gerceklesen_oran", "tufe_tahmin_oran"
+                ]
+                if nullable_sayi(row.get(c)) is not None
+            ), None)
+        harita[(yil, ay_no)] = (ufe, tufe)
+    return harita
+
+
+def donemdeki_asgari_ucret_artisini_bul(
+    asgari_kayitlari, onceki_uygulama_tarihi, uygulama_tarihi
+):
+    """İki eskalasyon tarihi arasında yürürlüğe giren en yüksek artışı bulur."""
+    bulunan = []
+    for row in asgari_kayitlari or []:
+        tarih = yakit_baslangic_tarihini_hazirla(row.get("donem_baslangic"))
+        oran = nullable_sayi(row.get("artis_orani_yuzde"))
+        if tarih is None or oran is None:
+            continue
+        if onceki_uygulama_tarihi < tarih <= uygulama_tarihi:
+            bulunan.append(oran)
+    return max(bulunan) if bulunan else None
+
+
+def musteri_enflasyon_oranlarini_getir(
+    degisim_anahtari,
+    periyot,
+    baslangic_tarihi,
+    enflasyon_kaynak_haritasi,
+    asgari_kayitlari=None,
+    hedef_yil=2026
+):
+    """Sabit periyotlarla müşterinin 12 aylık enflasyon eskalasyonunu üretir."""
+    sonuc = {f"Enflasyon {ay} (%)": np.nan for ay in aylar}
+    anahtar = degisim_anahtarini_normallestir(degisim_anahtari)
+    if "GECERSIZ" in anahtar or not ("UFE" in anahtar and "TUFE" in anahtar):
+        return sonuc
+
+    periyot_sayisi = guvenli_tamsayi(periyot, nullable=True)
+    if periyot_sayisi is None or periyot_sayisi <= 0:
+        return sonuc
+    uygulama_tarihleri = sabit_enflasyon_uygulama_tarihleri(
+        periyot_sayisi, baslangic_tarihi, hedef_yil
+    )
+
+    asgari_karsilastirmasi = "ASGARI" in anahtar
+    for uygulama_tarihi in uygulama_tarihleri:
+        onceki_uygulama = uygulama_tarihi - pd.DateOffset(
+            months=periyot_sayisi
+        )
+        donem_aylari = pd.date_range(
+            start=onceki_uygulama,
+            periods=periyot_sayisi,
+            freq="MS"
+        )
+        ufe_oranlari = []
+        tufe_oranlari = []
+        veri_tamam = True
+        for donem in donem_aylari:
+            ufe, tufe = enflasyon_kaynak_haritasi.get(
+                (int(donem.year), int(donem.month)), (None, None)
+            )
+            if ufe is None or tufe is None:
+                veri_tamam = False
+                break
+            ufe_oranlari.append(ufe)
+            tufe_oranlari.append(tufe)
+        if not veri_tamam:
+            continue
+
+        ufe_bilesik = aylik_oranlari_bilesik_hesapla(ufe_oranlari)
+        tufe_bilesik = aylik_oranlari_bilesik_hesapla(tufe_oranlari)
+        if ufe_bilesik is None or tufe_bilesik is None:
+            continue
+        uygulanacak_oran = (ufe_bilesik + tufe_bilesik) / 2.0
+
+        if asgari_karsilastirmasi:
+            asgari_artisi = donemdeki_asgari_ucret_artisini_bul(
+                asgari_kayitlari or [], onceki_uygulama, uygulama_tarihi
+            )
+            if asgari_artisi is not None:
+                uygulanacak_oran = max(uygulanacak_oran, asgari_artisi)
+
+        hedef_ay = aylar[int(uygulama_tarihi.month) - 1]
+        sonuc[f"Enflasyon {hedef_ay} (%)"] = uygulanacak_oran
+    return sonuc
+
+
+def manuel_enflasyon_hucrelerini_kaydet(edited_rows, edited_master):
+    """Gerçekten değiştirilen enflasyon hücrelerini ve sürücüleri takip eder."""
+    if not isinstance(edited_rows, dict) or edited_master is None:
+        return False
+    enflasyon_surucu_sutunlari = {
+        "Enf. Değişim Periyodu (Ay)",
+        "Esk. Enf. Başlangıç Tarihi"
+    }
+    surucu_degisti = False
+    for satir_no, degisiklikler in edited_rows.items():
+        try:
+            satir_index = int(satir_no)
+        except (TypeError, ValueError):
+            continue
+        if satir_index < 0 or satir_index >= len(edited_master):
+            continue
+        if not isinstance(degisiklikler, dict):
+            continue
+        mkod = guvenli_metin_kodu(
+            edited_master.iloc[satir_index]["Müşteri Kodu"]
+        )
+        manuel_oranlar = st.session_state.master_enflasyon_ayarlari.setdefault(
+            mkod, {}
+        )
+        for col, deger in degisiklikler.items():
+            if col in enflasyon_surucu_sutunlari:
+                surucu_degisti = True
+            if col in master_data_enflasyon_sutunlari:
+                try:
+                    deger_bos = deger is None or bool(pd.isna(deger))
+                except (TypeError, ValueError):
+                    deger_bos = deger is None
+                manuel_oranlar[col] = (
+                    None if deger_bos else guvenli_sayi(deger)
+                )
+    return surucu_degisti
 
 def uniq_id_hazirla(df):
     if "Uniq ID" not in df.columns: return df
@@ -1997,8 +2227,24 @@ if sekme_acik_mi[7]:
             "Değişim Anahtarı/KDV/Baz fiyat kaynak sayfalardan gelir. Durum GEÇERSİZ "
             "ise Değişim Anahtarı da otomatik GEÇERSİZ olur. Mazot oranları; "
             "başlangıç tarihi, sabit periyot ve pozitif/negatif anlık eşik kuralıyla "
-            "hesaplanır; aylık sonuçlar elle değiştirilebilir."
+            "hesaplanır; aylık sonuçlar elle değiştirilebilir. Enflasyon oranları "
+            "ÜFE–TÜFE sayfasındaki kullanılan verilerden sabit periyoda göre "
+            "hesaplanır ve Mazot Aralık sütununun sağında gösterilir."
         )
+
+        try:
+            master_enflasyon_kayitlari, master_asgari_kayitlari = (
+                master_enflasyon_kaynaklarini_getir()
+            )
+            master_enflasyon_haritasi = enflasyon_kaynak_haritasi_olustur(
+                master_enflasyon_kayitlari
+            )
+            master_enflasyon_kaynak_hatasi = None
+        except Exception as ex:
+            master_enflasyon_kayitlari = []
+            master_asgari_kayitlari = []
+            master_enflasyon_haritasi = {}
+            master_enflasyon_kaynak_hatasi = str(ex)
 
         def master_data_tablosunu_olustur():
             musteri_df = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
@@ -2128,11 +2374,24 @@ if sekme_acik_mi[7]:
                 sonuc[col] = np.nan
             for idx, row in sonuc.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
-                otomatik_oranlar = musteri_mazot_oranlarini_getir(
-                    row["Yakıt Değişim Periyodu (Ay)"],
-                    row["Yakıt Anlık Değişim Oranı (%)"],
-                    row["Esk. Yakıt Başlangıç Tarihi"]
+                durum_gecersiz = (
+                    str(row.get("Durum", "")).strip().upper() == "GEÇERSİZ"
                 )
+                anahtar_gecersiz = (
+                    "GECERSIZ" in degisim_anahtarini_normallestir(
+                        row.get("Değişim Anahtarı", "")
+                    )
+                )
+                if durum_gecersiz or anahtar_gecersiz:
+                    otomatik_oranlar = {
+                        col: np.nan for col in master_data_mazot_sutunlari
+                    }
+                else:
+                    otomatik_oranlar = musteri_mazot_oranlarini_getir(
+                        row["Yakıt Değişim Periyodu (Ay)"],
+                        row["Yakıt Anlık Değişim Oranı (%)"],
+                        row["Esk. Yakıt Başlangıç Tarihi"]
+                    )
                 manuel_oranlar = st.session_state.master_mazot_ayarlari.get(mkod, {})
                 for col in master_data_mazot_sutunlari:
                     deger = otomatik_oranlar[col]
@@ -2143,6 +2402,46 @@ if sekme_acik_mi[7]:
                         except (TypeError, ValueError):
                             manuel_bos = False
                         deger = np.nan if manuel_bos else guvenli_sayi(manuel_deger)
+                    sonuc.at[idx, col] = deger
+
+            # Enflasyon ayları, Mazot Aralık sütununun hemen arkasında yer alır.
+            for col in master_data_enflasyon_sutunlari:
+                sonuc[col] = np.nan
+            for idx, row in sonuc.iterrows():
+                mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
+                durum_gecersiz = (
+                    str(row.get("Durum", "")).strip().upper() == "GEÇERSİZ"
+                )
+                if durum_gecersiz:
+                    otomatik_enflasyon = {
+                        col: np.nan for col in master_data_enflasyon_sutunlari
+                    }
+                else:
+                    otomatik_enflasyon = musteri_enflasyon_oranlarini_getir(
+                        row.get("Değişim Anahtarı", ""),
+                        row.get("Enf. Değişim Periyodu (Ay)"),
+                        row.get("Esk. Enf. Başlangıç Tarihi"),
+                        master_enflasyon_haritasi,
+                        master_asgari_kayitlari,
+                        hedef_yil=2026
+                    )
+                manuel_enflasyon = (
+                    st.session_state.master_enflasyon_ayarlari.get(mkod, {})
+                )
+                for col in master_data_enflasyon_sutunlari:
+                    deger = otomatik_enflasyon[col]
+                    if col in manuel_enflasyon:
+                        manuel_deger = manuel_enflasyon[col]
+                        try:
+                            manuel_bos = (
+                                manuel_deger is None or bool(pd.isna(manuel_deger))
+                            )
+                        except (TypeError, ValueError):
+                            manuel_bos = manuel_deger is None
+                        deger = (
+                            np.nan if manuel_bos
+                            else guvenli_sayi(manuel_deger)
+                        )
                     sonuc.at[idx, col] = deger
 
             sonuc["Baz Yakıt Fiyatı (Girilen)"] = pd.to_numeric(
@@ -2165,6 +2464,16 @@ if sekme_acik_mi[7]:
                 "veya müşteri kartlarını buluttan çağırın."
             )
         else:
+            if master_enflasyon_kaynak_hatasi:
+                st.warning(
+                    "ÜFE–TÜFE verileri Master Data için okunamadı: "
+                    f"{master_enflasyon_kaynak_hatasi}"
+                )
+            elif not master_enflasyon_haritasi:
+                st.warning(
+                    "ÜFE–TÜFE kullanılan veri havuzu boş. Önce ÜFE–TÜFE Yönetimi "
+                    "sayfasında gerçekleşen/tahmin değerlerini kaydedin."
+                )
             eksik_eslesme = (
                 master_df["KDV Durumu"].fillna("").eq("")
                 | master_df["Baz Yakıt Fiyatı (Girilen)"].isna()
@@ -2218,6 +2527,12 @@ if sekme_acik_mi[7]:
                             col, format="%.2f%%"
                         )
                         for col in master_data_mazot_sutunlari
+                    },
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="%.2f%%"
+                        )
+                        for col in master_data_enflasyon_sutunlari
                     }
                 },
                 key=master_editor_key
@@ -2240,9 +2555,12 @@ if sekme_acik_mi[7]:
             mazot_surucu_degisti = manuel_mazot_hucrelerini_kaydet(
                 edited_rows, edited_master
             )
+            enflasyon_surucu_degisti = manuel_enflasyon_hucrelerini_kaydet(
+                edited_rows, edited_master
+            )
 
-            if mazot_surucu_degisti:
-                # Yalnızca otomatik hücreler yeni takvim/eşiğe göre yenilenir.
+            if mazot_surucu_degisti or enflasyon_surucu_degisti:
+                # Otomatik hücreler yeni takvim/eşik/periyoda göre yenilenir.
                 st.session_state.master_editor_nonce += 1
                 st.rerun()
 
@@ -2262,6 +2580,15 @@ if sekme_acik_mi[7]:
                 key="btn_master_mazot_reset"
             ):
                 st.session_state.master_mazot_ayarlari = {}
+                st.session_state.master_editor_nonce += 1
+                st.rerun()
+
+            if md1.button(
+                "♻️ Enflasyon Oranlarını Otomatiğe Döndür",
+                use_container_width=True,
+                key="btn_master_enflasyon_reset"
+            ):
+                st.session_state.master_enflasyon_ayarlari = {}
                 st.session_state.master_editor_nonce += 1
                 st.rerun()
 
@@ -2297,6 +2624,11 @@ if sekme_acik_mi[7]:
                             mkod = guvenli_metin_kodu(row.get("Müşteri Kodu"))
                             record[MASTER_MAZOT_MANUEL_ALANLAR_DB] = sorted(
                                 st.session_state.master_mazot_ayarlari.get(
+                                    mkod, {}
+                                ).keys()
+                            )
+                            record[MASTER_ENFLASYON_MANUEL_ALANLAR_DB] = sorted(
+                                st.session_state.master_enflasyon_ayarlari.get(
                                     mkod, {}
                                 ).keys()
                             )
@@ -2346,6 +2678,24 @@ if sekme_acik_mi[7]:
                                     col: row.get(col)
                                     for col in manuel_alanlar
                                     if col in master_data_mazot_sutunlari
+                                    and col in gelen_master.columns
+                                }
+                                manuel_enflasyon_alanlari = row.get(
+                                    MASTER_ENFLASYON_MANUEL_ALANLAR_DB, []
+                                )
+                                if isinstance(manuel_enflasyon_alanlari, str):
+                                    try:
+                                        manuel_enflasyon_alanlari = json.loads(
+                                            manuel_enflasyon_alanlari
+                                        )
+                                    except json.JSONDecodeError:
+                                        manuel_enflasyon_alanlari = []
+                                if not isinstance(manuel_enflasyon_alanlari, list):
+                                    manuel_enflasyon_alanlari = []
+                                st.session_state.master_enflasyon_ayarlari[mkod] = {
+                                    col: row.get(col)
+                                    for col in manuel_enflasyon_alanlari
+                                    if col in master_data_enflasyon_sutunlari
                                     and col in gelen_master.columns
                                 }
                             st.session_state.master_editor_nonce += 1
@@ -3435,6 +3785,7 @@ if sekme_acik_mi[10]:
                             evds_kayitlari[paket_baslangici:paket_baslangici + 250],
                             on_conflict="yil,ay"
                         ).execute()
+                master_enflasyon_kaynaklarini_getir.clear()
                 st.session_state.evds_guncelleme_basarili = True
                 st.session_state.evds_guncellenen_kayit_sayisi = len(
                     evds_kayitlari
@@ -3560,6 +3911,7 @@ if sekme_acik_mi[10]:
                         manuel_kayitlar[paket_baslangici:paket_baslangici + 250],
                         on_conflict="yil,ay"
                     ).execute()
+                master_enflasyon_kaynaklarini_getir.clear()
                 st.session_state.enflasyon_manuel_kayit_basarili = True
                 st.rerun()
             except Exception as hata:
