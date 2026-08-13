@@ -6,6 +6,8 @@ import json
 import os
 import inspect
 import re
+import urllib.error
+import urllib.request
 from datetime import date, datetime
 
 # ============================================================
@@ -191,14 +193,28 @@ if "mazot_giriş_veri" not in st.session_state:
     }])
 
 # ============================================================
-# BULUT BAĞLANTISI VE REVİZYONLARI ÇEKME (TEK SEFER)
+# BULUT BAĞLANTISI, EVDS VE REVİZYONLARI ÇEKME (TEK SEFER)
 # ============================================================
-GIZLI_SUPABASE_URL = "https://bejimguyethsxdyhtttp.supabase.co"
-GIZLI_SUPABASE_KEY = "sb_publishable_TXXAdObu4G68RolqZYwdIA_6xJiQIXO"
+def gizli_ayar_getir(ayar_adi, varsayilan=""):
+    """Streamlit Secrets, ardından ortam değişkeninden güvenli ayar okur."""
+    deger = None
+    try:
+        deger = st.secrets.get(ayar_adi)
+    except Exception:
+        deger = None
+    if deger is None or str(deger).strip() == "":
+        deger = os.getenv(ayar_adi, varsayilan)
+    return str(deger).strip() if deger is not None else ""
+
+
+GIZLI_SUPABASE_URL = gizli_ayar_getir("SUPABASE_URL")
+GIZLI_SUPABASE_KEY = gizli_ayar_getir("SUPABASE_KEY")
+EVDS_API_KEY = gizli_ayar_getir("EVDS_API_KEY")
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client():
-    if not SUPABASE_AVAILABLE: return None
+    if not SUPABASE_AVAILABLE or not GIZLI_SUPABASE_URL or not GIZLI_SUPABASE_KEY:
+        return None
     try: return create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
     except: return None
 
@@ -315,6 +331,289 @@ def json_uyumlu_deger(value):
     if isinstance(value, np.floating): return float(value) if np.isfinite(float(value)) else None
     if isinstance(value, np.bool_): return bool(value)
     return value
+
+
+# ============================================================
+# TCMB EVDS - AYLIK ÜFE / TÜFE GERÇEKLEŞEN VERİLERİ
+# ============================================================
+# TÜFE: 2025=100 Genel Endeks
+# Yİ-ÜFE: Yurt İçi Üretici Fiyat Endeksi Genel
+EVDS_TUFE_SERI_KODU = "TP.TUKFIY2025.GENEL"
+EVDS_UFE_SERI_KODU = "TP.TUFE1YI.T1"
+EVDS_SERVIS_KOKU = "https://evds3.tcmb.gov.tr/igmevdsms-dis"
+ENFLASYON_DB_TABLOSU = "enflasyon_aylik_verileri"
+
+
+def nullable_sayi(value):
+    """Boş ekonomik veriyi 0'a çevirmeden, varsa sayıya dönüştürür."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        sayi = float(value)
+        return sayi if np.isfinite(sayi) else None
+    metin = (
+        str(value).strip().replace("%", "").replace("\xa0", "").replace(" ", "")
+    )
+    if metin.lower() in {"", "-", "nan", "none", "null", "nat", "nd"}:
+        return None
+    if "," in metin and "." in metin:
+        if metin.rfind(",") > metin.rfind("."):
+            metin = metin.replace(".", "").replace(",", ".")
+        else:
+            metin = metin.replace(",", "")
+    elif "," in metin:
+        metin = metin.replace(",", ".")
+    try:
+        sayi = float(metin)
+        return sayi if np.isfinite(sayi) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def evds_alan_adi_normallestir(value):
+    """EVDS JSON alanlarını seri koduyla güvenli eşleştirmek için sadeleştirir."""
+    return re.sub(r"[^A-Z0-9]+", "_", str(value).upper()).strip("_")
+
+
+def evds_tarih_degerini_oku(value):
+    if value is None:
+        return None
+    metin = str(value).strip()
+    if not metin:
+        return None
+    for dayfirst in (True, False):
+        tarih = pd.to_datetime(metin, errors="coerce", dayfirst=dayfirst)
+        if not pd.isna(tarih):
+            return pd.Timestamp(tarih).normalize()
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def evds_aylik_enflasyon_getir(baslangic_yili, bitis_yili, api_key):
+    """EVDS'den aylık ÜFE/TÜFE yüzde değişimlerini tek çağrıda getirir."""
+    if not api_key:
+        raise ValueError("EVDS_API_KEY Streamlit Secrets içinde bulunamadı.")
+
+    baslangic_yili = int(baslangic_yili)
+    bitis_yili = int(bitis_yili)
+    if bitis_yili < baslangic_yili:
+        raise ValueError("Bitiş yılı başlangıç yılından küçük olamaz.")
+
+    # Ocak değişiminin hesaplanabilmesi için bir önceki Aralık da istenir.
+    servis_baslangici = pd.Timestamp(
+        year=baslangic_yili - 1, month=12, day=1
+    )
+    servis_bitisi = pd.Timestamp(year=bitis_yili, month=12, day=31)
+    seri_parametresi = f"{EVDS_TUFE_SERI_KODU}-{EVDS_UFE_SERI_KODU}"
+    url = (
+        f"{EVDS_SERVIS_KOKU}/series={seri_parametresi}"
+        f"&startDate={servis_baslangici.strftime('%d-%m-%Y')}"
+        f"&endDate={servis_bitisi.strftime('%d-%m-%Y')}"
+        "&type=json&formulas=1-1&frequency=5"
+    )
+    istek = urllib.request.Request(
+        url,
+        headers={
+            "key": api_key,
+            "Accept": "application/json",
+            "User-Agent": "Budget-Simulation-Streamlit/1.0"
+        },
+        method="GET"
+    )
+    try:
+        with urllib.request.urlopen(istek, timeout=60) as yanit:
+            ham_metin = yanit.read().decode("utf-8-sig")
+    except urllib.error.HTTPError as hata:
+        if hata.code == 403:
+            raise RuntimeError(
+                "EVDS erişimi reddedildi (403). EVDS_API_KEY değerini kontrol edin."
+            ) from hata
+        raise RuntimeError(f"EVDS HTTP hatası: {hata.code}") from hata
+    except urllib.error.URLError as hata:
+        neden = getattr(hata, "reason", hata)
+        raise RuntimeError(f"EVDS bağlantısı kurulamadı: {neden}") from hata
+
+    try:
+        govde = json.loads(ham_metin)
+    except json.JSONDecodeError as hata:
+        raise RuntimeError("EVDS geçerli JSON döndürmedi.") from hata
+
+    if isinstance(govde, dict):
+        satirlar = govde.get("items") or govde.get("data") or govde.get("results") or []
+    elif isinstance(govde, list):
+        satirlar = govde
+    else:
+        satirlar = []
+    if not satirlar:
+        raise RuntimeError("EVDS seçilen yıllar için veri döndürmedi.")
+
+    ilk_satir = next((s for s in satirlar if isinstance(s, dict)), {})
+    tarih_adaylari = [
+        k for k in ilk_satir
+        if evds_alan_adi_normallestir(k) in {
+            "TARIH", "DATE", "DONEM", "PERIOD", "OBSERVATION_DATE"
+        }
+    ]
+    if not tarih_adaylari:
+        tarih_adaylari = [
+            k for k in ilk_satir
+            if "TARIH" in evds_alan_adi_normallestir(k)
+            or "DATE" in evds_alan_adi_normallestir(k)
+        ]
+    if not tarih_adaylari:
+        raise RuntimeError("EVDS yanıtındaki tarih alanı bulunamadı.")
+    tarih_alani = tarih_adaylari[0]
+
+    def seri_alanini_bul(seri_kodu):
+        hedef = evds_alan_adi_normallestir(seri_kodu)
+        adaylar = []
+        for alan in ilk_satir:
+            norm = evds_alan_adi_normallestir(alan)
+            if alan == tarih_alani or norm in {"UNIXTIME", "FREQUENCY"}:
+                continue
+            if norm == hedef:
+                return alan
+            if norm.startswith(hedef) or hedef.startswith(norm):
+                adaylar.append(alan)
+        return adaylar[0] if adaylar else None
+
+    tufe_alani = seri_alanini_bul(EVDS_TUFE_SERI_KODU)
+    ufe_alani = seri_alanini_bul(EVDS_UFE_SERI_KODU)
+    if not tufe_alani or not ufe_alani:
+        veri_alanlari = [
+            k for k in ilk_satir
+            if k != tarih_alani
+            and evds_alan_adi_normallestir(k) not in {"UNIXTIME", "FREQUENCY"}
+        ]
+        if len(veri_alanlari) >= 2:
+            tufe_alani = tufe_alani or veri_alanlari[0]
+            ufe_alani = ufe_alani or veri_alanlari[1]
+    if not tufe_alani or not ufe_alani:
+        raise RuntimeError("EVDS yanıtındaki ÜFE/TÜFE seri alanları eşleştirilemedi.")
+
+    sonuclar = []
+    guncelleme_zamani = datetime.now().astimezone().isoformat()
+    for satir in satirlar:
+        if not isinstance(satir, dict):
+            continue
+        donem = evds_tarih_degerini_oku(satir.get(tarih_alani))
+        if donem is None or not (baslangic_yili <= donem.year <= bitis_yili):
+            continue
+        tufe = nullable_sayi(satir.get(tufe_alani))
+        ufe = nullable_sayi(satir.get(ufe_alani))
+        # Henüz açıklanmayan aylar Supabase'e boş kayıt olarak gönderilmez.
+        if tufe is None and ufe is None:
+            continue
+        sonuclar.append({
+            "yil": int(donem.year),
+            "ay": int(donem.month),
+            "donem": donem.strftime("%Y-%m-01"),
+            "ufe_gerceklesen_oran": ufe,
+            "tufe_gerceklesen_oran": tufe,
+            "evds_ufe_seri_kodu": EVDS_UFE_SERI_KODU,
+            "evds_tufe_seri_kodu": EVDS_TUFE_SERI_KODU,
+            "kaynak": "TCMB EVDS / TÜİK",
+            "kaynak_url": "https://evds3.tcmb.gov.tr/",
+            "kaynak_guncelleme_zamani": guncelleme_zamani
+        })
+
+    if not sonuclar:
+        raise RuntimeError("EVDS yanıtında kullanılabilir aylık oran bulunamadı.")
+    return sonuclar
+
+
+def enflasyon_bulut_verilerini_getir(baslangic_yili, bitis_yili):
+    if not client:
+        return pd.DataFrame()
+    yanit = (
+        client.table(ENFLASYON_DB_TABLOSU)
+        .select("*")
+        .gte("yil", int(baslangic_yili))
+        .lte("yil", int(bitis_yili))
+        .order("yil")
+        .order("ay")
+        .execute()
+    )
+    return pd.DataFrame(yanit.data or [])
+
+
+def enflasyon_editor_tablosu_olustur(baslangic_yili, bitis_yili, bulut_df):
+    satirlar = []
+    for yil in range(int(baslangic_yili), int(bitis_yili) + 1):
+        for ay_no, ay_adi in enumerate(aylar, start=1):
+            satirlar.append({
+                "yil": yil,
+                "ay": ay_no,
+                "Ay": ay_adi,
+                "donem": date(yil, ay_no, 1)
+            })
+    temel = pd.DataFrame(satirlar)
+    if bulut_df is not None and not bulut_df.empty:
+        kullanilacak = bulut_df.drop(
+            columns=[c for c in ["id", "created_at"] if c in bulut_df.columns],
+            errors="ignore"
+        ).copy()
+        kullanilacak["yil"] = pd.to_numeric(
+            kullanilacak["yil"], errors="coerce"
+        ).astype("Int64")
+        kullanilacak["ay"] = pd.to_numeric(
+            kullanilacak["ay"], errors="coerce"
+        ).astype("Int64")
+        kullanilacak = kullanilacak.drop(columns=["donem"], errors="ignore")
+        temel = temel.merge(kullanilacak, on=["yil", "ay"], how="left")
+
+    oran_kolonlari = [
+        "ufe_gerceklesen_oran", "tufe_gerceklesen_oran",
+        "ufe_tahmin_oran", "tufe_tahmin_oran",
+        "ufe_manuel_oran", "tufe_manuel_oran"
+    ]
+    for kolon in oran_kolonlari:
+        if kolon not in temel.columns:
+            temel[kolon] = np.nan
+        temel[kolon] = pd.to_numeric(temel[kolon], errors="coerce")
+
+    temel["ufe_kullanilan_oran"] = temel["ufe_manuel_oran"].combine_first(
+        temel["ufe_gerceklesen_oran"]
+    ).combine_first(temel["ufe_tahmin_oran"])
+    temel["tufe_kullanilan_oran"] = temel["tufe_manuel_oran"].combine_first(
+        temel["tufe_gerceklesen_oran"]
+    ).combine_first(temel["tufe_tahmin_oran"])
+
+    def kaynak_durumu(row):
+        if pd.notna(row["ufe_manuel_oran"]) or pd.notna(row["tufe_manuel_oran"]):
+            return "Manuel düzeltme"
+        if pd.notna(row["ufe_gerceklesen_oran"]) or pd.notna(row["tufe_gerceklesen_oran"]):
+            return "Gerçekleşen"
+        if pd.notna(row["ufe_tahmin_oran"]) or pd.notna(row["tufe_tahmin_oran"]):
+            return "Tahmin"
+        return "Boş"
+
+    temel["Veri Durumu"] = temel.apply(kaynak_durumu, axis=1)
+    yeniden_adlandir = {
+        "yil": "Yıl",
+        "donem": "Dönem",
+        "ufe_gerceklesen_oran": "ÜFE Gerçekleşen (%)",
+        "tufe_gerceklesen_oran": "TÜFE Gerçekleşen (%)",
+        "ufe_tahmin_oran": "ÜFE Tahmin (%)",
+        "tufe_tahmin_oran": "TÜFE Tahmin (%)",
+        "ufe_manuel_oran": "ÜFE Manuel (%)",
+        "tufe_manuel_oran": "TÜFE Manuel (%)",
+        "ufe_kullanilan_oran": "ÜFE Kullanılan (%)",
+        "tufe_kullanilan_oran": "TÜFE Kullanılan (%)"
+    }
+    temel = temel.rename(columns=yeniden_adlandir)
+    return temel[[
+        "Yıl", "Ay", "Dönem",
+        "ÜFE Gerçekleşen (%)", "TÜFE Gerçekleşen (%)",
+        "ÜFE Tahmin (%)", "TÜFE Tahmin (%)",
+        "ÜFE Manuel (%)", "TÜFE Manuel (%)",
+        "ÜFE Kullanılan (%)", "TÜFE Kullanılan (%)", "Veri Durumu"
+    ]]
 
 def uniq_id_hazirla(df):
     if "Uniq ID" not in df.columns: return df
@@ -596,7 +895,8 @@ takvim_verisini_hazirla()
 sekme_etiketleri = [
     "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
-    "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları"
+    "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
+    "📉 ÜFE-TÜFE Yönetimi"
 ]
 
 # Streamlit 1.55 ve üzerinde sekmelerin yalnızca açık olanı çalıştırılabilir.
@@ -1826,17 +2126,8 @@ if sekme_acik_mi[7]:
             # matrisindeki aynı periyot satırından otomatik başlatılır.
             for col in master_data_mazot_sutunlari:
                 sonuc[col] = np.nan
-            
             for idx, row in sonuc.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
-
-                # Durum GEÇERSİZ ise otomatik veya manuel Mazot oranı uygulama.
-                durum = str(row.get("Durum", "")).strip().upper()
-                if durum == "GEÇERSİZ":
-                    for col in master_data_mazot_sutunlari:
-                        sonuc.at[idx, col] = np.nan
-                    continue
-
                 otomatik_oranlar = musteri_mazot_oranlarini_getir(
                     row["Yakıt Değişim Periyodu (Ay)"],
                     row["Yakıt Anlık Değişim Oranı (%)"],
@@ -3057,3 +3348,219 @@ if sekme_acik_mi[9]:
                         st.warning(
                             "Seçili revizyonda kayıtlı büyüme kartı bulunamadı."
                         )
+
+# ------------------------------------------------------------
+# 11. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
+# ------------------------------------------------------------
+if sekme_acik_mi[10]:
+    with sekmeler[10]:
+        st.title("📉 ÜFE–TÜFE Veri Yönetimi")
+        st.caption(
+            "Gerçekleşen aylık oranlar TCMB EVDS'den alınır. Tahmin alanları "
+            "elle girilebilir; manuel düzeltme girildiğinde hesaplarda "
+            "Manuel > Gerçekleşen > Tahmin önceliği uygulanır. Boş aylar 0 "
+            "olarak kabul edilmez."
+        )
+
+        durum_1, durum_2, durum_3 = st.columns(3)
+        durum_1.metric(
+            "EVDS API Anahtarı",
+            "Hazır" if EVDS_API_KEY else "Eksik"
+        )
+        durum_2.metric(
+            "Supabase Bağlantısı",
+            "Hazır" if client else "Eksik"
+        )
+        durum_3.metric(
+            "Veri Önceliği",
+            "Manuel > Gerçekleşen > Tahmin"
+        )
+
+        bugunku_yil = date.today().year
+        yil_1, yil_2 = st.columns(2)
+        baslangic_yili_enf = int(yil_1.number_input(
+            "Başlangıç Yılı",
+            min_value=2005,
+            max_value=2100,
+            value=max(2005, bugunku_yil - 1),
+            step=1,
+            key="enflasyon_baslangic_yili"
+        ))
+        bitis_yili_enf = int(yil_2.number_input(
+            "Bitiş Yılı",
+            min_value=2005,
+            max_value=2100,
+            value=min(2100, bugunku_yil + 1),
+            step=1,
+            key="enflasyon_bitis_yili"
+        ))
+
+        if bitis_yili_enf < baslangic_yili_enf:
+            st.error("Bitiş yılı başlangıç yılından küçük olamaz.")
+            st.stop()
+
+        if st.session_state.pop("evds_guncelleme_basarili", False):
+            adet = st.session_state.pop("evds_guncellenen_kayit_sayisi", 0)
+            st.success(
+                f"EVDS'den gelen {adet} aylık kayıt Supabase'e işlendi."
+            )
+        if st.session_state.pop("enflasyon_manuel_kayit_basarili", False):
+            st.success("Tahmin ve manuel ÜFE–TÜFE değerleri buluta kaydedildi.")
+
+        evds_col, bilgi_col = st.columns([1, 2])
+        evds_guncelle_tiklandi = evds_col.button(
+            "🔄 EVDS'den Gerçekleşenleri Güncelle",
+            type="primary",
+            use_container_width=True,
+            disabled=(not EVDS_API_KEY or not client),
+            key="btn_evds_enflasyon_guncelle"
+        )
+        bilgi_col.info(
+            f"TÜFE serisi: {EVDS_TUFE_SERI_KODU}  |  "
+            f"Yİ-ÜFE serisi: {EVDS_UFE_SERI_KODU}"
+        )
+
+        if evds_guncelle_tiklandi:
+            try:
+                with st.spinner(
+                    "TCMB EVDS'den aylık gerçekleşen ÜFE–TÜFE oranları alınıyor..."
+                ):
+                    evds_kayitlari = evds_aylik_enflasyon_getir(
+                        baslangic_yili_enf,
+                        bitis_yili_enf,
+                        EVDS_API_KEY
+                    )
+                    for paket_baslangici in range(0, len(evds_kayitlari), 250):
+                        client.table(ENFLASYON_DB_TABLOSU).upsert(
+                            evds_kayitlari[paket_baslangici:paket_baslangici + 250],
+                            on_conflict="yil,ay"
+                        ).execute()
+                st.session_state.evds_guncelleme_basarili = True
+                st.session_state.evds_guncellenen_kayit_sayisi = len(
+                    evds_kayitlari
+                )
+                st.rerun()
+            except Exception as hata:
+                st.error(f"EVDS güncellemesi tamamlanamadı: {hata}")
+
+        try:
+            bulut_enflasyon_df = enflasyon_bulut_verilerini_getir(
+                baslangic_yili_enf,
+                bitis_yili_enf
+            ) if client else pd.DataFrame()
+        except Exception as hata:
+            bulut_enflasyon_df = pd.DataFrame()
+            st.error(f"ÜFE–TÜFE tablosu Supabase'den okunamadı: {hata}")
+
+        enflasyon_editor_df = enflasyon_editor_tablosu_olustur(
+            baslangic_yili_enf,
+            bitis_yili_enf,
+            bulut_enflasyon_df
+        )
+
+        st.markdown("### Aylık ÜFE–TÜFE Tablosu")
+        st.caption(
+            "Sadece Tahmin ve Manuel sütunları düzenlenebilir. Manuel değeri "
+            "temizlerseniz gerçekleşen; gerçekleşen de yoksa tahmin yeniden "
+            "kullanılır. Negatif oran girebilirsiniz."
+        )
+
+        oran_gosterim_sutunlari = [
+            "ÜFE Gerçekleşen (%)", "TÜFE Gerçekleşen (%)",
+            "ÜFE Tahmin (%)", "TÜFE Tahmin (%)",
+            "ÜFE Manuel (%)", "TÜFE Manuel (%)",
+            "ÜFE Kullanılan (%)", "TÜFE Kullanılan (%)"
+        ]
+        enflasyon_edited_df = st.data_editor(
+            enflasyon_editor_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            height=min(760, 38 * len(enflasyon_editor_df) + 42),
+            disabled=[
+                "Yıl", "Ay", "Dönem",
+                "ÜFE Gerçekleşen (%)", "TÜFE Gerçekleşen (%)",
+                "ÜFE Kullanılan (%)", "TÜFE Kullanılan (%)", "Veri Durumu"
+            ],
+            column_config={
+                "Yıl": st.column_config.NumberColumn("Yıl", format="%d"),
+                "Dönem": st.column_config.DateColumn(
+                    "Dönem", format="DD.MM.YYYY"
+                ),
+                **{
+                    kolon: st.column_config.NumberColumn(
+                        kolon,
+                        format="%.2f%%",
+                        step=0.01
+                    )
+                    for kolon in oran_gosterim_sutunlari
+                }
+            },
+            key=(
+                f"enflasyon_veri_editoru_"
+                f"{baslangic_yili_enf}_{bitis_yili_enf}"
+            )
+        )
+
+        kaydet_col, indir_col = st.columns(2)
+        tahmin_manuel_kaydet = kaydet_col.button(
+            "💾 Tahmin ve Manuel Değerleri Buluta Kaydet",
+            type="primary",
+            use_container_width=True,
+            disabled=not client,
+            key="btn_enflasyon_tahmin_manuel_kaydet"
+        )
+
+        excel_buffer_enf = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer_enf, engine="openpyxl") as writer:
+            enflasyon_edited_df.to_excel(
+                writer,
+                index=False,
+                sheet_name="UFE_TUFE"
+            )
+        indir_col.download_button(
+            "📥 ÜFE–TÜFE Tablosunu Excel İndir",
+            data=excel_buffer_enf.getvalue(),
+            file_name=(
+                f"ufe_tufe_{baslangic_yili_enf}_{bitis_yili_enf}.xlsx"
+            ),
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+            key="btn_enflasyon_excel_indir"
+        )
+
+        if tahmin_manuel_kaydet:
+            try:
+                manuel_kayitlar = []
+                for _, row in enflasyon_edited_df.iterrows():
+                    yil = int(row["Yıl"])
+                    ay_no = aylar.index(str(row["Ay"])) + 1
+                    manuel_kayitlar.append({
+                        "yil": yil,
+                        "ay": ay_no,
+                        "donem": date(yil, ay_no, 1).isoformat(),
+                        "ufe_tahmin_oran": nullable_sayi(
+                            row.get("ÜFE Tahmin (%)")
+                        ),
+                        "tufe_tahmin_oran": nullable_sayi(
+                            row.get("TÜFE Tahmin (%)")
+                        ),
+                        "ufe_manuel_oran": nullable_sayi(
+                            row.get("ÜFE Manuel (%)")
+                        ),
+                        "tufe_manuel_oran": nullable_sayi(
+                            row.get("TÜFE Manuel (%)")
+                        )
+                    })
+                for paket_baslangici in range(0, len(manuel_kayitlar), 250):
+                    client.table(ENFLASYON_DB_TABLOSU).upsert(
+                        manuel_kayitlar[paket_baslangici:paket_baslangici + 250],
+                        on_conflict="yil,ay"
+                    ).execute()
+                st.session_state.enflasyon_manuel_kayit_basarili = True
+                st.rerun()
+            except Exception as hata:
+                st.error(f"Tahmin ve manuel değerler kaydedilemedi: {hata}")
