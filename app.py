@@ -116,6 +116,7 @@ master_data_manuel_sutunlari = [
     "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
 ]
 master_data_mazot_sutunlari = [f"Mazot {ay} (%)" for ay in aylar]
+MASTER_MAZOT_MANUEL_ALANLAR_DB = "Mazot Manuel Alanlar"
 master_data_sutunlari = (
     master_data_kimlik_sutunlari
     + master_data_kaynak_sutunlari
@@ -173,6 +174,11 @@ if "master_data_df" not in st.session_state: st.session_state.master_data_df = p
 if "master_data_ayarlari" not in st.session_state: st.session_state.master_data_ayarlari = {}
 if "master_mazot_ayarlari" not in st.session_state: st.session_state.master_mazot_ayarlari = {}
 if "master_editor_nonce" not in st.session_state: st.session_state.master_editor_nonce = 0
+# Eski sürüm otomatik değerleri manuel sanabiliyordu. Yeni izleme modeline ilk
+# geçişte yalnızca bir kez eski oturum işaretlerini temizle.
+if st.session_state.get("master_mazot_izleme_surumu") != 2:
+    st.session_state.master_mazot_ayarlari = {}
+    st.session_state.master_mazot_izleme_surumu = 2
 if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
@@ -509,6 +515,44 @@ def musteri_mazot_oranlarini_getir(
             sonuc[f"Mazot {ay} (%)"] = degisim_yuzdesi
             son_uygulanan_fiyat = guncel_fiyat
     return sonuc
+
+def manuel_mazot_hucrelerini_kaydet(edited_rows, edited_master):
+    """Yalnızca data_editor'da gerçekten değiştirilen Mazot hücrelerini saklar."""
+    if not isinstance(edited_rows, dict) or edited_master is None:
+        return False
+    mazot_surucu_sutunlari = {
+        "Yakıt Anlık Değişim Oranı (%)",
+        "Yakıt Değişim Periyodu (Ay)",
+        "Esk. Yakıt Başlangıç Tarihi"
+    }
+    mazot_surucu_degisti = False
+    for satir_no, degisiklikler in edited_rows.items():
+        try:
+            satir_index = int(satir_no)
+        except (TypeError, ValueError):
+            continue
+        if satir_index < 0 or satir_index >= len(edited_master):
+            continue
+        if not isinstance(degisiklikler, dict):
+            continue
+        mkod = guvenli_metin_kodu(
+            edited_master.iloc[satir_index]["Müşteri Kodu"]
+        )
+        manuel_mazotlar = st.session_state.master_mazot_ayarlari.setdefault(
+            mkod, {}
+        )
+        for col, deger in degisiklikler.items():
+            if col in mazot_surucu_sutunlari:
+                mazot_surucu_degisti = True
+            if col in master_data_mazot_sutunlari:
+                try:
+                    deger_bos = deger is None or bool(pd.isna(deger))
+                except (TypeError, ValueError):
+                    deger_bos = deger is None
+                manuel_mazotlar[col] = (
+                    None if deger_bos else guvenli_sayi(deger)
+                )
+    return mazot_surucu_degisti
 
 def takvim_verisini_hazirla():
     """Çalışma günü tablosunu bütün sekmeler için tek kez hazırlar."""
@@ -1833,6 +1877,9 @@ if sekme_acik_mi[7]:
                 )
 
             kilitli_master = master_data_kimlik_sutunlari + master_data_kaynak_sutunlari
+            master_editor_key = (
+                f"master_data_editor_v3_{st.session_state.master_editor_nonce}"
+            )
             edited_master = st.data_editor(
                 master_df,
                 use_container_width=True,
@@ -1873,86 +1920,29 @@ if sekme_acik_mi[7]:
                         for col in master_data_mazot_sutunlari
                     }
                 },
-                key=f"master_data_editor_v2_{st.session_state.master_editor_nonce}"
+                key=master_editor_key
             )
             st.session_state.master_data_df = edited_master.copy()
 
-            def mazot_degerleri_esit_mi(sol, sag):
-                try:
-                    sol_bos, sag_bos = bool(pd.isna(sol)), bool(pd.isna(sag))
-                except (TypeError, ValueError):
-                    sol_bos, sag_bos = False, False
-                if sol_bos or sag_bos:
-                    return sol_bos and sag_bos
-                return bool(np.isclose(guvenli_sayi(sol), guvenli_sayi(sag)))
-
-            eski_master_kodlu = master_df.copy()
-            eski_master_kodlu["Müşteri Kodu"] = eski_master_kodlu[
-                "Müşteri Kodu"
-            ].apply(guvenli_metin_kodu)
-            eski_master_kodlu = eski_master_kodlu.set_index("Müşteri Kodu")
-            mazot_surucu_degisti = False
+            # Streamlit'in edited_rows kaydı gerçekten dokunulan hücreleri verir.
+            # Böylece otomatik hesaplanan değerler yanlışlıkla manuel sayılmaz.
+            editor_durumu = st.session_state.get(master_editor_key, {})
+            edited_rows = (
+                editor_durumu.get("edited_rows", {})
+                if isinstance(editor_durumu, dict) else {}
+            )
             for _, row in edited_master.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
                 st.session_state.master_data_ayarlari[mkod] = {
                     col: row.get(col) for col in master_data_manuel_sutunlari
                 }
 
-                eski_row = eski_master_kodlu.loc[mkod]
-                eski_periyot = guvenli_tamsayi(
-                    eski_row.get("Yakıt Değişim Periyodu (Ay)"), nullable=True
-                )
-                yeni_periyot = guvenli_tamsayi(
-                    row.get("Yakıt Değişim Periyodu (Ay)"), nullable=True
-                )
-                eski_esik = guvenli_sayi(
-                    eski_row.get("Yakıt Anlık Değişim Oranı (%)")
-                )
-                yeni_esik = guvenli_sayi(
-                    row.get("Yakıt Anlık Değişim Oranı (%)")
-                )
-                eski_baslangic = yakit_baslangic_tarihini_hazirla(
-                    eski_row.get("Esk. Yakıt Başlangıç Tarihi")
-                )
-                yeni_baslangic = yakit_baslangic_tarihini_hazirla(
-                    row.get("Esk. Yakıt Başlangıç Tarihi")
-                )
-                surucu_satirda_degisti = (
-                    eski_periyot != yeni_periyot
-                    or not np.isclose(eski_esik, yeni_esik)
-                    or eski_baslangic != yeni_baslangic
-                )
-                if surucu_satirda_degisti:
-                    mazot_surucu_degisti = True
-                    # Takvim/eşik değiştiğinde eski otomatik oranlar taşınmaz.
-                    yeni_manuel_oranlar = {}
-                    for col in master_data_mazot_sutunlari:
-                        if not mazot_degerleri_esit_mi(row.get(col), eski_row.get(col)):
-                            yeni_manuel_oranlar[col] = (
-                                None if pd.isna(row.get(col))
-                                else guvenli_sayi(row.get(col))
-                            )
-                    st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
-                else:
-                    otomatik_oranlar = musteri_mazot_oranlarini_getir(
-                        yeni_periyot,
-                        yeni_esik,
-                        yeni_baslangic
-                    )
-                    yeni_manuel_oranlar = {}
-                    for col in master_data_mazot_sutunlari:
-                        girilen_deger = row.get(col)
-                        if not mazot_degerleri_esit_mi(
-                            girilen_deger, otomatik_oranlar[col]
-                        ):
-                            yeni_manuel_oranlar[col] = (
-                                None if pd.isna(girilen_deger)
-                                else guvenli_sayi(girilen_deger)
-                            )
-                    st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
+            mazot_surucu_degisti = manuel_mazot_hucrelerini_kaydet(
+                edited_rows, edited_master
+            )
 
             if mazot_surucu_degisti:
-                # Editörü yeni takvim/eşiğin otomatik oranlarıyla anında yeniden kur.
+                # Yalnızca otomatik hücreler yeni takvim/eşiğe göre yenilenir.
                 st.session_state.master_editor_nonce += 1
                 st.rerun()
 
@@ -2004,6 +1994,12 @@ if sekme_acik_mi[7]:
                                 col: json_uyumlu_deger(row.get(col))
                                 for col in master_data_sutunlari
                             }
+                            mkod = guvenli_metin_kodu(row.get("Müşteri Kodu"))
+                            record[MASTER_MAZOT_MANUEL_ALANLAR_DB] = sorted(
+                                st.session_state.master_mazot_ayarlari.get(
+                                    mkod, {}
+                                ).keys()
+                            )
                             record["revizyon_id"] = r_id_master
                             master_records.append(record)
                         client.table("master_data_tablosu").delete().eq(
@@ -2036,10 +2032,21 @@ if sekme_acik_mi[7]:
                                 st.session_state.master_data_ayarlari[mkod] = {
                                     col: row.get(col) for col in master_data_manuel_sutunlari
                                 }
+                                manuel_alanlar = row.get(
+                                    MASTER_MAZOT_MANUEL_ALANLAR_DB, []
+                                )
+                                if isinstance(manuel_alanlar, str):
+                                    try:
+                                        manuel_alanlar = json.loads(manuel_alanlar)
+                                    except json.JSONDecodeError:
+                                        manuel_alanlar = []
+                                if not isinstance(manuel_alanlar, list):
+                                    manuel_alanlar = []
                                 st.session_state.master_mazot_ayarlari[mkod] = {
                                     col: row.get(col)
-                                    for col in master_data_mazot_sutunlari
-                                    if col in gelen_master.columns
+                                    for col in manuel_alanlar
+                                    if col in master_data_mazot_sutunlari
+                                    and col in gelen_master.columns
                                 }
                             st.session_state.master_editor_nonce += 1
                             st.success("Master Data buluttan getirildi.")
