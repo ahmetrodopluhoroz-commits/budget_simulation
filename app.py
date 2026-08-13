@@ -429,30 +429,85 @@ def mazot_degisim_matrisi_olustur(mazot_verisi=None):
             else:
                 onceki_fiyat = guvenli_sayi(mz_base.get(aylar[onceki_index], 0.0))
             row_data[ay] = (
-                ((guncel_fiyat / onceki_fiyat) - 1)*1
+                (guncel_fiyat / onceki_fiyat) - 1
                 if onceki_fiyat > 0 and guncel_fiyat > 0 else np.nan
             )
         matris_rows.append(row_data)
     return pd.DataFrame(matris_rows)
 
-def musteri_mazot_oranlarini_getir(periyot):
-    """Seçilen periyodun mazot oranlarını yüzde puanı olarak getirir."""
+def yakit_baslangic_tarihini_hazirla(value):
+    """Türkçe/ISO tarihleri gün-ay-yıl önceliğiyle güvenli okur."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return pd.Timestamp(value).normalize()
+    metin = str(value).strip()
+    if not metin:
+        return None
+    tarih = pd.to_datetime(metin, errors="coerce", dayfirst=True)
+    return None if pd.isna(tarih) else pd.Timestamp(tarih).normalize()
+
+def sabit_yakit_eskalasyon_aylari(periyot, baslangic_tarihi, hedef_yil=2026):
+    """Başlangıç tarihine bağlı, erken artıştan etkilenmeyen sabit ayları verir."""
     periyot_sayisi = guvenli_tamsayi(periyot, nullable=True)
+    baslangic = yakit_baslangic_tarihini_hazirla(baslangic_tarihi)
+    if periyot_sayisi is None or periyot_sayisi <= 0 or baslangic is None:
+        return set()
+
+    yil_basi = pd.Timestamp(year=hedef_yil, month=1, day=1)
+    yil_sonu = pd.Timestamp(year=hedef_yil, month=12, day=31)
+    tarih = baslangic
+    guvenlik = 0
+    while tarih < yil_basi and guvenlik < 240:
+        tarih = tarih + pd.DateOffset(months=periyot_sayisi)
+        guvenlik += 1
+
+    sabit_aylar = set()
+    while tarih <= yil_sonu and guvenlik < 480:
+        if tarih.year == hedef_yil:
+            sabit_aylar.add(int(tarih.month))
+        tarih = tarih + pd.DateOffset(months=periyot_sayisi)
+        guvenlik += 1
+    return sabit_aylar
+
+def musteri_mazot_oranlarini_getir(
+    periyot, anlik_degisim_esigi, baslangic_tarihi, hedef_yil=2026
+):
+    """Sabit takvim ve +/- eşik kuralıyla müşterinin aylık mazot oranlarını hesaplar."""
     sonuc = {f"Mazot {ay} (%)": np.nan for ay in aylar}
     sonuc["Mazot Ocak (%)"] = 0.0
-    if periyot_sayisi not in range(1, 7):
+    sabit_aylar = sabit_yakit_eskalasyon_aylari(
+        periyot, baslangic_tarihi, hedef_yil
+    )
+    esik = abs(guvenli_sayi(anlik_degisim_esigi))
+    fiyat_kaynagi = st.session_state.get("mazot_giriş_veri", pd.DataFrame())
+    if fiyat_kaynagi is None or fiyat_kaynagi.empty:
         return sonuc
 
-    matris = mazot_degisim_matrisi_olustur()
-    satir = matris[matris["Periyot"] == f"{periyot_sayisi} ay"]
-    if satir.empty:
+    fiyatlar = fiyat_kaynagi.iloc[0]
+    ocak_fiyati = guvenli_sayi(fiyatlar.get("Ocak", 0.0))
+    if ocak_fiyati <= 0:
         return sonuc
-    for ay in aylar:
-        oran = satir.iloc[0].get(ay)
-        if not pd.isna(oran):
-            sonuc[f"Mazot {ay} (%)"] = float(oran) * 100.0
-    # Bütçe başlangıç kuralı: Ocak her periyotta %0 ile başlar.
-    sonuc["Mazot Ocak (%)"] = 0.0
+
+    # 2026 bütçe başlangıcı Ocak'tır. İlk referans fiyat Ocak fiyatıdır.
+    son_uygulanan_fiyat = ocak_fiyati
+    for ay_index, ay in enumerate(aylar[1:], start=2):
+        guncel_fiyat = guvenli_sayi(fiyatlar.get(ay, 0.0))
+        if guncel_fiyat <= 0 or son_uygulanan_fiyat <= 0:
+            continue
+        degisim_yuzdesi = (
+            (guncel_fiyat / son_uygulanan_fiyat) - 1.0
+        ) * 100.0
+        sabit_uygulama = ay_index in sabit_aylar
+        erken_uygulama = esik > 0 and abs(degisim_yuzdesi) >= esik
+        if sabit_uygulama or erken_uygulama:
+            sonuc[f"Mazot {ay} (%)"] = degisim_yuzdesi
+            son_uygulanan_fiyat = guncel_fiyat
     return sonuc
 
 def takvim_verisini_hazirla():
@@ -1596,7 +1651,9 @@ if sekme_acik_mi[7]:
         st.caption(
             "Müşteri kimlikleri ve Durum (Durum_2) Yeni-Bütçe sayfasından; "
             "Değişim Anahtarı/KDV/Baz fiyat kaynak sayfalardan gelir. Durum GEÇERSİZ "
-            "ise Değişim Anahtarı da otomatik GEÇERSİZ olur."
+            "ise Değişim Anahtarı da otomatik GEÇERSİZ olur. Mazot oranları; "
+            "başlangıç tarihi, sabit periyot ve pozitif/negatif anlık eşik kuralıyla "
+            "hesaplanır; aylık sonuçlar elle değiştirilebilir."
         )
 
         def master_data_tablosunu_olustur():
@@ -1705,7 +1762,9 @@ if sekme_acik_mi[7]:
             for idx, row in sonuc.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
                 otomatik_oranlar = musteri_mazot_oranlarini_getir(
-                    row["Yakıt Değişim Periyodu (Ay)"]
+                    row["Yakıt Değişim Periyodu (Ay)"],
+                    row["Yakıt Anlık Değişim Oranı (%)"],
+                    row["Esk. Yakıt Başlangıç Tarihi"]
                 )
                 manuel_oranlar = st.session_state.master_mazot_ayarlari.get(mkod, {})
                 for col in master_data_mazot_sutunlari:
@@ -1726,7 +1785,9 @@ if sekme_acik_mi[7]:
                 sonuc["Esk. Baz Yakıt Fiyatı (KDV Hariç)"], errors="coerce"
             )
             for col in ["Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]:
-                sonuc[col] = pd.to_datetime(sonuc[col], errors="coerce").dt.date
+                sonuc[col] = pd.to_datetime(
+                    sonuc[col], errors="coerce", dayfirst=True
+                ).dt.date
 
             return sonuc.reindex(columns=master_data_sutunlari)
 
@@ -1807,7 +1868,7 @@ if sekme_acik_mi[7]:
                 "Müşteri Kodu"
             ].apply(guvenli_metin_kodu)
             eski_master_kodlu = eski_master_kodlu.set_index("Müşteri Kodu")
-            periyot_degisti = False
+            mazot_surucu_degisti = False
             for _, row in edited_master.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
                 st.session_state.master_data_ayarlari[mkod] = {
@@ -1821,10 +1882,26 @@ if sekme_acik_mi[7]:
                 yeni_periyot = guvenli_tamsayi(
                     row.get("Yakıt Değişim Periyodu (Ay)"), nullable=True
                 )
-                periyot_satirda_degisti = eski_periyot != yeni_periyot
-                if periyot_satirda_degisti:
-                    periyot_degisti = True
-                    # Periyot değiştiğinde eski otomatik oranlar taşınmaz.
+                eski_esik = guvenli_sayi(
+                    eski_row.get("Yakıt Anlık Değişim Oranı (%)")
+                )
+                yeni_esik = guvenli_sayi(
+                    row.get("Yakıt Anlık Değişim Oranı (%)")
+                )
+                eski_baslangic = yakit_baslangic_tarihini_hazirla(
+                    eski_row.get("Esk. Yakıt Başlangıç Tarihi")
+                )
+                yeni_baslangic = yakit_baslangic_tarihini_hazirla(
+                    row.get("Esk. Yakıt Başlangıç Tarihi")
+                )
+                surucu_satirda_degisti = (
+                    eski_periyot != yeni_periyot
+                    or not np.isclose(eski_esik, yeni_esik)
+                    or eski_baslangic != yeni_baslangic
+                )
+                if surucu_satirda_degisti:
+                    mazot_surucu_degisti = True
+                    # Takvim/eşik değiştiğinde eski otomatik oranlar taşınmaz.
                     yeni_manuel_oranlar = {}
                     for col in master_data_mazot_sutunlari:
                         if not mazot_degerleri_esit_mi(row.get(col), eski_row.get(col)):
@@ -1834,7 +1911,11 @@ if sekme_acik_mi[7]:
                             )
                     st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
                 else:
-                    otomatik_oranlar = musteri_mazot_oranlarini_getir(yeni_periyot)
+                    otomatik_oranlar = musteri_mazot_oranlarini_getir(
+                        yeni_periyot,
+                        yeni_esik,
+                        yeni_baslangic
+                    )
                     yeni_manuel_oranlar = {}
                     for col in master_data_mazot_sutunlari:
                         girilen_deger = row.get(col)
@@ -1847,8 +1928,8 @@ if sekme_acik_mi[7]:
                             )
                     st.session_state.master_mazot_ayarlari[mkod] = yeni_manuel_oranlar
 
-            if periyot_degisti:
-                # Editörü yeni periyodun otomatik oranlarıyla anında yeniden kur.
+            if mazot_surucu_degisti:
+                # Editörü yeni takvim/eşiğin otomatik oranlarıyla anında yeniden kur.
                 st.session_state.master_editor_nonce += 1
                 st.rerun()
 
@@ -1954,6 +2035,11 @@ if sekme_acik_mi[7]:
 if sekme_acik_mi[8]:
     with sekmeler[8]:
         st.title("📊 2026 Mazot Fiyat Değişim Periyot Analizörü")
+        st.caption(
+            "Baz Motorin ve Ocak-Aralık fiyatlarının tamamı elle değiştirilebilir. "
+            "Bir fiyat değiştiğinde matris ve Master Data otomatik mazot oranları "
+            "yeni fiyatlara göre yeniden hesaplanır."
+        )
         up_mazot = st.file_uploader("Yeni Mazot Fiyat Trendi Yükle", type=["xlsx", "xls", "csv"], key="mazot_up_file")
         if up_mazot:
             df_mz = pd.read_csv(up_mazot) if up_mazot.name.lower().endswith(".csv") else pd.read_excel(up_mazot)
@@ -1965,8 +2051,22 @@ if sekme_acik_mi[8]:
 
         if not edited_mazot_input.empty:
             df_mazot_matris = mazot_degisim_matrisi_olustur(edited_mazot_input)
+            df_mazot_matris_gosterim = df_mazot_matris.copy()
+            for ay in aylar:
+                df_mazot_matris_gosterim[ay] = (
+                    pd.to_numeric(df_mazot_matris_gosterim[ay], errors="coerce")
+                    * 100.0
+                )
             st.subheader("📈 Hesaplanan Aylık Değişim Matrisi (%)")
-            st.dataframe(df_mazot_matris, use_container_width=True, hide_index=True, column_config={ay: st.column_config.NumberColumn(ay, format="%.2f%%") for ay in aylar})
+            st.dataframe(
+                df_mazot_matris_gosterim,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    ay: st.column_config.NumberColumn(ay, format="%.2f%%")
+                    for ay in aylar
+                }
+            )
 
             if rev_secenekleri:
                 st.markdown("---")
