@@ -180,6 +180,8 @@ if "master_data_ayarlari" not in st.session_state: st.session_state.master_data_
 if "master_mazot_ayarlari" not in st.session_state: st.session_state.master_mazot_ayarlari = {}
 if "master_enflasyon_ayarlari" not in st.session_state: st.session_state.master_enflasyon_ayarlari = {}
 if "master_editor_nonce" not in st.session_state: st.session_state.master_editor_nonce = 0
+if "master_son_islenen_surucu_imzasi" not in st.session_state:
+    st.session_state.master_son_islenen_surucu_imzasi = None
 # Eski sürüm otomatik değerleri manuel sanabiliyordu. Yeni izleme modeline ilk
 # geçişte yalnızca bir kez eski oturum işaretlerini temizle.
 if st.session_state.get("master_mazot_izleme_surumu") != 2:
@@ -2560,9 +2562,58 @@ if sekme_acik_mi[7]:
             )
 
             if mazot_surucu_degisti or enflasyon_surucu_degisti:
-                # Otomatik hücreler yeni takvim/eşik/periyoda göre yenilenir.
-                st.session_state.master_editor_nonce += 1
-                st.rerun()
+                # Editör anahtarını değiştirmek tabloyu yeni bir bileşen gibi
+                # oluşturur ve kullanıcının yatay kaydırma konumunu sola atar.
+                # Bunun yerine yalnızca hesap sürücülerinin güncel değerlerini
+                # imzalayıp aynı editör anahtarıyla bir kez yeniden hesapla.
+                surucu_sutunlari = [
+                    "Yakıt Anlık Değişim Oranı (%)",
+                    "Yakıt Değişim Periyodu (Ay)",
+                    "Esk. Yakıt Başlangıç Tarihi",
+                    "Enf. Değişim Periyodu (Ay)",
+                    "Esk. Enf. Başlangıç Tarihi"
+                ]
+                surucu_imza_verisi = []
+                for satir_no, degisiklikler in edited_rows.items():
+                    if not isinstance(degisiklikler, dict):
+                        continue
+                    if not any(
+                        col in degisiklikler for col in surucu_sutunlari
+                    ):
+                        continue
+                    try:
+                        satir_index = int(satir_no)
+                    except (TypeError, ValueError):
+                        continue
+                    if satir_index < 0 or satir_index >= len(edited_master):
+                        continue
+                    surucu_row = edited_master.iloc[satir_index]
+                    surucu_imza_verisi.append({
+                        "Satır": satir_index,
+                        "Müşteri Kodu": guvenli_metin_kodu(
+                            surucu_row.get("Müşteri Kodu")
+                        ),
+                        **{
+                            col: json_uyumlu_deger(surucu_row.get(col))
+                            for col in surucu_sutunlari
+                        }
+                    })
+                surucu_imzasi = json.dumps(
+                    surucu_imza_verisi,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str
+                )
+                if (
+                    st.session_state.master_son_islenen_surucu_imzasi
+                    != surucu_imzasi
+                ):
+                    st.session_state.master_son_islenen_surucu_imzasi = (
+                        surucu_imzasi
+                    )
+                    # Aynı key korunduğu için yatay kaydırma ve seçili hücre
+                    # mümkün olduğunca aynı yerde kalır.
+                    st.rerun()
 
             st.markdown("---")
             md1, md2, md3 = st.columns(3)
