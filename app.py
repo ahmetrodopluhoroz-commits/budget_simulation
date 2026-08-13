@@ -1,11 +1,12 @@
-# SÜRÜM: 2026-08-13 / TAM ESKALASYON (12 AY)
-# Bu dosyada master_data_eskalasyon_sutunlari tanımı ve ağırlıklı hesap aktiftir.
+# SÜRÜM: 2026-08-13 / BAZ BİRİM FİYATLAR + DATA_NEW
+# Mevcut Data akışı korunur; yeni sayfalar bağımsız test edilebilir.
 import streamlit as st
 import pandas as pd
 import numpy as np
 import io
 import json
 import os
+import hashlib
 import inspect
 import re
 import urllib.error
@@ -132,6 +133,32 @@ master_data_sutunlari = (
     + master_data_enflasyon_sutunlari
     + master_data_eskalasyon_sutunlari
 )
+baz_birim_fiyat_sutunlari = [
+    "uniq", "Müşteri Kodu", "Müşteri Adı", "Müşteri Grubu",
+    "Müşteri Temsilcisi", "Durum", "Atf Tipi", "TL/desi", "Açıklama"
+]
+data_new_kimlik_sutunlari = ana_kolonlar.copy()
+data_new_parametre_sutunlari = parametre_kolonlari.copy()
+data_new_2025_desi_sutunlari = [f"2025 {ay} Desi" for ay in aylar]
+data_new_2025_tutar_sutunlari = [f"2025 {ay} Tutar" for ay in aylar]
+data_new_2025_fiyat_sutunlari = [f"2025 {ay} Fiyat" for ay in aylar]
+data_new_2026_buyume_sutunlari = [f"2026 {ay} Büyüme" for ay in aylar]
+data_new_2026_esk_sutunlari = [f"2026 {ay} Esk." for ay in aylar]
+data_new_2026_desi_sutunlari = [f"2026 {ay} Desi" for ay in aylar]
+data_new_2026_tutar_sutunlari = [f"2026 {ay} Tutar" for ay in aylar]
+data_new_2026_fiyat_sutunlari = [f"2026 {ay} Fiyat" for ay in aylar]
+data_new_tum_sutunlar = (
+    data_new_kimlik_sutunlari
+    + data_new_parametre_sutunlari
+    + data_new_2025_desi_sutunlari
+    + data_new_2025_tutar_sutunlari
+    + data_new_2025_fiyat_sutunlari
+    + data_new_2026_buyume_sutunlari
+    + data_new_2026_esk_sutunlari
+    + data_new_2026_desi_sutunlari
+    + data_new_2026_tutar_sutunlari
+    + data_new_2026_fiyat_sutunlari
+)
 mazot_giriş_sutunlari = ["Baz Motorin"] + aylar
 buyume_ekran_sutunlari = [
     "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu"
@@ -197,6 +224,22 @@ if st.session_state.get("master_enflasyon_izleme_surumu") != 1:
 if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
+if "baz_birim_fiyat_df" not in st.session_state:
+    st.session_state.baz_birim_fiyat_df = pd.DataFrame(
+        columns=baz_birim_fiyat_sutunlari
+    )
+if "baz_birim_upload_imzasi" not in st.session_state:
+    st.session_state.baz_birim_upload_imzasi = None
+if "data_new_girdi_df" not in st.session_state:
+    st.session_state.data_new_girdi_df = pd.DataFrame()
+if "data_new_sonuc_df" not in st.session_state:
+    st.session_state.data_new_sonuc_df = pd.DataFrame(
+        columns=data_new_tum_sutunlar
+    )
+if "data_new_upload_imzasi" not in st.session_state:
+    st.session_state.data_new_upload_imzasi = None
+if "data_new_kontrol_bilgisi" not in st.session_state:
+    st.session_state.data_new_kontrol_bilgisi = {}
 
 if "mazot_giriş_veri" not in st.session_state:
     st.session_state.mazot_giriş_veri = pd.DataFrame([{
@@ -386,6 +429,316 @@ def nullable_sayi(value):
         return sayi if np.isfinite(sayi) else None
     except (TypeError, ValueError):
         return None
+
+
+def temiz_metin(value, varsayilan=""):
+    """Gizli boşlukları temizleyip gerçek boş değerleri korur."""
+    if value is None:
+        return varsayilan
+    try:
+        if pd.isna(value):
+            return varsayilan
+    except (TypeError, ValueError):
+        pass
+    metin = re.sub(r"\s+", " ", str(value).replace("\xa0", " ")).strip()
+    return varsayilan if metin.lower() in {"", "nan", "none", "null", "nat"} else metin
+
+
+def atf_tipini_standartlastir(value):
+    return temiz_metin(value).upper()
+
+
+def baz_birim_uniq_olustur(musteri_kodu, atf_tipi):
+    return f"{guvenli_metin_kodu(musteri_kodu)}{atf_tipini_standartlastir(atf_tipi)}"
+
+
+def yuklenen_tabloyu_oku(uploaded_file):
+    """Excel/CSV yüklemelerini aynı başlık ve kodlama kurallarıyla okur."""
+    dosya_adi = uploaded_file.name.lower()
+    ham = uploaded_file.getvalue()
+    buffer = io.BytesIO(ham)
+    if dosya_adi.endswith(".csv"):
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                buffer.seek(0)
+                df = pd.read_csv(
+                    buffer, sep=None, engine="python", encoding=encoding
+                )
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            raise ValueError("CSV dosyasının karakter kodlaması okunamadı.")
+    else:
+        df = pd.read_excel(buffer)
+    return sutun_adlarini_standartlastir(df)
+
+
+def yuklenen_dosya_imzasi(uploaded_file):
+    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+
+
+def baz_birim_fiyat_tablosunu_hazirla(df_raw):
+    df = sutun_adlarini_standartlastir(df_raw)
+    for col in baz_birim_fiyat_sutunlari:
+        if col not in df.columns:
+            df[col] = np.nan if col == "TL/desi" else ""
+
+    for col in [
+        "Müşteri Adı", "Müşteri Grubu", "Müşteri Temsilcisi",
+        "Durum", "Atf Tipi", "Açıklama"
+    ]:
+        df[col] = df[col].apply(temiz_metin)
+    df["Müşteri Kodu"] = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    df["Atf Tipi"] = df["Atf Tipi"].apply(atf_tipini_standartlastir)
+    df["TL/desi"] = df["TL/desi"].apply(nullable_sayi).astype(float)
+    df["uniq"] = [
+        baz_birim_uniq_olustur(mk, atf)
+        for mk, atf in zip(df["Müşteri Kodu"], df["Atf Tipi"])
+    ]
+    df = df[(df["Müşteri Kodu"] != "") & (df["Atf Tipi"] != "")]
+    return df[baz_birim_fiyat_sutunlari].reset_index(drop=True)
+
+
+def dosya_oranini_yuzde_puanina_cevir(value):
+    """Excel'in 0,40 biçimindeki yüzde değerini uygulamadaki 40'a çevirir."""
+    sayi = nullable_sayi(value)
+    if sayi is None:
+        return np.nan
+    return sayi * 100.0 if abs(sayi) <= 1.0 else sayi
+
+
+def data_new_girdisini_hazirla(df_raw):
+    """2025 operasyon dosyasını Data_New hesaplama şemasına dönüştürür."""
+    df = sutun_adlarini_standartlastir(df_raw)
+    kimlik_girdi = [c for c in ana_kolonlar if c != "Uniq ID"]
+    for col in kimlik_girdi + parametre_kolonlari:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    metin_kolonlari = [
+        "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
+        "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi",
+        "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum",
+        "Müşteri Grubu"
+    ]
+    for col in metin_kolonlari:
+        df[col] = df[col].apply(temiz_metin)
+    df["Atf Tipi"] = df["Atf Tipi"].apply(atf_tipini_standartlastir)
+    df["Müşteri Kodu"] = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    df["Yıl"] = df["Yıl"].apply(
+        lambda v: guvenli_tamsayi(v, nullable=False)
+    )
+
+    for col in ["Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]:
+        df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+
+    oran_kolonlari = [
+        "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)",
+        "Enf. Değişim Yüzdesi (%)"
+    ]
+    for col in oran_kolonlari:
+        df[col] = df[col].apply(dosya_oranini_yuzde_puanina_cevir)
+    for col in [
+        "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Periyodu (Ay)",
+        "Esk. Baz Yakıt Fiyatı"
+    ]:
+        df[col] = df[col].apply(nullable_sayi).astype(float)
+
+    for ay in aylar:
+        desi_kaynagi = next(
+            (
+                c for c in [f"{ay} Desi", f"{ay} Kg", f"2025 {ay} Desi", f"2025 {ay} Kg"]
+                if c in df.columns
+            ),
+            None
+        )
+        tutar_kaynagi = next(
+            (c for c in [f"{ay} Tutar", f"2025 {ay} Tutar"] if c in df.columns),
+            None
+        )
+        df[f"2025 {ay} Desi"] = (
+            df[desi_kaynagi].apply(guvenli_sayi).astype(float)
+            if desi_kaynagi else 0.0
+        )
+        df[f"2025 {ay} Tutar"] = (
+            df[tutar_kaynagi].apply(guvenli_sayi).astype(float)
+            if tutar_kaynagi else 0.0
+        )
+
+    uniq_parcalari = [
+        "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
+        "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+        "İlk Okutma Şubesi", "Müşteri Kodu"
+    ]
+    uniq_df = df[uniq_parcalari].copy()
+    uniq_df["Yıl"] = uniq_df["Yıl"].apply(lambda v: str(int(v)))
+    for col in uniq_parcalari[1:]:
+        uniq_df[col] = uniq_df[col].apply(temiz_metin)
+    df["Uniq ID"] = uniq_df.astype(str).agg("".join, axis=1)
+    df = df[df["Müşteri Kodu"] != ""].reset_index(drop=True)
+    baslangic_sutunlari = (
+        data_new_kimlik_sutunlari
+        + data_new_parametre_sutunlari
+        + data_new_2025_desi_sutunlari
+        + data_new_2025_tutar_sutunlari
+    )
+    return df.reindex(columns=baslangic_sutunlari)
+
+
+def buyume_ayarlari_dataframe_olustur(ayarlar):
+    rows = []
+    for mkod, ayar in (ayarlar or {}).items():
+        rows.append({
+            "Müşteri Kodu": guvenli_metin_kodu(mkod),
+            "KULLANICAK BÜYÜME": nullable_sayi(
+                ayar.get("KULLANICAK BÜYÜME")
+            )
+        })
+    return pd.DataFrame(rows)
+
+
+def supabase_revizyon_kayitlarini_getir(
+    tablo_adi, revizyon_id, paket_boyutu=1000
+):
+    """PostgREST satır sınırına takılmadan bir revizyonun tamamını getirir."""
+    if not client or not revizyon_id:
+        return []
+    tum_kayitlar = []
+    baslangic = 0
+    while True:
+        sonuc = (
+            client.table(tablo_adi)
+            .select("*")
+            .eq("revizyon_id", revizyon_id)
+            .range(baslangic, baslangic + paket_boyutu - 1)
+            .execute()
+        )
+        paket = sonuc.data or []
+        tum_kayitlar.extend(paket)
+        if len(paket) < paket_boyutu:
+            break
+        baslangic += paket_boyutu
+    return tum_kayitlar
+
+
+def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
+    """Data_New'un bütün 2025/2026 alanlarını toplu olarak hesaplar."""
+    sonuc = girdi_df.copy().reset_index(drop=True)
+    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+
+    master = sutun_adlarini_standartlastir(master_df) if master_df is not None else pd.DataFrame()
+    master_parametre_eslesmesi = pd.Series(False, index=sonuc.index)
+    if not master.empty and "Müşteri Kodu" in master.columns:
+        master["Müşteri Kodu"] = master["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        master = master.drop_duplicates("Müşteri Kodu", keep="last")
+        kaynak_esleme = {
+            "Yakıt Değişim Yüzdesi (%)": "Yakıt Değişim Yüzdesi (%)",
+            "Yakıt Anlık Değişim Oranı (%)": "Yakıt Anlık Değişim Oranı (%)",
+            "Yakıt Değişim Periyodu (Ay)": "Yakıt Değişim Periyodu (Ay)",
+            "Enf. Değişim Yüzdesi (%)": "Enf. Değişim Yüzdesi (%)",
+            "Enf. Değişim Periyodu (Ay)": "Enf. Değişim Periyodu (Ay)",
+            "Esk. Baz Yakıt Fiyatı": "Esk. Baz Yakıt Fiyatı (KDV Hariç)",
+            "Esk. Yakıt Başlangıç Tarihi": "Esk. Yakıt Başlangıç Tarihi",
+            "Esk. Enf. Başlangıç Tarihi": "Esk. Enf. Başlangıç Tarihi"
+        }
+        alinacak = ["Müşteri Kodu"] + [
+            c for c in kaynak_esleme.values() if c in master.columns
+        ] + [
+            c for c in master_data_eskalasyon_sutunlari if c in master.columns
+        ]
+        alinacak = list(dict.fromkeys(alinacak))
+        master_join = master[alinacak].copy()
+        master_join["__master_eslesti"] = True
+        master_join = master_join.rename(
+            columns={c: f"__master__{c}" for c in alinacak if c != "Müşteri Kodu"}
+        )
+        sonuc = sonuc.merge(master_join, on="Müşteri Kodu", how="left")
+        master_parametre_eslesmesi = sonuc["__master_eslesti"].fillna(False)
+
+        for hedef, kaynak in kaynak_esleme.items():
+            kaynak_col = f"__master__{kaynak}"
+            if kaynak_col not in sonuc.columns:
+                continue
+            master_degeri = sonuc[kaynak_col]
+            sonuc[hedef] = master_degeri.where(master_degeri.notna(), sonuc[hedef])
+
+        for ay in aylar:
+            kaynak_col = f"__master__Eskalasyon {ay} (%)"
+            sonuc[f"2026 {ay} Esk."] = (
+                pd.to_numeric(sonuc[kaynak_col], errors="coerce").fillna(0.0)
+                if kaynak_col in sonuc.columns else 0.0
+            )
+    else:
+        for ay in aylar:
+            sonuc[f"2026 {ay} Esk."] = 0.0
+
+    buyume = sutun_adlarini_standartlastir(buyume_df) if buyume_df is not None else pd.DataFrame()
+    if not buyume.empty and {"Müşteri Kodu", "KULLANICAK BÜYÜME"}.issubset(buyume.columns):
+        buyume["Müşteri Kodu"] = buyume["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        buyume["KULLANICAK BÜYÜME"] = buyume["KULLANICAK BÜYÜME"].apply(nullable_sayi)
+        buyume_map = (
+            buyume.drop_duplicates("Müşteri Kodu", keep="last")
+            .set_index("Müşteri Kodu")["KULLANICAK BÜYÜME"]
+        )
+        buyume_serisi = sonuc["Müşteri Kodu"].map(buyume_map)
+    else:
+        buyume_serisi = pd.Series(np.nan, index=sonuc.index)
+    buyume_eslesmesi = buyume_serisi.notna()
+    buyume_serisi = pd.to_numeric(buyume_serisi, errors="coerce").fillna(0.0)
+    for ay in aylar:
+        sonuc[f"2026 {ay} Büyüme"] = buyume_serisi
+
+    baz = baz_birim_fiyat_tablosunu_hazirla(baz_birim_df) if baz_birim_df is not None else pd.DataFrame()
+    if not baz.empty:
+        baz_map = baz.drop_duplicates("uniq", keep="last").set_index("uniq")["TL/desi"]
+        baz_anahtari = [
+            baz_birim_uniq_olustur(mk, atf)
+            for mk, atf in zip(sonuc["Müşteri Kodu"], sonuc["Atf Tipi"])
+        ]
+        aralik_baz_fiyati = pd.Series(baz_anahtari, index=sonuc.index).map(baz_map)
+    else:
+        aralik_baz_fiyati = pd.Series(np.nan, index=sonuc.index)
+    baz_eslesmesi = aralik_baz_fiyati.notna()
+
+    for ay in aylar:
+        desi = pd.to_numeric(sonuc[f"2025 {ay} Desi"], errors="coerce").fillna(0.0)
+        tutar = pd.to_numeric(sonuc[f"2025 {ay} Tutar"], errors="coerce").fillna(0.0)
+        sonuc[f"2025 {ay} Fiyat"] = np.where(desi != 0.0, tutar / desi, np.nan)
+    # Kullanıcı kararı: dosyadaki gerçekleşenden bağımsız olarak Aralık fiyatı
+    # her zaman Baz Birim Fiyatlar sayfasından gelir.
+    sonuc["2025 Aralık Fiyat"] = pd.to_numeric(aralik_baz_fiyati, errors="coerce")
+
+    onceki_fiyat = sonuc["2025 Aralık Fiyat"].copy()
+    for ay in aylar:
+        buyume_col = f"2026 {ay} Büyüme"
+        esk_col = f"2026 {ay} Esk."
+        desi_25 = pd.to_numeric(sonuc[f"2025 {ay} Desi"], errors="coerce").fillna(0.0)
+        sonuc[f"2026 {ay} Desi"] = desi_25 * (
+            1.0 + pd.to_numeric(sonuc[buyume_col], errors="coerce").fillna(0.0) / 100.0
+        )
+        yeni_fiyat = onceki_fiyat * (
+            1.0 + pd.to_numeric(sonuc[esk_col], errors="coerce").fillna(0.0) / 100.0
+        )
+        sonuc[f"2026 {ay} Fiyat"] = yeni_fiyat
+        sonuc[f"2026 {ay} Tutar"] = sonuc[f"2026 {ay} Desi"] * yeni_fiyat
+        onceki_fiyat = yeni_fiyat
+
+    yardimci_kolonlar = [
+        c for c in sonuc.columns if c.startswith("__master")
+    ]
+    sonuc = sonuc.drop(columns=yardimci_kolonlar, errors="ignore")
+    for col in ["Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]:
+        sonuc[col] = pd.to_datetime(sonuc[col], errors="coerce", dayfirst=True).dt.date
+
+    kontrol = {
+        "satir_sayisi": int(len(sonuc)),
+        "tekrarlanan_uniq": int(sonuc["Uniq ID"].duplicated(keep=False).sum()),
+        "master_eslesmeyen": int((~master_parametre_eslesmesi).sum()),
+        "buyume_eslesmeyen": int((~buyume_eslesmesi).sum()),
+        "baz_fiyat_eslesmeyen": int((~baz_eslesmesi).sum())
+    }
+    return sonuc.reindex(columns=data_new_tum_sutunlar), kontrol
 
 
 def evds_alan_adi_normallestir(value):
@@ -1161,7 +1514,7 @@ sekme_etiketleri = [
     "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
-    "📉 ÜFE-TÜFE Yönetimi"
+    "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New"
 ]
 
 # Streamlit 1.55 ve üzerinde sekmelerin yalnızca açık olanı çalıştırılabilir.
@@ -4037,3 +4390,442 @@ if sekme_acik_mi[10]:
                 st.rerun()
             except Exception as hata:
                 st.error(f"Tahmin ve manuel değerler kaydedilemedi: {hata}")
+
+
+# ------------------------------------------------------------
+# 12. SEKME: BAZ BİRİM FİYATLAR
+# ------------------------------------------------------------
+if sekme_acik_mi[11]:
+    with sekmeler[11]:
+        st.title("💳 Baz Birim Fiyatlar")
+        st.caption(
+            "2026 fiyat zincirinin başlangıç değeri bu sayfadan alınır. "
+            "Eşleşme anahtarı Müşteri Kodu + Atf Tipi'dir; TL/desi değeri "
+            "Data_New tablosundaki 2025 Aralık Fiyat alanına yazılır."
+        )
+
+        baz_birim_upload = st.file_uploader(
+            "Baz Birim Fiyat Dosyasını Yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="baz_birim_fiyat_upload"
+        )
+        if baz_birim_upload is not None:
+            try:
+                yeni_imza = yuklenen_dosya_imzasi(baz_birim_upload)
+                if yeni_imza != st.session_state.baz_birim_upload_imzasi:
+                    yuklenen_baz = yuklenen_tabloyu_oku(baz_birim_upload)
+                    st.session_state.baz_birim_fiyat_df = (
+                        baz_birim_fiyat_tablosunu_hazirla(yuklenen_baz)
+                    )
+                    st.session_state.baz_birim_upload_imzasi = yeni_imza
+                    st.success(
+                        f"{len(st.session_state.baz_birim_fiyat_df):,} baz birim "
+                        "fiyat kaydı yüklendi."
+                    )
+            except Exception as ex:
+                st.error(f"Baz Birim Fiyat dosyası okunamadı: {ex}")
+
+        baz_birim_df = st.session_state.baz_birim_fiyat_df.copy()
+        if baz_birim_df.empty:
+            st.info(
+                "Baz fiyat dosyası yükleyebilir veya aşağıdan seçilen bulut "
+                "versiyonunu geri çağırabilirsiniz."
+            )
+        else:
+            tekrar_baz_uniq = baz_birim_df["uniq"].duplicated(keep=False)
+            if tekrar_baz_uniq.any():
+                st.warning(
+                    f"{int(tekrar_baz_uniq.sum()):,} satırda tekrarlanan uniq "
+                    "bulundu. Buluta kaydetmeden önce kontrol edin."
+                )
+
+            edited_baz_birim = st.data_editor(
+                baz_birim_df,
+                use_container_width=True,
+                hide_index=True,
+                height=470,
+                num_rows="dynamic",
+                disabled=["uniq"],
+                column_config={
+                    "TL/desi": st.column_config.NumberColumn(
+                        "TL/desi", format="₺%.4f", min_value=0.0, step=0.0001
+                    )
+                },
+                key="baz_birim_fiyat_editoru"
+            )
+            st.session_state.baz_birim_fiyat_df = (
+                baz_birim_fiyat_tablosunu_hazirla(edited_baz_birim)
+            )
+
+        baz_birim_excel = io.BytesIO()
+        with pd.ExcelWriter(baz_birim_excel, engine="openpyxl") as writer:
+            st.session_state.baz_birim_fiyat_df.to_excel(
+                writer, index=False, sheet_name="Baz Birim Fiyatlar"
+            )
+
+        bb1, bb2, bb3 = st.columns(3)
+        bb1.download_button(
+            "📥 Baz Birim Fiyatları Excel İndir",
+            data=baz_birim_excel.getvalue(),
+            file_name="baz_birim_fiyatlar.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+            key="btn_baz_birim_excel"
+        )
+
+        if rev_secenekleri:
+            baz_birim_rev_id = rev_secenekleri[bb2.selectbox(
+                "Baz Birim Fiyat Bulut Versiyonu:",
+                list(rev_secenekleri.keys()),
+                key="sb_baz_birim_rev"
+            )]
+            if bb2.button(
+                "💾 Baz Birim Fiyatları Buluta Kaydet",
+                type="primary",
+                use_container_width=True,
+                disabled=st.session_state.baz_birim_fiyat_df.empty,
+                key="btn_baz_birim_save"
+            ):
+                try:
+                    kayitlar = []
+                    for _, row in st.session_state.baz_birim_fiyat_df.iterrows():
+                        rec = {
+                            col: json_uyumlu_deger(row.get(col))
+                            for col in baz_birim_fiyat_sutunlari
+                        }
+                        rec["revizyon_id"] = baz_birim_rev_id
+                        kayitlar.append(rec)
+                    client.table("baz_birim_fiyat_tablosu").delete().eq(
+                        "revizyon_id", baz_birim_rev_id
+                    ).execute()
+                    for i in range(0, len(kayitlar), 500):
+                        client.table("baz_birim_fiyat_tablosu").insert(
+                            kayitlar[i:i + 500]
+                        ).execute()
+                    st.success("Baz Birim Fiyatlar buluta kaydedildi.")
+                except Exception as ex:
+                    st.error(
+                        "Baz Birim Fiyatlar buluta kaydedilemedi. Önce yeni "
+                        f"Supabase SQL dosyasını çalıştırın. Ayrıntı: {ex}"
+                    )
+
+            if bb3.button(
+                "🔄 Baz Birim Fiyatları Buluttan Getir",
+                use_container_width=True,
+                key="btn_baz_birim_load"
+            ):
+                try:
+                    tum_kayitlar = []
+                    baslangic = 0
+                    while True:
+                        res = (
+                            client.table("baz_birim_fiyat_tablosu")
+                            .select("*")
+                            .eq("revizyon_id", baz_birim_rev_id)
+                            .range(baslangic, baslangic + 999)
+                            .execute()
+                        )
+                        paket = res.data or []
+                        tum_kayitlar.extend(paket)
+                        if len(paket) < 1000:
+                            break
+                        baslangic += 1000
+                    if tum_kayitlar:
+                        gelen = pd.DataFrame(tum_kayitlar).drop(
+                            columns=["id", "revizyon_id"], errors="ignore"
+                        )
+                        st.session_state.baz_birim_fiyat_df = (
+                            baz_birim_fiyat_tablosunu_hazirla(gelen)
+                        )
+                        st.session_state.baz_birim_upload_imzasi = None
+                        st.success("Baz Birim Fiyatlar buluttan getirildi.")
+                        st.rerun()
+                    else:
+                        st.warning("Seçilen versiyonda baz birim fiyat bulunamadı.")
+                except Exception as ex:
+                    st.error(f"Baz Birim Fiyatlar buluttan getirilemedi: {ex}")
+
+
+# ------------------------------------------------------------
+# 13. SEKME: DATA_NEW
+# ------------------------------------------------------------
+if sekme_acik_mi[12]:
+    with sekmeler[12]:
+        st.title("🆕 Data_New Hesaplama Havuzu")
+        st.caption(
+            "Mevcut Data sayfası korunur. 2025 Desi/Tutar dosyası bu sayfaya "
+            "yüklenir; büyüme, Master Data eskalasyonu ve Baz Birim Fiyatlar "
+            "seçilen revizyon üzerinden birleştirilerek 2026 hesaplanır."
+        )
+
+        data_new_rev_id = None
+        if rev_secenekleri:
+            data_new_rev_id = rev_secenekleri[st.selectbox(
+                "Data_New Kaynak ve Kayıt Versiyonu:",
+                list(rev_secenekleri.keys()),
+                key="sb_data_new_rev"
+            )]
+        else:
+            st.warning(
+                "Bulut revizyonu bulunamadı. Hesaplamada yalnızca aktif hafıza "
+                "kaynakları kullanılabilir."
+            )
+
+        data_new_upload = st.file_uploader(
+            "2025 Desi ve Tutar Dosyasını Yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="data_new_upload"
+        )
+        if data_new_upload is not None:
+            try:
+                yeni_imza = yuklenen_dosya_imzasi(data_new_upload)
+                if yeni_imza != st.session_state.data_new_upload_imzasi:
+                    raw_data_new = yuklenen_tabloyu_oku(data_new_upload)
+                    st.session_state.data_new_girdi_df = (
+                        data_new_girdisini_hazirla(raw_data_new)
+                    )
+                    st.session_state.data_new_sonuc_df = pd.DataFrame(
+                        columns=data_new_tum_sutunlar
+                    )
+                    st.session_state.data_new_kontrol_bilgisi = {}
+                    st.session_state.data_new_upload_imzasi = yeni_imza
+                    st.success(
+                        f"{len(st.session_state.data_new_girdi_df):,} operasyon "
+                        "satırı Data_New için hazırlandı."
+                    )
+            except Exception as ex:
+                st.error(f"Data_New giriş dosyası okunamadı: {ex}")
+
+        hesap_col, temizle_col, buluttan_getir_col = st.columns([3, 1, 1])
+        data_new_hesapla_tiklandi = hesap_col.button(
+            "⚙️ Kaynakları Al ve Data_New'u Hesapla",
+            type="primary",
+            use_container_width=True,
+            disabled=st.session_state.data_new_girdi_df.empty,
+            key="btn_data_new_hesapla"
+        )
+        if temizle_col.button(
+            "🧹 Data_New Hafızasını Temizle",
+            use_container_width=True,
+            key="btn_data_new_temizle"
+        ):
+            st.session_state.data_new_girdi_df = pd.DataFrame()
+            st.session_state.data_new_sonuc_df = pd.DataFrame(
+                columns=data_new_tum_sutunlar
+            )
+            st.session_state.data_new_upload_imzasi = None
+            st.session_state.data_new_kontrol_bilgisi = {}
+            st.rerun()
+
+        data_new_buluttan_getir_tiklandi = buluttan_getir_col.button(
+            "🔄 Data_New'u Buluttan Getir",
+            use_container_width=True,
+            disabled=(not client or not data_new_rev_id),
+            key="btn_data_new_cloud_load"
+        )
+        if data_new_buluttan_getir_tiklandi:
+            try:
+                tum_kayitlar = supabase_revizyon_kayitlarini_getir(
+                    "data_new_tablosu", data_new_rev_id
+                )
+                if tum_kayitlar:
+                    gelen = pd.DataFrame(tum_kayitlar).drop(
+                        columns=["id", "revizyon_id"], errors="ignore"
+                    )
+                    for col in data_new_tum_sutunlar:
+                        if col not in gelen.columns:
+                            gelen[col] = np.nan
+                    st.session_state.data_new_sonuc_df = gelen[
+                        data_new_tum_sutunlar
+                    ]
+                    st.session_state.data_new_kontrol_bilgisi = {
+                        "satir_sayisi": len(gelen),
+                        "tekrarlanan_uniq": int(
+                            gelen["Uniq ID"].duplicated(keep=False).sum()
+                        ),
+                        "master_eslesmeyen": 0,
+                        "buyume_eslesmeyen": 0,
+                        "baz_fiyat_eslesmeyen": int(
+                            gelen["2025 Aralık Fiyat"].isna().sum()
+                        )
+                    }
+                    st.success("Data_New buluttan getirildi.")
+                    st.rerun()
+                else:
+                    st.warning("Seçilen versiyonda Data_New kaydı bulunamadı.")
+            except Exception as ex:
+                st.error(f"Data_New buluttan getirilemedi: {ex}")
+
+        if data_new_hesapla_tiklandi:
+            try:
+                with st.spinner(
+                    "Master Data, büyüme ve baz fiyat kaynakları birleştiriliyor..."
+                ):
+                    master_kaynak = pd.DataFrame()
+                    buyume_kaynak = pd.DataFrame()
+                    baz_birim_kaynak = pd.DataFrame()
+
+                    if client and data_new_rev_id:
+                        master_kaynak = pd.DataFrame(
+                            supabase_revizyon_kayitlarini_getir(
+                                "master_data_tablosu", data_new_rev_id
+                            )
+                        )
+                        buyume_kaynak = pd.DataFrame(
+                            supabase_revizyon_kayitlarini_getir(
+                                "buyume_tablosu", data_new_rev_id
+                            )
+                        )
+                        baz_birim_kaynak = pd.DataFrame(
+                            supabase_revizyon_kayitlarini_getir(
+                                "baz_birim_fiyat_tablosu", data_new_rev_id
+                            )
+                        )
+
+                    if master_kaynak.empty:
+                        master_kaynak = st.session_state.get(
+                            "master_data_df", pd.DataFrame()
+                        ).copy()
+                    if buyume_kaynak.empty:
+                        buyume_kaynak = buyume_ayarlari_dataframe_olustur(
+                            st.session_state.get("buyume_ayarlari", {})
+                        )
+                    if baz_birim_kaynak.empty:
+                        baz_birim_kaynak = st.session_state.get(
+                            "baz_birim_fiyat_df", pd.DataFrame()
+                        ).copy()
+
+                    hesaplanan, kontrol = data_new_tablosunu_hesapla(
+                        st.session_state.data_new_girdi_df,
+                        master_kaynak,
+                        buyume_kaynak,
+                        baz_birim_kaynak
+                    )
+                    st.session_state.data_new_sonuc_df = hesaplanan
+                    st.session_state.data_new_kontrol_bilgisi = kontrol
+                st.success("Data_New hesaplaması tamamlandı.")
+            except Exception as ex:
+                st.error(f"Data_New hesaplanamadı: {ex}")
+
+        kontrol = st.session_state.get("data_new_kontrol_bilgisi", {})
+        if kontrol:
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Satır", f"{kontrol.get('satir_sayisi', 0):,}")
+            k2.metric("Master Eşleşmeyen", f"{kontrol.get('master_eslesmeyen', 0):,}")
+            k3.metric("Büyüme Eşleşmeyen", f"{kontrol.get('buyume_eslesmeyen', 0):,}")
+            k4.metric("Baz Fiyat Eşleşmeyen", f"{kontrol.get('baz_fiyat_eslesmeyen', 0):,}")
+            if kontrol.get("tekrarlanan_uniq", 0):
+                st.error(
+                    "Beklenmeyen tekrarlı Uniq ID bulundu: "
+                    f"{kontrol['tekrarlanan_uniq']:,} satır."
+                )
+            if kontrol.get("baz_fiyat_eslesmeyen", 0):
+                st.warning(
+                    "Baz fiyatı eşleşmeyen satırlarda 2025 Aralık Fiyat ile "
+                    "2026 Fiyat/Tutar alanları boş bırakıldı."
+                )
+
+        data_new_sonuc = st.session_state.data_new_sonuc_df.copy()
+        if not data_new_sonuc.empty:
+            yuzde_sutunlari = (
+                [
+                    "Yakıt Değişim Yüzdesi (%)",
+                    "Yakıt Anlık Değişim Oranı (%)",
+                    "Enf. Değişim Yüzdesi (%)"
+                ]
+                + data_new_2026_buyume_sutunlari
+                + data_new_2026_esk_sutunlari
+            )
+            fiyat_sutunlari = (
+                data_new_2025_fiyat_sutunlari
+                + data_new_2026_fiyat_sutunlari
+            )
+            sayisal_sutunlar = (
+                data_new_2025_desi_sutunlari
+                + data_new_2025_tutar_sutunlari
+                + data_new_2026_desi_sutunlari
+                + data_new_2026_tutar_sutunlari
+            )
+            st.dataframe(
+                data_new_sonuc,
+                use_container_width=True,
+                hide_index=True,
+                height=520,
+                column_config={
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="%.2f%%"
+                        ) for col in yuzde_sutunlari
+                    },
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="₺%.4f"
+                        ) for col in fiyat_sutunlari
+                    },
+                    **{
+                        col: st.column_config.NumberColumn(
+                            col, format="localized"
+                        ) for col in sayisal_sutunlar
+                    },
+                    "Kayıt Tarihi": st.column_config.DateColumn(
+                        "Kayıt Tarihi", format="DD.MM.YYYY"
+                    ),
+                    "Esk. Yakıt Başlangıç Tarihi": st.column_config.DateColumn(
+                        "Esk. Yakıt Başlangıç Tarihi", format="DD.MM.YYYY"
+                    ),
+                    "Esk. Enf. Başlangıç Tarihi": st.column_config.DateColumn(
+                        "Esk. Enf. Başlangıç Tarihi", format="DD.MM.YYYY"
+                    )
+                }
+            )
+
+            data_new_excel = io.BytesIO()
+            with pd.ExcelWriter(data_new_excel, engine="openpyxl") as writer:
+                data_new_sonuc.to_excel(
+                    writer, index=False, sheet_name="Data_New"
+                )
+            dn1, dn2 = st.columns(2)
+            dn1.download_button(
+                "📥 Data_New Excel İndir",
+                data=data_new_excel.getvalue(),
+                file_name="data_new.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+                key="btn_data_new_excel"
+            )
+
+            if client and data_new_rev_id:
+                if dn2.button(
+                    "💾 Data_New'u Buluta Kaydet",
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_data_new_cloud_save"
+                ):
+                    try:
+                        records = []
+                        for _, row in data_new_sonuc.iterrows():
+                            rec = {
+                                col: json_uyumlu_deger(row.get(col))
+                                for col in data_new_tum_sutunlar
+                            }
+                            rec["revizyon_id"] = data_new_rev_id
+                            records.append(rec)
+                        client.table("data_new_tablosu").delete().eq(
+                            "revizyon_id", data_new_rev_id
+                        ).execute()
+                        for i in range(0, len(records), 100):
+                            client.table("data_new_tablosu").insert(
+                                records[i:i + 100]
+                            ).execute()
+                        st.success("Data_New seçilen revizyona kaydedildi.")
+                    except Exception as ex:
+                        st.error(
+                            "Data_New buluta kaydedilemedi. Önce yeni Supabase "
+                            f"SQL dosyasını çalıştırın. Ayrıntı: {ex}"
+                        )
