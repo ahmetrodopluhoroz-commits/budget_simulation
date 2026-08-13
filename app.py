@@ -1826,8 +1826,17 @@ if sekme_acik_mi[7]:
             # matrisindeki aynı periyot satırından otomatik başlatılır.
             for col in master_data_mazot_sutunlari:
                 sonuc[col] = np.nan
+            
             for idx, row in sonuc.iterrows():
                 mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
+
+                # Durum GEÇERSİZ ise otomatik veya manuel Mazot oranı uygulama.
+                durum = str(row.get("Durum", "")).strip().upper()
+                if durum == "GEÇERSİZ":
+                    for col in master_data_mazot_sutunlari:
+                        sonuc.at[idx, col] = np.nan
+                    continue
+
                 otomatik_oranlar = musteri_mazot_oranlarini_getir(
                     row["Yakıt Değişim Periyodu (Ay)"],
                     row["Yakıt Anlık Değişim Oranı (%)"],
