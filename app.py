@@ -1,5 +1,3 @@
-# SÜRÜM: 2026-08-13 / BAZ BİRİM FİYATLAR + DATA_NEW
-# Mevcut Data akışı korunur; yeni sayfalar bağımsız test edilebilir.
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -240,6 +238,8 @@ if "data_new_upload_imzasi" not in st.session_state:
     st.session_state.data_new_upload_imzasi = None
 if "data_new_kontrol_bilgisi" not in st.session_state:
     st.session_state.data_new_kontrol_bilgisi = {}
+if "data_new_buyume_ayarlari" not in st.session_state:
+    st.session_state.data_new_buyume_ayarlari = {}
 
 if "mazot_giriş_veri" not in st.session_state:
     st.session_state.mazot_giriş_veri = pd.DataFrame([{
@@ -739,6 +739,32 @@ def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
         "baz_fiyat_eslesmeyen": int((~baz_eslesmesi).sum())
     }
     return sonuc.reindex(columns=data_new_tum_sutunlar), kontrol
+
+
+def data_new_manuel_buyumeleri_uygula(dataframe, manuel_ayarlar):
+    """Satır/ay bazlı büyüme düzeltmelerini Desi ve Tutar'a yansıtır."""
+    df = dataframe.copy()
+    if df.empty or not manuel_ayarlar or "Uniq ID" not in df.columns:
+        return df
+    uniq_index = pd.Series(df.index, index=df["Uniq ID"].astype(str)).to_dict()
+    for uniq_id, ayarlar in manuel_ayarlar.items():
+        idx = uniq_index.get(str(uniq_id))
+        if idx is None or not isinstance(ayarlar, dict):
+            continue
+        for buyume_col, value in ayarlar.items():
+            if buyume_col not in data_new_2026_buyume_sutunlari:
+                continue
+            ay = buyume_col.removeprefix("2026 ").removesuffix(" Büyüme")
+            buyume = guvenli_sayi(value)
+            desi_25 = guvenli_sayi(df.at[idx, f"2025 {ay} Desi"])
+            fiyat_26 = nullable_sayi(df.at[idx, f"2026 {ay} Fiyat"])
+            desi_26 = desi_25 * (1.0 + buyume / 100.0)
+            df.at[idx, buyume_col] = buyume
+            df.at[idx, f"2026 {ay} Desi"] = desi_26
+            df.at[idx, f"2026 {ay} Tutar"] = (
+                np.nan if fiyat_26 is None else desi_26 * fiyat_26
+            )
+    return df
 
 
 def evds_alan_adi_normallestir(value):
@@ -4591,6 +4617,7 @@ if sekme_acik_mi[12]:
                         columns=data_new_tum_sutunlar
                     )
                     st.session_state.data_new_kontrol_bilgisi = {}
+                    st.session_state.data_new_buyume_ayarlari = {}
                     st.session_state.data_new_upload_imzasi = yeni_imza
                     st.success(
                         f"{len(st.session_state.data_new_girdi_df):,} operasyon "
@@ -4618,6 +4645,7 @@ if sekme_acik_mi[12]:
             )
             st.session_state.data_new_upload_imzasi = None
             st.session_state.data_new_kontrol_bilgisi = {}
+            st.session_state.data_new_buyume_ayarlari = {}
             st.rerun()
 
         data_new_buluttan_getir_tiklandi = buluttan_getir_col.button(
@@ -4641,6 +4669,15 @@ if sekme_acik_mi[12]:
                     st.session_state.data_new_sonuc_df = gelen[
                         data_new_tum_sutunlar
                     ]
+                    # Bulutta kayıtlı satır/ay büyümeleri bir sonraki kaynak
+                    # hesaplamasında da korunabilsin.
+                    st.session_state.data_new_buyume_ayarlari = {
+                        str(row.get("Uniq ID")): {
+                            col: guvenli_sayi(row.get(col))
+                            for col in data_new_2026_buyume_sutunlari
+                        }
+                        for _, row in gelen.iterrows()
+                    }
                     st.session_state.data_new_kontrol_bilgisi = {
                         "satir_sayisi": len(gelen),
                         "tekrarlanan_uniq": int(
@@ -4704,6 +4741,10 @@ if sekme_acik_mi[12]:
                         buyume_kaynak,
                         baz_birim_kaynak
                     )
+                    hesaplanan = data_new_manuel_buyumeleri_uygula(
+                        hesaplanan,
+                        st.session_state.data_new_buyume_ayarlari
+                    )
                     st.session_state.data_new_sonuc_df = hesaplanan
                     st.session_state.data_new_kontrol_bilgisi = kontrol
                 st.success("Data_New hesaplaması tamamlandı.")
@@ -4749,12 +4790,7 @@ if sekme_acik_mi[12]:
                 + data_new_2026_desi_sutunlari
                 + data_new_2026_tutar_sutunlari
             )
-            st.dataframe(
-                data_new_sonuc,
-                use_container_width=True,
-                hide_index=True,
-                height=520,
-                column_config={
+            data_new_column_config = {
                     **{
                         col: st.column_config.NumberColumn(
                             col, format="%.2f%%"
@@ -4780,11 +4816,83 @@ if sekme_acik_mi[12]:
                         "Esk. Enf. Başlangıç Tarihi", format="DD.MM.YYYY"
                     )
                 }
-            )
+            data_new_editor_key = "data_new_buyume_editoru_v1"
+
+            def data_new_buyume_degisimini_uygula():
+                editor_durumu = st.session_state.get(data_new_editor_key, {})
+                edited_rows = (
+                    editor_durumu.get("edited_rows", {})
+                    if isinstance(editor_durumu, dict) else {}
+                )
+                guncel_df = st.session_state.data_new_sonuc_df.copy()
+                if guncel_df.empty:
+                    return
+                degisen_uniqler = set()
+                for satir_no, degisiklikler in edited_rows.items():
+                    try:
+                        satir_index = int(satir_no)
+                    except (TypeError, ValueError):
+                        continue
+                    if not 0 <= satir_index < len(guncel_df):
+                        continue
+                    if not isinstance(degisiklikler, dict):
+                        continue
+                    uniq_id = str(guncel_df.iloc[satir_index]["Uniq ID"])
+                    uniq_ayarlari = (
+                        st.session_state.data_new_buyume_ayarlari.setdefault(
+                            uniq_id, {}
+                        )
+                    )
+                    for col, value in degisiklikler.items():
+                        if col not in data_new_2026_buyume_sutunlari:
+                            continue
+                        uniq_ayarlari[col] = guvenli_sayi(value)
+                        degisen_uniqler.add(uniq_id)
+
+                if degisen_uniqler:
+                    sadece_degisenler = {
+                        uniq_id: st.session_state.data_new_buyume_ayarlari[
+                            uniq_id
+                        ]
+                        for uniq_id in degisen_uniqler
+                    }
+                    st.session_state.data_new_sonuc_df = (
+                        data_new_manuel_buyumeleri_uygula(
+                            guncel_df, sadece_degisenler
+                        )
+                    )
+
+            data_new_fragment = getattr(st, "fragment", lambda func: func)
+
+            @data_new_fragment
+            def data_new_editorunu_goster():
+                gosterilecek_df = st.session_state.data_new_sonuc_df.copy()
+                kilitli_data_new = [
+                    col for col in data_new_tum_sutunlar
+                    if col not in data_new_2026_buyume_sutunlari
+                ]
+                st.caption(
+                    "Yalnızca 2026 Ocak–Aralık Büyüme sütunları düzenlenebilir. "
+                    "Değişen hücrenin 2026 Desi ve Tutar değeri anında yeniden "
+                    "hesaplanır; diğer satırlar etkilenmez."
+                )
+                st.data_editor(
+                    gosterilecek_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=520,
+                    num_rows="fixed",
+                    disabled=kilitli_data_new,
+                    column_config=data_new_column_config,
+                    key=data_new_editor_key,
+                    on_change=data_new_buyume_degisimini_uygula
+                )
+
+            data_new_editorunu_goster()
 
             data_new_excel = io.BytesIO()
             with pd.ExcelWriter(data_new_excel, engine="openpyxl") as writer:
-                data_new_sonuc.to_excel(
+                st.session_state.data_new_sonuc_df.to_excel(
                     writer, index=False, sheet_name="Data_New"
                 )
             dn1, dn2 = st.columns(2)
@@ -4809,7 +4917,7 @@ if sekme_acik_mi[12]:
                 ):
                     try:
                         records = []
-                        for _, row in data_new_sonuc.iterrows():
+                        for _, row in st.session_state.data_new_sonuc_df.iterrows():
                             rec = {
                                 col: json_uyumlu_deger(row.get(col))
                                 for col in data_new_tum_sutunlar
