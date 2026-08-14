@@ -45,6 +45,8 @@ st.set_page_config(
 # ============================================================
 if "oturum_acik" not in st.session_state:
     st.session_state.oturum_acik = False
+if "oturum_kullanici" not in st.session_state:
+    st.session_state.oturum_kullanici = ""
 
 if not st.session_state.oturum_acik:
     st.markdown("<br><br>", unsafe_allow_html=True)
@@ -60,12 +62,17 @@ if not st.session_state.oturum_acik:
         if st.button("Giriş Yap", use_container_width=True, type="primary"):
             if kullanici_adi == "rasg" and sifre == "Hrz1234":
                 st.session_state.oturum_acik = True
+                st.session_state.oturum_kullanici = kullanici_adi.strip()
                 st.success("Giriş Başarılı! Sistem Yükleniyor...")
                 st.rerun()
             else:
                 st.error("Hatalı kullanıcı adı veya şifre girdiniz!")
                 
     st.stop()
+
+AKTIF_KULLANICI = (
+    st.session_state.get("oturum_kullanici", "").strip() or "rasg"
+)
 
 # ============================================================
 # SÜTUN VE VERİ TİPİ TANIMLARI
@@ -258,6 +265,10 @@ if "data_new_liste_filtreleri" not in st.session_state:
     st.session_state.data_new_liste_filtreleri = {}
 if "data_new_filtre_nonce" not in st.session_state:
     st.session_state.data_new_filtre_nonce = 0
+if "aktif_revizyon_id" not in st.session_state:
+    st.session_state.aktif_revizyon_id = None
+if "aktif_revizyon_adi" not in st.session_state:
+    st.session_state.aktif_revizyon_adi = ""
 
 if "mazot_giriş_veri" not in st.session_state:
     st.session_state.mazot_giriş_veri = pd.DataFrame([{
@@ -302,29 +313,149 @@ def revizyon_loglarini_getir():
 
 client = get_supabase_client()
 rev_secenekleri = {}
+revizyon_kayitlari = []
+revizyon_id_haritasi = {}
 
 if client:
     try:
         log_verileri = revizyon_loglarini_getir()
-        
-        if log_verileri:
-            siralama_kolonu = "kayit_zamani" if "kayit_zamani" in log_verileri[0] else "created_at"
-            
-            if siralama_kolonu in log_verileri[0]:
-                sirali_data = sorted(log_verileri, key=lambda x: str(x.get(siralama_kolonu, "")), reverse=True)
-            else:
-                sirali_data = log_verileri
 
+        if log_verileri:
+            def revizyon_zamani(record):
+                return str(
+                    record.get("degistirilme_tarihi")
+                    or record.get("olusturulma_tarihi")
+                    or record.get("kayit_zamani")
+                    or record.get("created_at")
+                    or ""
+                )
+
+            sirali_data = sorted(
+                log_verileri, key=revizyon_zamani, reverse=True
+            )
             for r in sirali_data:
-                tarih = str(r.get(siralama_kolonu, ""))[:16].replace("T", " ") if siralama_kolonu in r else "Tarih Yok"
-                kisi = r.get('olusturan_kisi', 'Bilinmiyor')
-                not_ = r.get('revizyon_notu', 'Not Yok')
-                
-                etiket = f"{tarih} | {kisi} - {not_}"
-                rev_secenekleri[etiket] = r['revizyon_id']
-                
+                rev_id = str(r.get("revizyon_id", "")).strip()
+                if not rev_id:
+                    continue
+                rev_adi = str(
+                    r.get("revizyon_adi")
+                    or r.get("revizyon_notu")
+                    or rev_id
+                ).strip()
+                kisi = str(r.get("olusturan_kisi") or "Bilinmiyor")
+                tarih = revizyon_zamani(r)[:16].replace("T", " ")
+                etiket = f"{rev_adi} | {kisi} | {tarih or 'Tarih Yok'}"
+                rev_secenekleri[etiket] = rev_id
+                revizyon_kayitlari.append(r)
+                revizyon_id_haritasi[rev_id] = r
+
+            aktif_id = st.session_state.get("aktif_revizyon_id")
+            if aktif_id not in revizyon_id_haritasi and sirali_data:
+                aktif_id = str(sirali_data[0].get("revizyon_id"))
+                st.session_state.aktif_revizyon_id = aktif_id
+            if aktif_id in revizyon_id_haritasi:
+                aktif_kayit = revizyon_id_haritasi[aktif_id]
+                st.session_state.aktif_revizyon_adi = str(
+                    aktif_kayit.get("revizyon_adi")
+                    or aktif_kayit.get("revizyon_notu")
+                    or aktif_id
+                )
     except Exception as e:
         st.error(f"☁️ Bulut (Supabase) geçmişi çekilirken bir hata oluştu: {e}")
+
+
+def aktif_revizyon_id_getir():
+    rev_id = st.session_state.get("aktif_revizyon_id")
+    return rev_id if rev_id in revizyon_id_haritasi else None
+
+
+def revizyonu_degistirildi_isaretle(revizyon_id):
+    """Başarılı bulut kaydından sonra revizyonun son değişiklik bilgisini yeniler."""
+    if not client or not revizyon_id:
+        return
+    try:
+        client.table("revizyon_log").update({
+            "son_degistiren": AKTIF_KULLANICI,
+            "degistirilme_tarihi": datetime.now().astimezone().isoformat()
+        }).eq("revizyon_id", revizyon_id).execute()
+        revizyon_loglarini_getir.clear()
+    except Exception:
+        # Yeni metadata SQL'i çalıştırılmadan eski kayıt düğmeleri bozulmasın.
+        pass
+
+
+def aktif_revizyon_bilgisi_goster():
+    rev_id = aktif_revizyon_id_getir()
+    if rev_id:
+        st.info(
+            "Aktif Revizyon: "
+            f"{st.session_state.get('aktif_revizyon_adi', rev_id)} "
+            f"| Kullanıcı: {AKTIF_KULLANICI}"
+        )
+    else:
+        st.warning(
+            "Aktif revizyon yok. Bulut Revizyon Geçmişi sayfasından bir "
+            "revizyon oluşturun veya mevcut bir revizyonu aktif edin."
+        )
+    return rev_id
+
+
+def sayfa_aktif_revizyonunu_getir(container=None):
+    """Sayfadaki kayıt/getir işlemlerini tek global aktif revizyona bağlar."""
+    rev_id = aktif_revizyon_id_getir()
+    hedef = container if container is not None else st
+    if rev_id:
+        hedef.caption(
+            "Aktif revizyon: "
+            f"{st.session_state.get('aktif_revizyon_adi', rev_id)}"
+        )
+    else:
+        hedef.warning(
+            "Önce Bulut Revizyon Geçmişi sayfasından bir revizyonu aktif edin."
+        )
+    return rev_id
+
+
+def revizyon_oturumunu_temizle():
+    """Revizyon değişirken önceki revizyona ait ekrandaki verileri ayırır."""
+    st.session_state.data_sayfası_df = pd.DataFrame(
+        columns=data_ekran_sutunlari
+    )
+    st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
+    st.session_state.musteri_ayarlari = {}
+    st.session_state.musteri_ekran_df = pd.DataFrame()
+    st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
+    st.session_state.baz_yakit_veri = pd.DataFrame(columns=baz_yakit_sutunlari)
+    st.session_state.master_data_df = pd.DataFrame(columns=master_data_sutunlari)
+    st.session_state.master_data_ayarlari = {}
+    st.session_state.master_mazot_ayarlari = {}
+    st.session_state.master_enflasyon_ayarlari = {}
+    st.session_state.master_editor_nonce += 1
+    st.session_state.buyume_ayarlari = {}
+    st.session_state.buyume_ekran_df = pd.DataFrame()
+    st.session_state.baz_birim_fiyat_df = pd.DataFrame(
+        columns=baz_birim_fiyat_sutunlari
+    )
+    st.session_state.baz_birim_upload_imzasi = None
+    st.session_state.data_new_girdi_df = pd.DataFrame()
+    st.session_state.data_new_sonuc_df = pd.DataFrame(
+        columns=data_new_tum_sutunlar
+    )
+    st.session_state.data_new_kaynak_df = pd.DataFrame(
+        columns=data_new_tum_sutunlar
+    )
+    st.session_state.data_new_buyume_ayarlari = {}
+    st.session_state.data_new_kontrol_bilgisi = {}
+    st.session_state.data_new_upload_imzasi = None
+    st.session_state.mazot_giriş_veri = pd.DataFrame([{
+        "Baz Motorin": 45.8416, "Ocak": 45.99, "Şubat": 46.82,
+        "Mart": 47.66, "Nisan": 48.76, "Mayıs": 49.81,
+        "Haziran": 50.52, "Temmuz": 50.99, "Ağustos": 51.51,
+        "Eylül": 52.09, "Ekim": 52.92, "Kasım": 53.76,
+        "Aralık": 54.60
+    }])
+    st.session_state.pop("takvim_verisi_yillar", None)
+    st.session_state.pop("takvim_yuklenen_revizyon", None)
 
 # ============================================================
 # VERİ TEMİZLEME MOTORU
@@ -416,6 +547,8 @@ EVDS_TUFE_SERI_KODU = "TP.TUKFIY2025.GENEL"
 EVDS_UFE_SERI_KODU = "TP.TUFE1YI.T1"
 EVDS_SERVIS_KOKU = "https://evds3.tcmb.gov.tr/igmevdsms-dis"
 ENFLASYON_DB_TABLOSU = "enflasyon_aylik_verileri"
+ENFLASYON_REVIZYON_DB_TABLOSU = "enflasyon_revizyon_tablosu"
+TAKVIM_REVIZYON_DB_TABLOSU = "takvim_revizyon_tablosu"
 
 
 def nullable_sayi(value):
@@ -1051,7 +1184,9 @@ def evds_aylik_enflasyon_getir(baslangic_yili, bitis_yili, api_key):
     return sonuclar
 
 
-def enflasyon_bulut_verilerini_getir(baslangic_yili, bitis_yili):
+def enflasyon_bulut_verilerini_getir(
+    baslangic_yili, bitis_yili, revizyon_id=None
+):
     if not client:
         return pd.DataFrame()
     yanit = (
@@ -1063,7 +1198,48 @@ def enflasyon_bulut_verilerini_getir(baslangic_yili, bitis_yili):
         .order("ay")
         .execute()
     )
-    return pd.DataFrame(yanit.data or [])
+    ortak_df = pd.DataFrame(yanit.data or [])
+    if not revizyon_id:
+        return ortak_df
+
+    try:
+        rev_yanit = (
+            client.table(ENFLASYON_REVIZYON_DB_TABLOSU)
+            .select("*")
+            .eq("revizyon_id", revizyon_id)
+            .gte("yil", int(baslangic_yili))
+            .lte("yil", int(bitis_yili))
+            .order("yil")
+            .order("ay")
+            .execute()
+        )
+        rev_df = pd.DataFrame(rev_yanit.data or [])
+    except Exception:
+        # Yeni revizyon tablosu kurulmadan ortak veriler çalışmaya devam eder.
+        return ortak_df
+    if rev_df.empty:
+        return ortak_df
+
+    birlesik = ortak_df.copy()
+    if birlesik.empty:
+        birlesik = pd.DataFrame(columns=["yil", "ay"])
+    for df in [birlesik, rev_df]:
+        df["yil"] = pd.to_numeric(df.get("yil"), errors="coerce").astype("Int64")
+        df["ay"] = pd.to_numeric(df.get("ay"), errors="coerce").astype("Int64")
+    birlesik = birlesik.set_index(["yil", "ay"], drop=False)
+    rev_df = rev_df.set_index(["yil", "ay"], drop=False)
+    rev_alanlari = [
+        "donem", "ufe_tahmin_oran", "tufe_tahmin_oran",
+        "ufe_manuel_oran", "tufe_manuel_oran"
+    ]
+    for anahtar, row in rev_df.iterrows():
+        if anahtar not in birlesik.index:
+            birlesik.loc[anahtar, "yil"] = int(anahtar[0])
+            birlesik.loc[anahtar, "ay"] = int(anahtar[1])
+        for alan in rev_alanlari:
+            if alan in row.index and pd.notna(row.get(alan)):
+                birlesik.loc[anahtar, alan] = row.get(alan)
+    return birlesik.reset_index(drop=True)
 
 
 def enflasyon_editor_tablosu_olustur(baslangic_yili, bitis_yili, bulut_df):
@@ -1141,7 +1317,7 @@ def enflasyon_editor_tablosu_olustur(baslangic_yili, bitis_yili, bulut_df):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def master_enflasyon_kaynaklarini_getir():
+def master_enflasyon_kaynaklarini_getir(revizyon_id=None):
     """Master Data hesapları için ekonomik verileri Supabase'den tek kez okur."""
     bulut_client = get_supabase_client()
     if not bulut_client:
@@ -1153,6 +1329,36 @@ def master_enflasyon_kaynaklarini_getir():
         .order("ay")
         .execute()
     ).data or []
+    if revizyon_id:
+        try:
+            rev_kayitlari = (
+                bulut_client.table(ENFLASYON_REVIZYON_DB_TABLOSU)
+                .select("*")
+                .eq("revizyon_id", revizyon_id)
+                .order("yil")
+                .order("ay")
+                .execute()
+            ).data or []
+            kayit_haritasi = {
+                (int(k["yil"]), int(k["ay"])): dict(k)
+                for k in enflasyon_kayitlari
+                if k.get("yil") is not None and k.get("ay") is not None
+            }
+            for rev_kayit in rev_kayitlari:
+                anahtar = (int(rev_kayit["yil"]), int(rev_kayit["ay"]))
+                hedef = kayit_haritasi.setdefault(
+                    anahtar,
+                    {"yil": anahtar[0], "ay": anahtar[1]}
+                )
+                for alan in [
+                    "donem", "ufe_tahmin_oran", "tufe_tahmin_oran",
+                    "ufe_manuel_oran", "tufe_manuel_oran"
+                ]:
+                    if rev_kayit.get(alan) is not None:
+                        hedef[alan] = rev_kayit.get(alan)
+            enflasyon_kayitlari = list(kayit_haritasi.values())
+        except Exception:
+            pass
     try:
         asgari_kayitlari = (
             bulut_client.table("asgari_ucret_hesaplanan")
@@ -1631,17 +1837,40 @@ def manuel_mazot_hucrelerini_kaydet(edited_rows, edited_master):
 
 def takvim_verisini_hazirla():
     """Çalışma günü tablosunu bütün sekmeler için tek kez hazırlar."""
-    if "takvim_verisi_yillar" in st.session_state:
+    aktif_rev_id = aktif_revizyon_id_getir()
+    yukleme_anahtari = aktif_rev_id or "__ORTAK__"
+    if (
+        "takvim_verisi_yillar" in st.session_state
+        and st.session_state.get("takvim_yuklenen_revizyon") == yukleme_anahtari
+    ):
         return
 
     takvim_df = pd.DataFrame()
     if client:
+        if aktif_rev_id:
+            try:
+                tk_rev_res = (
+                    client.table(TAKVIM_REVIZYON_DB_TABLOSU)
+                    .select("*")
+                    .eq("revizyon_id", aktif_rev_id)
+                    .execute()
+                )
+                if tk_rev_res.data:
+                    takvim_df = pd.DataFrame(tk_rev_res.data)
+                    takvim_df = takvim_df.drop(
+                        columns=["id", "revizyon_id", "created_at"],
+                        errors="ignore"
+                    )
+            except Exception:
+                takvim_df = pd.DataFrame()
         try:
-            tk_res = client.table("takvim_tablosu").select("*").execute()
-            if tk_res.data:
-                takvim_df = pd.DataFrame(tk_res.data)
-                if "id" in takvim_df.columns:
-                    takvim_df = takvim_df.drop(columns=["id"])
+            if takvim_df.empty:
+                tk_res = client.table("takvim_tablosu").select("*").execute()
+                if tk_res.data:
+                    takvim_df = pd.DataFrame(tk_res.data)
+                    takvim_df = takvim_df.drop(
+                        columns=["id", "created_at"], errors="ignore"
+                    )
         except Exception:
             takvim_df = pd.DataFrame()
 
@@ -1662,6 +1891,7 @@ def takvim_verisini_hazirla():
     st.session_state.takvim_verisi_yillar = (
         takvim_df[["YIL"] + aylar].reset_index(drop=True)
     )
+    st.session_state.takvim_yuklenen_revizyon = yukleme_anahtari
 
 takvim_verisini_hazirla()
 
@@ -1933,12 +2163,7 @@ if sekme_acik_mi[0]:
         elif not rev_secenekleri:
             st.warning("Bulut Revizyon Yönetimi bölümünde henüz bir revizyon bulunmuyor. Önce bir revizyon oluşturun; ardından Data sekmesine geri dönün.")
         else:
-            secilen_revizyon_etiketi = st.selectbox(
-                "Data Yönetimi İçin Bulut Versiyonu",
-                list(rev_secenekleri.keys()),
-                key="sb_data_rev"
-            )
-            r_id_data = rev_secenekleri[secilen_revizyon_etiketi]
+            r_id_data = sayfa_aktif_revizyonunu_getir()
             cd1, cd2, cd3 = st.columns(3)
 
             if not st.session_state.data_sayfası_df.empty:
@@ -1994,6 +2219,7 @@ if sekme_acik_mi[0]:
                         client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
                         for i in range(0, len(data_records), 500):
                             client.table("data_tablosu").insert(data_records[i:i + 500]).execute()
+                    revizyonu_degistirildi_isaretle(r_id_data)
                     st.success("🎉 Data havuzu bu revizyona başarıyla mühürlendi.")
                 except Exception as ex:
                     st.error(f"Data havuzu buluta kaydedilemedi: {ex}")
@@ -2137,21 +2363,28 @@ if sekme_acik_mi[1]:
                 with pd.ExcelWriter(output_excel, engine="openpyxl") as writer: df_nihai.to_excel(writer, index=False, sheet_name="Bütçe")
                 st.download_button("📥 Excel Olarak İndir", output_excel.getvalue(), "horoz_butce.xlsx", use_container_width=True, key="main_excel_down_btn")
             with col_down2:
-                with st.expander("🚀 Yeni Bir Versiyon Olarak Buluta Kaydet", expanded=True):
-                    kisi = st.text_input("Revizyonu Yapan Kişi", key="main_save_kisi")
-                    not_ = st.text_input("Revizyon Notu", key="main_save_not")
-                    if st.button("💾 Senaryoyu Kaydet", use_container_width=True, key="main_save_btn"):
-                        if client:
-                            try:
-                                df_bulut, records = supabase_verisini_hazirla(df_nihai)
-                                yeni_rev_id = f"REV-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                                client.table("revizyon_log").insert({"revizyon_id": yeni_rev_id, "olusturan_kisi": kisi, "revizyon_notu": not_}).execute()
-                                for r in records: r["revizyon_id"] = yeni_rev_id
-                                for i in range(0, len(records), 500): client.table("butce_tablosu").insert(records[i:i+500]).execute()
-                                revizyon_loglarini_getir.clear()
-                                st.success(f"🎉 Kaydedildi: {yeni_rev_id}")
-                                st.rerun()
-                            except Exception as e: st.error(f"Hata: {e}")
+                aktif_butce_rev_id = sayfa_aktif_revizyonunu_getir(col_down2)
+                if st.button(
+                    "💾 Senaryoyu Aktif Revizyona Kaydet",
+                    use_container_width=True,
+                    key="main_save_btn",
+                    disabled=(not client or not aktif_butce_rev_id)
+                ):
+                    try:
+                        _, records = supabase_verisini_hazirla(df_nihai)
+                        for record in records:
+                            record["revizyon_id"] = aktif_butce_rev_id
+                        client.table("butce_tablosu").delete().eq(
+                            "revizyon_id", aktif_butce_rev_id
+                        ).execute()
+                        for i in range(0, len(records), 500):
+                            client.table("butce_tablosu").insert(
+                                records[i:i + 500]
+                            ).execute()
+                        revizyonu_degistirildi_isaretle(aktif_butce_rev_id)
+                        st.success("🎉 Senaryo aktif revizyona kaydedildi.")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
             st.dataframe(df_nihai, use_container_width=True)
 
 # ------------------------------------------------------------
@@ -2252,7 +2485,7 @@ if sekme_acik_mi[2]:
                 except: st.rerun()
 
             st.markdown("<br>", unsafe_allow_html=True)
-            c_tk1, c_tk2 = st.columns(2)
+            c_tk1, c_tk2, c_tk3 = st.columns([2, 2, 1])
         
             with c_tk1:
                 output_tk_excel = io.BytesIO()
@@ -2268,20 +2501,63 @@ if sekme_acik_mi[2]:
                 )
             
             with c_tk2:
+                aktif_takvim_rev_id = sayfa_aktif_revizyonunu_getir(c_tk2)
                 if client:
-                    if st.button("💾 Değişiklikleri Buluta Kalıcı Kaydet", type="primary", use_container_width=True, key="btn_tk_cloud_save"):
+                    if st.button(
+                        "💾 Takvimi Aktif Revizyona Kaydet",
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_tk_cloud_save",
+                        disabled=not aktif_takvim_rev_id
+                    ):
                         clean_save_df = st.session_state.takvim_verisi_yillar.copy()
-                        tk_records = [{c: json_uyumlu_deger(v) for c, v in row.items()} for _, row in clean_save_df.iterrows()]
+                        tk_records = [
+                            {
+                                **{
+                                    c: json_uyumlu_deger(v)
+                                    for c, v in row.items()
+                                },
+                                "revizyon_id": aktif_takvim_rev_id
+                            }
+                            for _, row in clean_save_df.iterrows()
+                        ]
                     
                         with st.spinner("Takvim bulut ambarına mühürleniyor..."):
                             try:
-                                client.table("takvim_tablosu").delete().gte("YIL", "2020").execute()
-                                client.table("takvim_tablosu").insert(tk_records).execute()
-                                st.success("🎉 Harika! Çalışma günleri veritabanına kalıcı olarak mühürlendi. Uygulama kapansa da silinmez.")
+                                client.table(TAKVIM_REVIZYON_DB_TABLOSU).delete().eq(
+                                    "revizyon_id", aktif_takvim_rev_id
+                                ).execute()
+                                client.table(TAKVIM_REVIZYON_DB_TABLOSU).insert(
+                                    tk_records
+                                ).execute()
+                                revizyonu_degistirildi_isaretle(
+                                    aktif_takvim_rev_id
+                                )
+                                st.success(
+                                    "🎉 Çalışma günleri aktif revizyona kaydedildi."
+                                )
                             except Exception as e:
                                 st.error(f"Kayıt esnasında bulut hatası oluştu: {e}")
                 else:
                     st.info("Bulut bağlantısı aktif olmadığı için kalıcı kayıt devre dışı, verileriniz tarayıcı açık kaldığı sürece korunacaktır.")
+
+            with c_tk3:
+                if st.button(
+                    "↩️ Ortak Varsayılana Dön",
+                    use_container_width=True,
+                    key="btn_tk_override_sil",
+                    disabled=(not client or not aktif_takvim_rev_id)
+                ):
+                    try:
+                        client.table(TAKVIM_REVIZYON_DB_TABLOSU).delete().eq(
+                            "revizyon_id", aktif_takvim_rev_id
+                        ).execute()
+                        st.session_state.pop("takvim_verisi_yillar", None)
+                        st.session_state.pop("takvim_yuklenen_revizyon", None)
+                        revizyonu_degistirildi_isaretle(aktif_takvim_rev_id)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Ortak takvime dönülemedi: {e}")
 
         takvim_modulunu_calistir()
 
@@ -2291,40 +2567,236 @@ if sekme_acik_mi[2]:
 if sekme_acik_mi[3]:
     with sekmeler[3]:
         st.title("☁️ Bulut Revizyon Geçmişi")
-        if rev_secenekleri:
-            df_log_gorsel = pd.DataFrame(list(rev_secenekleri.keys()), columns=["Kayıt Bilgileri"])
-            df_log_gorsel.insert(0, "Seç", False)
-            edited_log = st.data_editor(df_log_gorsel, hide_index=True, use_container_width=True, key="rev_history_grid")
-            secili_satirlar = edited_log[edited_log["Seç"] == True]
-            if len(secili_satirlar) == 1:
-                lbl = secili_satirlar.iloc[0]["Kayıt Bilgileri"]
-                secili_rev = rev_secenekleri[lbl]
-                st.markdown("---")
-                c_sol, c_sag = st.columns(2)
-                if c_sol.button("📥 Seçili Versiyonu Ekrana Çek (Yükle)", type="primary", use_container_width=True, key="load_selected_rev_btn"):
-                    with st.spinner("İndiriliyor..."):
-                        data_res = client.table("butce_tablosu").select("*").eq("revizyon_id", secili_rev).execute()
-                        if data_res.data:
-                            st.session_state.ana_veri = pd.DataFrame(data_res.data).reindex(columns=tum_kolonlar)
-                            st.session_state.editor_key += 1
-                            st.success("🎉 Yüklendi!")
-                            st.rerun()
-                if c_sag.button("🗑️ Seçili Versiyonu Kalıcı Olarak Sil", type="secondary", use_container_width=True, key="delete_selected_rev_btn"):
-                    client.table("butce_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("revizyon_log").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("deg_anah_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("baz_yakit_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("musteri_detay_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("mazot_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("buyume_tablosu").delete().eq("revizyon_id", secili_rev).execute()
-                    client.table("data_tablosu").delete().eq("revizyon_id", secili_rev).execute()
+        st.caption(
+            "Revizyonu burada oluşturun ve aktif edin. Diğer bütün bütçe "
+            "sayfalarının bulut kayıtları seçili aktif revizyona yazılır."
+        )
+
+        def revizyon_tarihini_goster(record, degisiklik=False):
+            alanlar = (
+                ["degistirilme_tarihi", "olusturulma_tarihi", "kayit_zamani", "created_at"]
+                if degisiklik else
+                ["olusturulma_tarihi", "kayit_zamani", "created_at"]
+            )
+            ham = next((record.get(a) for a in alanlar if record.get(a)), None)
+            if not ham:
+                return ""
+            tarih = pd.to_datetime(ham, errors="coerce", utc=True)
+            if pd.isna(tarih):
+                return str(ham)
+            try:
+                tarih = tarih.tz_convert("Europe/Istanbul")
+            except (TypeError, ValueError):
+                pass
+            return tarih.strftime("%d.%m.%Y %H:%M")
+
+        def revizyon_tablosunu_kopyala(tablo_adi, kaynak_id, hedef_id):
+            kayitlar = supabase_revizyon_kayitlarini_getir(
+                tablo_adi, kaynak_id
+            )
+            if not kayitlar:
+                return 0
+            yeni_kayitlar = []
+            for kayit in kayitlar:
+                yeni = {
+                    key: value for key, value in kayit.items()
+                    if key not in {"id", "created_at", "updated_at"}
+                }
+                yeni["revizyon_id"] = hedef_id
+                yeni_kayitlar.append(yeni)
+            for baslangic in range(0, len(yeni_kayitlar), 500):
+                client.table(tablo_adi).insert(
+                    yeni_kayitlar[baslangic:baslangic + 500]
+                ).execute()
+            return len(yeni_kayitlar)
+
+        with st.expander("➕ Yeni Revizyon Oluştur", expanded=not revizyon_kayitlari):
+            yeni_rev_adi = st.text_input(
+                "Revizyon Adı",
+                placeholder="2026.08.14_tarihli_butce_V1",
+                key="yeni_revizyon_adi"
+            )
+            yeni_rev_notu = st.text_input(
+                "Açıklama",
+                placeholder="2026 bütçe ilk çalışma",
+                key="yeni_revizyon_aciklama"
+            )
+            olusturma_tipi = st.radio(
+                "Başlangıç",
+                ["Boş Revizyon Oluştur", "Mevcut Revizyondan Kopyala"],
+                horizontal=True,
+                key="yeni_revizyon_tipi"
+            )
+            kopya_kaynak_id = None
+            if olusturma_tipi == "Mevcut Revizyondan Kopyala":
+                if rev_secenekleri:
+                    kopya_etiket = st.selectbox(
+                        "Kopyalanacak Revizyon",
+                        list(rev_secenekleri.keys()),
+                        key="yeni_revizyon_kopya_kaynak"
+                    )
+                    kopya_kaynak_id = rev_secenekleri[kopya_etiket]
+                else:
+                    st.warning("Kopyalanabilecek mevcut revizyon bulunmuyor.")
+
+            if st.button(
+                "☁️ Revizyonu Oluştur ve Aktif Et",
+                type="primary",
+                use_container_width=True,
+                disabled=not client,
+                key="btn_yeni_revizyon_olustur"
+            ):
+                temiz_ad = re.sub(r"\s+", " ", yeni_rev_adi).strip()
+                mevcut_adlar = {
+                    str(r.get("revizyon_adi") or "").strip().casefold()
+                    for r in revizyon_kayitlari
+                }
+                if not temiz_ad:
+                    st.error("Revizyon adı boş olamaz.")
+                elif temiz_ad.casefold() in mevcut_adlar:
+                    st.error("Bu revizyon adı daha önce kullanılmış.")
+                elif (
+                    olusturma_tipi == "Mevcut Revizyondan Kopyala"
+                    and not kopya_kaynak_id
+                ):
+                    st.error("Kopyalanacak revizyonu seçin.")
+                else:
+                    yeni_rev_id = (
+                        "REV-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                    )
                     try:
-                        client.table("master_data_tablosu").delete().eq("revizyon_id", secili_rev).execute()
+                        simdi = datetime.now().astimezone().isoformat()
+                        client.table("revizyon_log").insert({
+                            "revizyon_id": yeni_rev_id,
+                            "revizyon_adi": temiz_ad,
+                            "olusturan_kisi": AKTIF_KULLANICI,
+                            "olusturulma_tarihi": simdi,
+                            "son_degistiren": AKTIF_KULLANICI,
+                            "degistirilme_tarihi": simdi,
+                            "revizyon_notu": yeni_rev_notu.strip()
+                        }).execute()
+
+                        if kopya_kaynak_id:
+                            kopyalanacak_tablolar = [
+                                "butce_tablosu", "data_tablosu",
+                                "musteri_detay_tablosu", "deg_anah_tablosu",
+                                "baz_yakit_tablosu", "master_data_tablosu",
+                                "mazot_tablosu", "buyume_tablosu",
+                                "baz_birim_fiyat_tablosu", "data_new_tablosu",
+                                "takvim_revizyon_tablosu",
+                                "enflasyon_revizyon_tablosu"
+                            ]
+                            for tablo in kopyalanacak_tablolar:
+                                try:
+                                    revizyon_tablosunu_kopyala(
+                                        tablo, kopya_kaynak_id, yeni_rev_id
+                                    )
+                                except Exception:
+                                    # Henüz oluşturulmamış opsiyonel tablo,
+                                    # diğer revizyon verilerinin kopyalanmasını durdurmaz.
+                                    continue
+
+                        revizyon_oturumunu_temizle()
+                        st.session_state.aktif_revizyon_id = yeni_rev_id
+                        st.session_state.aktif_revizyon_adi = temiz_ad
+                        revizyon_loglarini_getir.clear()
+                        st.success(f"Revizyon oluşturuldu: {temiz_ad}")
+                        st.rerun()
+                    except Exception as hata:
+                        st.error(
+                            "Revizyon oluşturulamadı. Önce yeni Supabase "
+                            f"revizyon SQL'ini çalıştırın. Ayrıntı: {hata}"
+                        )
+
+        if revizyon_kayitlari:
+            tarihce_satirlari = []
+            aktif_id = aktif_revizyon_id_getir()
+            for kayit in revizyon_kayitlari:
+                rev_id = str(kayit.get("revizyon_id"))
+                tarihce_satirlari.append({
+                    "Aktif": "✅" if rev_id == aktif_id else "",
+                    "Revizyon Adı": kayit.get("revizyon_adi")
+                    or kayit.get("revizyon_notu") or rev_id,
+                    "Açan Kişi": kayit.get("olusturan_kisi") or "",
+                    "Oluşturulma Tarihi": revizyon_tarihini_goster(kayit),
+                    "Son Değiştiren": kayit.get("son_degistiren")
+                    or kayit.get("olusturan_kisi") or "",
+                    "Son Değiştirilme Tarihi": revizyon_tarihini_goster(
+                        kayit, degisiklik=True
+                    ),
+                    "Açıklama": kayit.get("revizyon_notu") or "",
+                    "Teknik ID": rev_id
+                })
+            st.dataframe(
+                pd.DataFrame(tarihce_satirlari),
+                use_container_width=True,
+                hide_index=True,
+                height=min(500, 38 * len(tarihce_satirlari) + 42)
+            )
+
+            secim_etiketi = st.selectbox(
+                "İşlem Yapılacak Revizyon",
+                list(rev_secenekleri.keys()),
+                index=(
+                    list(rev_secenekleri.values()).index(aktif_id)
+                    if aktif_id in rev_secenekleri.values() else 0
+                ),
+                key="revizyon_yonetim_secimi"
+            )
+            secili_rev = rev_secenekleri[secim_etiketi]
+            r1, r2 = st.columns(2)
+            if r1.button(
+                "✅ Seçili Revizyonu Aktif Et",
+                type="primary",
+                use_container_width=True,
+                key="btn_revizyon_aktif_et"
+            ):
+                kayit = revizyon_id_haritasi.get(secili_rev, {})
+                revizyon_oturumunu_temizle()
+                st.session_state.aktif_revizyon_id = secili_rev
+                st.session_state.aktif_revizyon_adi = str(
+                    kayit.get("revizyon_adi")
+                    or kayit.get("revizyon_notu") or secili_rev
+                )
+                st.success("Aktif revizyon değiştirildi.")
+                st.rerun()
+
+            silme_onayi = r2.checkbox(
+                "Silme işlemini onaylıyorum",
+                key="revizyon_silme_onayi"
+            )
+            if r2.button(
+                "🗑️ Seçili Revizyonu Kalıcı Sil",
+                use_container_width=True,
+                disabled=not silme_onayi,
+                key="delete_selected_rev_btn"
+            ):
+                silinecek_tablolar = [
+                    "butce_tablosu", "data_tablosu",
+                    "deg_anah_tablosu", "baz_yakit_tablosu",
+                    "musteri_detay_tablosu", "master_data_tablosu",
+                    "mazot_tablosu", "buyume_tablosu",
+                    "baz_birim_fiyat_tablosu", "data_new_tablosu",
+                    "takvim_revizyon_tablosu",
+                    "enflasyon_revizyon_tablosu"
+                ]
+                for tablo in silinecek_tablolar:
+                    try:
+                        client.table(tablo).delete().eq(
+                            "revizyon_id", secili_rev
+                        ).execute()
                     except Exception:
-                        pass
-                    revizyon_loglarini_getir.clear()
-                    st.success("Silindi.")
-                    st.rerun()
+                        continue
+                client.table("revizyon_log").delete().eq(
+                    "revizyon_id", secili_rev
+                ).execute()
+                if st.session_state.aktif_revizyon_id == secili_rev:
+                    revizyon_oturumunu_temizle()
+                    st.session_state.aktif_revizyon_id = None
+                    st.session_state.aktif_revizyon_adi = ""
+                revizyon_loglarini_getir.clear()
+                st.success("Revizyon ve bağlı kayıtları silindi.")
+                st.rerun()
         else:
             st.info("Bulut tabanlı bir kayıt bulunmuyor.")
 
@@ -2486,7 +2958,7 @@ if sekme_acik_mi[4]:
             st.rerun()
 
         if rev_secenekleri:
-            r_id_m = rev_secenekleri[c_m2.selectbox("Müşteri Bilgileri İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_m_rev")]
+            r_id_m = sayfa_aktif_revizyonunu_getir(c_m2)
             if not st.session_state.musteri_ekran_df.empty and c_m2.button("💾 Müşteri Kartlarını Buluta Kaydet", use_container_width=True, key="btn_m_cloud_sv"):
                 izin_verilen_db_sutunlari = (
                     ["Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Durum", "Kayıt Tarihi", "Müşteri Grubu"]
@@ -2497,6 +2969,7 @@ if sekme_acik_mi[4]:
                 for r in m_records: r["revizyon_id"] = r_id_m
                 client.table("musteri_detay_tablosu").delete().eq("revizyon_id", r_id_m).execute()
                 for i in range(0, len(m_records), 500): client.table("musteri_detay_tablosu").insert(m_records[i:i+500]).execute()
+                revizyonu_degistirildi_isaretle(r_id_m)
                 st.success("Buluta kilitlendi!")
 
             if c_m3.button("🔄 Dosya Yüklemeden Buluttan Müşteri Kartlarını Çek", use_container_width=True, key="btn_m_cloud_ld"):
@@ -2544,12 +3017,13 @@ if sekme_acik_mi[5]:
         if rev_secenekleri:
             st.markdown("---")
             cp1, cp2, cp3 = st.columns(3)
-            r_id_p = rev_secenekleri[cp1.selectbox("Parametre İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_p_rev")]
+            r_id_p = sayfa_aktif_revizyonunu_getir(cp1)
             if cp2.button("💾 Parametreleri Seçili Versiyona Kaydet", type="primary", use_container_width=True, key="btn_p_sv"):
                 p_recs = [{str(col): json_uyumlu_deger(val) for col, val in row.items()} for _, row in edited_p.iterrows()]
                 for r in p_recs: r["revizyon_id"] = r_id_p
                 client.table("deg_anah_tablosu").delete().eq("revizyon_id", r_id_p).execute()
                 for i in range(0, len(p_recs), 500): client.table("deg_anah_tablosu").insert(p_recs[i:i+500]).execute()
+                revizyonu_degistirildi_isaretle(r_id_p)
                 st.success("Parametreler kaydedildi!")
             if cp3.button("🔄 Seçili Versiyonun Parametrelerini Çek", type="secondary", use_container_width=True, key="btn_p_ld"):
                 p_res = client.table("deg_anah_tablosu").select("*").eq("revizyon_id", r_id_p).execute()
@@ -2592,18 +3066,13 @@ if sekme_acik_mi[6]:
                 "Dosyaları yeniden yükleyebilir veya ikisini aynı bulut versiyonundan getirebilirsiniz."
             )
             kr1, kr2 = st.columns([2, 1])
-            kaynak_rev_etiketi = kr1.selectbox(
-                "Kaynakların Bulut Versiyonu",
-                list(rev_secenekleri.keys()),
-                key="sb_baz_kaynak_rev"
-            )
+            kaynak_rev_id = sayfa_aktif_revizyonunu_getir(kr1)
             if kr2.button(
                 "🔄 Kaynakları Getir ve Oluştur",
                 use_container_width=True,
                 key="btn_baz_kaynak_getir"
             ):
                 try:
-                    kaynak_rev_id = rev_secenekleri[kaynak_rev_etiketi]
                     musteri_res = client.table("musteri_detay_tablosu").select("*").eq(
                         "revizyon_id", kaynak_rev_id
                     ).execute()
@@ -2734,7 +3203,7 @@ if sekme_acik_mi[6]:
             if rev_secenekleri:
                 st.markdown("---")
                 c_by1, c_by2, c_by3 = st.columns(3)
-                r_id_by = rev_secenekleri[c_by1.selectbox("Baz Yakıt İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_by_rev")]
+                r_id_by = sayfa_aktif_revizyonunu_getir(c_by1)
                 if c_by2.button("💾 Baz Yakıtları Buluta Kilitle", type="primary", use_container_width=True, key="btn_by_sv"):
                     # Mevcut Supabase şemasıyla geriye dönük uyumlu alan adları.
                     by_recs = []
@@ -2751,6 +3220,7 @@ if sekme_acik_mi[6]:
                     for r in by_recs: r["revizyon_id"] = r_id_by
                     client.table("baz_yakit_tablosu").delete().eq("revizyon_id", r_id_by).execute()
                     for i in range(0, len(by_recs), 500): client.table("baz_yakit_tablosu").insert(by_recs[i:i+500]).execute()
+                    revizyonu_degistirildi_isaretle(r_id_by)
                     st.success("Mühürlendi!")
                 if c_by3.button("🔄 Versiyonun Baz Yakıt Değerlerini Getir", type="secondary", use_container_width=True, key="btn_by_ld"):
                     by_res = client.table("baz_yakit_tablosu").select("*").eq("revizyon_id", r_id_by).execute()
@@ -2783,7 +3253,9 @@ if sekme_acik_mi[7]:
 
         try:
             master_enflasyon_kayitlari, master_asgari_kayitlari = (
-                master_enflasyon_kaynaklarini_getir()
+                master_enflasyon_kaynaklarini_getir(
+                    aktif_revizyon_id_getir()
+                )
             )
             master_enflasyon_haritasi = enflasyon_kaynak_haritasi_olustur(
                 master_enflasyon_kayitlari
@@ -3236,11 +3708,7 @@ if sekme_acik_mi[7]:
             )
 
             if rev_secenekleri:
-                r_id_master = rev_secenekleri[md2.selectbox(
-                    "Master Data İçin Bulut Versiyonu:",
-                    list(rev_secenekleri.keys()),
-                    key="sb_master_rev"
-                )]
+                r_id_master = sayfa_aktif_revizyonunu_getir(md2)
                 if md2.button(
                     "💾 Master Data'yı Buluta Kaydet",
                     use_container_width=True,
@@ -3273,6 +3741,7 @@ if sekme_acik_mi[7]:
                             client.table("master_data_tablosu").insert(
                                 master_records[i:i + 500]
                             ).execute()
+                        revizyonu_degistirildi_isaretle(r_id_master)
                         st.success("Master Data seçilen bulut versiyonuna kaydedildi.")
                     except Exception as ex:
                         st.error(
@@ -3383,12 +3852,13 @@ if sekme_acik_mi[8]:
             if rev_secenekleri:
                 st.markdown("---")
                 cm_z1, cm_z2, cm_z3 = st.columns(3)
-                r_id_z = rev_secenekleri[cm_z1.selectbox("Mazot Analizi İçin Bulut Versiyonu:", list(rev_secenekleri.keys()), key="sb_mz_rev")]
+                r_id_z = sayfa_aktif_revizyonunu_getir(cm_z1)
                 if cm_z2.button("💾 Mazot Trendini Buluta Kaydet", type="primary", use_container_width=True, key="btn_mz_sv"):
                     mz_rec = {str(col): json_uyumlu_deger(val) for col, val in edited_mazot_input.iloc[0].items()}
                     mz_rec["revizyon_id"] = r_id_z
                     client.table("mazot_tablosu").delete().eq("revizyon_id", r_id_z).execute()
                     client.table("mazot_tablosu").insert(mz_rec).execute()
+                    revizyonu_degistirildi_isaretle(r_id_z)
                     st.success("Mühürlendi!")
                 if cm_z3.button("🔄 Versiyonun Mazot Verilerini Getir", type="secondary", use_container_width=True, key="btn_mz_ld"):
                     mz_res = client.table("mazot_tablosu").select("*").eq("revizyon_id", r_id_z).execute()
@@ -4273,13 +4743,7 @@ if sekme_acik_mi[9]:
                 st.rerun()
 
             if rev_secenekleri:
-                r_id_b = rev_secenekleri[
-                    cb_2.selectbox(
-                        "Büyüme İçin Bulut Versiyonu:",
-                        list(rev_secenekleri.keys()),
-                        key="sb_b_rev_box"
-                    )
-                ]
+                r_id_b = sayfa_aktif_revizyonunu_getir(cb_2)
 
                 if cb_2.button(
                     "💾 Büyüme Verilerini Buluta Gönder",
@@ -4315,6 +4779,7 @@ if sekme_acik_mi[9]:
                         client.table("buyume_tablosu").insert(
                             b_records[i:i + 500]
                         ).execute()
+                    revizyonu_degistirildi_isaretle(r_id_b)
                     st.success("🎉 Müşteri büyüme oranları başarıyla kaydedildi.")
 
                 if cb_3.button(
@@ -4378,6 +4843,7 @@ if sekme_acik_mi[10]:
             "Manuel > Gerçekleşen > Tahmin önceliği uygulanır. Boş aylar 0 "
             "olarak kabul edilmez."
         )
+        aktif_enflasyon_rev_id = sayfa_aktif_revizyonunu_getir()
 
         durum_1, durum_2, durum_3 = st.columns(3)
         durum_1.metric(
@@ -4464,7 +4930,8 @@ if sekme_acik_mi[10]:
         try:
             bulut_enflasyon_df = enflasyon_bulut_verilerini_getir(
                 baslangic_yili_enf,
-                bitis_yili_enf
+                bitis_yili_enf,
+                aktif_revizyon_id_getir()
             ) if client else pd.DataFrame()
         except Exception as hata:
             bulut_enflasyon_df = pd.DataFrame()
@@ -4520,12 +4987,12 @@ if sekme_acik_mi[10]:
             )
         )
 
-        kaydet_col, indir_col = st.columns(2)
+        kaydet_col, indir_col, varsayilan_col = st.columns([2, 2, 1])
         tahmin_manuel_kaydet = kaydet_col.button(
             "💾 Tahmin ve Manuel Değerleri Buluta Kaydet",
             type="primary",
             use_container_width=True,
-            disabled=not client,
+            disabled=(not client or not aktif_enflasyon_rev_id),
             key="btn_enflasyon_tahmin_manuel_kaydet"
         )
 
@@ -4550,6 +5017,24 @@ if sekme_acik_mi[10]:
             key="btn_enflasyon_excel_indir"
         )
 
+        enflasyon_override_sil = varsayilan_col.button(
+            "↩️ Ortak Varsayılana Dön",
+            use_container_width=True,
+            disabled=(not client or not aktif_enflasyon_rev_id),
+            key="btn_enflasyon_override_sil"
+        )
+
+        if enflasyon_override_sil:
+            try:
+                client.table(ENFLASYON_REVIZYON_DB_TABLOSU).delete().eq(
+                    "revizyon_id", aktif_enflasyon_rev_id
+                ).execute()
+                master_enflasyon_kaynaklarini_getir.clear()
+                revizyonu_degistirildi_isaretle(aktif_enflasyon_rev_id)
+                st.rerun()
+            except Exception as hata:
+                st.error(f"Ortak ÜFE–TÜFE verisine dönülemedi: {hata}")
+
         if tahmin_manuel_kaydet:
             try:
                 manuel_kayitlar = []
@@ -4557,6 +5042,7 @@ if sekme_acik_mi[10]:
                     yil = int(row["Yıl"])
                     ay_no = aylar.index(str(row["Ay"])) + 1
                     manuel_kayitlar.append({
+                        "revizyon_id": aktif_enflasyon_rev_id,
                         "yil": yil,
                         "ay": ay_no,
                         "donem": date(yil, ay_no, 1).isoformat(),
@@ -4573,12 +5059,19 @@ if sekme_acik_mi[10]:
                             row.get("TÜFE Manuel (%)")
                         )
                     })
+                client.table(ENFLASYON_REVIZYON_DB_TABLOSU).delete().eq(
+                    "revizyon_id", aktif_enflasyon_rev_id
+                ).gte("yil", baslangic_yili_enf).lte(
+                    "yil", bitis_yili_enf
+                ).execute()
                 for paket_baslangici in range(0, len(manuel_kayitlar), 250):
-                    client.table(ENFLASYON_DB_TABLOSU).upsert(
-                        manuel_kayitlar[paket_baslangici:paket_baslangici + 250],
-                        on_conflict="yil,ay"
+                    client.table(ENFLASYON_REVIZYON_DB_TABLOSU).insert(
+                        manuel_kayitlar[
+                            paket_baslangici:paket_baslangici + 250
+                        ]
                     ).execute()
                 master_enflasyon_kaynaklarini_getir.clear()
+                revizyonu_degistirildi_isaretle(aktif_enflasyon_rev_id)
                 st.session_state.enflasyon_manuel_kayit_basarili = True
                 st.rerun()
             except Exception as hata:
@@ -4670,11 +5163,7 @@ if sekme_acik_mi[11]:
         )
 
         if rev_secenekleri:
-            baz_birim_rev_id = rev_secenekleri[bb2.selectbox(
-                "Baz Birim Fiyat Bulut Versiyonu:",
-                list(rev_secenekleri.keys()),
-                key="sb_baz_birim_rev"
-            )]
+            baz_birim_rev_id = sayfa_aktif_revizyonunu_getir(bb2)
             if bb2.button(
                 "💾 Baz Birim Fiyatları Buluta Kaydet",
                 type="primary",
@@ -4698,6 +5187,7 @@ if sekme_acik_mi[11]:
                         client.table("baz_birim_fiyat_tablosu").insert(
                             kayitlar[i:i + 500]
                         ).execute()
+                    revizyonu_degistirildi_isaretle(baz_birim_rev_id)
                     st.success("Baz Birim Fiyatlar buluta kaydedildi.")
                 except Exception as ex:
                     st.error(
@@ -4756,11 +5246,7 @@ if sekme_acik_mi[12]:
 
         data_new_rev_id = None
         if rev_secenekleri:
-            data_new_rev_id = rev_secenekleri[st.selectbox(
-                "Data_New Kaynak ve Kayıt Versiyonu:",
-                list(rev_secenekleri.keys()),
-                key="sb_data_new_rev"
-            )]
+            data_new_rev_id = sayfa_aktif_revizyonunu_getir()
         else:
             st.warning(
                 "Bulut revizyonu bulunamadı. Hesaplamada yalnızca aktif hafıza "
@@ -5368,6 +5854,7 @@ if sekme_acik_mi[12]:
                             client.table("data_new_tablosu").insert(
                                 records[i:i + 100]
                             ).execute()
+                        revizyonu_degistirildi_isaretle(data_new_rev_id)
                         st.success("Data_New seçilen revizyona kaydedildi.")
                     except Exception as ex:
                         st.error(
