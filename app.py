@@ -854,6 +854,51 @@ def data_new_manuel_buyumeleri_uygula(dataframe, manuel_ayarlar):
     return df
 
 
+def data_new_tarihlerini_gosterime_hazirla(dataframe):
+    """AG Grid'e tarih nesnesi yerine GG.AA.YYYY metni gönderir."""
+    df = dataframe.copy()
+    tarih_sutunlari = [
+        "Kayıt Tarihi",
+        "Esk. Yakıt Başlangıç Tarihi",
+        "Esk. Enf. Başlangıç Tarihi"
+    ]
+
+    def tarih_metni(value):
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if isinstance(value, dict):
+            if {"year", "month", "day"}.issubset(value):
+                try:
+                    return date(
+                        int(value["year"]),
+                        int(value["month"]),
+                        int(value["day"])
+                    ).strftime("%d.%m.%Y")
+                except (TypeError, ValueError):
+                    return ""
+            value = value.get("value", value.get("date", ""))
+        metin = str(value).strip()
+        if re.match(r"^\d{4}-\d{1,2}-\d{1,2}", metin):
+            tarih = pd.to_datetime(
+                metin[:10], errors="coerce", format="%Y-%m-%d"
+            )
+        else:
+            tarih = pd.to_datetime(value, errors="coerce", dayfirst=True)
+        if pd.isna(tarih):
+            return ""
+        return pd.Timestamp(tarih).strftime("%d.%m.%Y")
+
+    for col in tarih_sutunlari:
+        if col in df.columns:
+            df[col] = df[col].apply(tarih_metni)
+    return df
+
+
 def evds_alan_adi_normallestir(value):
     """EVDS JSON alanlarını seri koduyla güvenli eşleştirmek için sadeleştirir."""
     return re.sub(r"[^A-Z0-9]+", "_", str(value).upper()).strip("_")
@@ -5079,6 +5124,8 @@ if sekme_acik_mi[12]:
             @data_new_fragment
             def data_new_editorunu_goster():
                 tum_df = st.session_state.data_new_sonuc_df.copy()
+                if ST_AGGRID_AVAILABLE:
+                    tum_df = data_new_tarihlerini_gosterime_hazirla(tum_df)
                 nonce = st.session_state.data_new_filtre_nonce
                 st.caption(
                     "Başlıkların altındaki kutular yazdıkça filtreler. "
