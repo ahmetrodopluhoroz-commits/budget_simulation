@@ -24,6 +24,14 @@ try:
 except ImportError:
     SUPABASE_AVAILABLE = False
 
+# Data_New için lisans gerektirmeyen AG Grid Community özellikleri kullanılır.
+# Paket bulunmazsa uygulama mevcut Streamlit editörüne güvenli biçimde döner.
+try:
+    from st_aggrid import AgGrid, DataReturnMode, GridOptionsBuilder, JsCode
+    ST_AGGRID_AVAILABLE = True
+except ImportError:
+    ST_AGGRID_AVAILABLE = False
+
 # ============================================================
 # STREAMLIT SAYFA AYARLARI
 # ============================================================
@@ -145,6 +153,7 @@ data_new_2026_esk_sutunlari = [f"2026 {ay} Esk." for ay in aylar]
 data_new_2026_desi_sutunlari = [f"2026 {ay} Desi" for ay in aylar]
 data_new_2026_tutar_sutunlari = [f"2026 {ay} Tutar" for ay in aylar]
 data_new_2026_fiyat_sutunlari = [f"2026 {ay} Fiyat" for ay in aylar]
+DATA_NEW_MANUEL_BUYUME_DB = "Manuel Büyüme Ayarları"
 data_new_tum_sutunlar = (
     data_new_kimlik_sutunlari
     + data_new_parametre_sutunlari
@@ -164,6 +173,7 @@ buyume_ekran_sutunlari = [
     "2024 ilk 9 ay desi", "2025 ilk 9 ay desi", "2025 % desi pay", "Y To Y Desi",
     "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
 ]
+BUYUME_AYLIK_ORANLAR_DB = "Aylık Büyüme Oranları"
 
 # ============================================================
 # SESSION STATE (OTOMATİK YÜKLEME DAHİL)
@@ -234,12 +244,20 @@ if "data_new_sonuc_df" not in st.session_state:
     st.session_state.data_new_sonuc_df = pd.DataFrame(
         columns=data_new_tum_sutunlar
     )
+if "data_new_kaynak_df" not in st.session_state:
+    st.session_state.data_new_kaynak_df = pd.DataFrame(
+        columns=data_new_tum_sutunlar
+    )
 if "data_new_upload_imzasi" not in st.session_state:
     st.session_state.data_new_upload_imzasi = None
 if "data_new_kontrol_bilgisi" not in st.session_state:
     st.session_state.data_new_kontrol_bilgisi = {}
 if "data_new_buyume_ayarlari" not in st.session_state:
     st.session_state.data_new_buyume_ayarlari = {}
+if "data_new_liste_filtreleri" not in st.session_state:
+    st.session_state.data_new_liste_filtreleri = {}
+if "data_new_filtre_nonce" not in st.session_state:
+    st.session_state.data_new_filtre_nonce = 0
 
 if "mazot_giriş_veri" not in st.session_state:
     st.session_state.mazot_giriş_veri = pd.DataFrame([{
@@ -589,13 +607,94 @@ def data_new_girdisini_hazirla(df_raw):
 def buyume_ayarlari_dataframe_olustur(ayarlar):
     rows = []
     for mkod, ayar in (ayarlar or {}).items():
-        rows.append({
+        kullanilacak = nullable_sayi(ayar.get("KULLANICAK BÜYÜME"))
+        row = {
             "Müşteri Kodu": guvenli_metin_kodu(mkod),
-            "KULLANICAK BÜYÜME": nullable_sayi(
-                ayar.get("KULLANICAK BÜYÜME")
-            )
-        })
+            "KULLANICAK BÜYÜME": kullanilacak
+        }
+        # Müşteri Büyüme Matrisi aylık değerleri varsa ay bazında kullanılır;
+        # eski kayıtlarda aylık alan yoksa KULLANICAK BÜYÜME 12 aya uygulanır.
+        for ay in aylar:
+            aylik = nullable_sayi(ayar.get(ay))
+            row[ay] = kullanilacak if aylik is None else aylik
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+def data_new_buyume_kaynaklarini_uygula(
+    dataframe, buyume_df, hesaplari_yenile=False
+):
+    """Büyüme Matrisi Ocak-Aralık değerlerini müşteri koduyla Data_New'a taşır."""
+    df = dataframe.copy()
+    buyume = (
+        sutun_adlarini_standartlastir(buyume_df)
+        if buyume_df is not None else pd.DataFrame()
+    )
+    eslesme = pd.Series(False, index=df.index)
+    if df.empty:
+        return df, eslesme
+
+    if not buyume.empty and "Müşteri Kodu" in buyume.columns:
+        buyume["Müşteri Kodu"] = buyume["Müşteri Kodu"].apply(
+            guvenli_metin_kodu
+        )
+        if BUYUME_AYLIK_ORANLAR_DB in buyume.columns:
+            for idx, ham_ayar in buyume[BUYUME_AYLIK_ORANLAR_DB].items():
+                if isinstance(ham_ayar, str):
+                    try:
+                        ham_ayar = json.loads(ham_ayar)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        ham_ayar = {}
+                if not isinstance(ham_ayar, dict):
+                    continue
+                for ay in aylar:
+                    if ay in ham_ayar:
+                        buyume.at[idx, ay] = nullable_sayi(ham_ayar.get(ay))
+        buyume = buyume.drop_duplicates("Müşteri Kodu", keep="last")
+        musteri_kodlari = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        if "KULLANICAK BÜYÜME" in buyume.columns:
+            kullanilacak_map = (
+                buyume.set_index("Müşteri Kodu")["KULLANICAK BÜYÜME"]
+                .apply(nullable_sayi)
+            )
+            kullanilacak_seri = musteri_kodlari.map(kullanilacak_map)
+        else:
+            kullanilacak_seri = pd.Series(np.nan, index=df.index)
+        for ay in aylar:
+            if ay in buyume.columns:
+                aylik_map = (
+                    buyume.set_index("Müşteri Kodu")[ay]
+                    .apply(nullable_sayi)
+                )
+                aylik_seri = musteri_kodlari.map(aylik_map)
+                aylik_seri = aylik_seri.where(
+                    aylik_seri.notna(), kullanilacak_seri
+                )
+            else:
+                aylik_seri = kullanilacak_seri.copy()
+            eslesme = eslesme | aylik_seri.notna()
+            df[f"2026 {ay} Büyüme"] = pd.to_numeric(
+                aylik_seri, errors="coerce"
+            ).fillna(0.0)
+    else:
+        for ay in aylar:
+            df[f"2026 {ay} Büyüme"] = 0.0
+
+    if hesaplari_yenile:
+        for ay in aylar:
+            desi_25 = pd.to_numeric(
+                df.get(f"2025 {ay} Desi", 0.0), errors="coerce"
+            ).fillna(0.0)
+            buyume_26 = pd.to_numeric(
+                df[f"2026 {ay} Büyüme"], errors="coerce"
+            ).fillna(0.0)
+            desi_26 = desi_25 * (1.0 + buyume_26 / 100.0)
+            df[f"2026 {ay} Desi"] = desi_26
+            fiyat_26 = pd.to_numeric(
+                df.get(f"2026 {ay} Fiyat", np.nan), errors="coerce"
+            )
+            df[f"2026 {ay} Tutar"] = desi_26 * fiyat_26
+    return df, eslesme
 
 
 def supabase_revizyon_kayitlarini_getir(
@@ -673,21 +772,9 @@ def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
         for ay in aylar:
             sonuc[f"2026 {ay} Esk."] = 0.0
 
-    buyume = sutun_adlarini_standartlastir(buyume_df) if buyume_df is not None else pd.DataFrame()
-    if not buyume.empty and {"Müşteri Kodu", "KULLANICAK BÜYÜME"}.issubset(buyume.columns):
-        buyume["Müşteri Kodu"] = buyume["Müşteri Kodu"].apply(guvenli_metin_kodu)
-        buyume["KULLANICAK BÜYÜME"] = buyume["KULLANICAK BÜYÜME"].apply(nullable_sayi)
-        buyume_map = (
-            buyume.drop_duplicates("Müşteri Kodu", keep="last")
-            .set_index("Müşteri Kodu")["KULLANICAK BÜYÜME"]
-        )
-        buyume_serisi = sonuc["Müşteri Kodu"].map(buyume_map)
-    else:
-        buyume_serisi = pd.Series(np.nan, index=sonuc.index)
-    buyume_eslesmesi = buyume_serisi.notna()
-    buyume_serisi = pd.to_numeric(buyume_serisi, errors="coerce").fillna(0.0)
-    for ay in aylar:
-        sonuc[f"2026 {ay} Büyüme"] = buyume_serisi
+    sonuc, buyume_eslesmesi = data_new_buyume_kaynaklarini_uygula(
+        sonuc, buyume_df, hesaplari_yenile=False
+    )
 
     baz = baz_birim_fiyat_tablosunu_hazirla(baz_birim_df) if baz_birim_df is not None else pd.DataFrame()
     if not baz.empty:
@@ -3833,7 +3920,7 @@ if sekme_acik_mi[9]:
                     "Müşteriden Gelen Büyüme": ayar.get("Müşteriden Gelen Büyüme", "")
                 }
                 for m in aylar:
-                    r[m] = kullanilacak
+                    r[m] = guvenli_sayi(ayar.get(m, kullanilacak))
                 final_rows_9.append(r)
 
             ekran_kolonlari_9 = (
@@ -3878,6 +3965,9 @@ if sekme_acik_mi[9]:
                         if alan == "KULLANICAK BÜYÜME":
                             yeni_deger = guvenli_sayi(yeni_deger)
                         mevcut_ayar[alan] = yeni_deger
+                        if alan == "KULLANICAK BÜYÜME":
+                            for ay in aylar:
+                                mevcut_ayar[ay] = yeni_deger
                     st.session_state.buyume_ayarlari[mkod] = mevcut_ayar
 
             def guncel_buyume_matrisini_hazirla_9():
@@ -3894,9 +3984,15 @@ if sekme_acik_mi[9]:
                 ], dtype=float)
 
                 guncel_df["KULLANICAK BÜYÜME"] = kullanilacak_degerler
-                guncel_df[aylar] = np.repeat(
-                    kullanilacak_degerler[:, np.newaxis], len(aylar), axis=1
-                )
+                for ay in aylar:
+                    guncel_df[ay] = np.array([
+                        guvenli_sayi(
+                            ayar.get(ay, kullanilacak)
+                        )
+                        for ayar, kullanilacak in zip(
+                            satir_ayarlari, kullanilacak_degerler
+                        )
+                    ], dtype=float)
                 for alan in [
                     "25 kullanılan büyüme", "Gelen Özet Bilgi",
                     "Müşteriden Gelen Büyüme"
@@ -4119,6 +4215,10 @@ if sekme_acik_mi[9]:
                         "KULLANICAK BÜYÜME": guvenli_sayi(
                             row.get("KULLANICAK BÜYÜME", 0.0)
                         ),
+                        **{
+                            ay: guvenli_sayi(row.get(ay, 0.0))
+                            for ay in aylar
+                        },
                         "Gelen Özet Bilgi": row.get("Gelen Özet Bilgi", ""),
                         "Müşteriden Gelen Büyüme": row.get(
                             "Müşteriden Gelen Büyüme", ""
@@ -4154,8 +4254,14 @@ if sekme_acik_mi[9]:
                         }
                         for _, row in edited_b_matris.iterrows()
                     ]
-                    for record in b_records:
+                    for record, (_, row) in zip(
+                        b_records, edited_b_matris.iterrows()
+                    ):
                         record["revizyon_id"] = r_id_b
+                        record[BUYUME_AYLIK_ORANLAR_DB] = {
+                            ay: guvenli_sayi(row.get(ay, 0.0))
+                            for ay in aylar
+                        }
 
                     client.table("buyume_tablosu").delete().eq(
                         "revizyon_id", r_id_b
@@ -4185,6 +4291,22 @@ if sekme_acik_mi[9]:
                                 "KULLANICAK BÜYÜME": guvenli_sayi(
                                     row.get("KULLANICAK BÜYÜME", 0.0)
                                 ),
+                                **{
+                                    ay: guvenli_sayi(
+                                        (
+                                            row.get(BUYUME_AYLIK_ORANLAR_DB, {})
+                                            if isinstance(
+                                                row.get(
+                                                    BUYUME_AYLIK_ORANLAR_DB, {}
+                                                ), dict
+                                            ) else {}
+                                        ).get(
+                                            ay,
+                                            row.get("KULLANICAK BÜYÜME", 0.0)
+                                        )
+                                    )
+                                    for ay in aylar
+                                },
                                 "Gelen Özet Bilgi": row.get(
                                     "Gelen Özet Bilgi", ""
                                 ),
@@ -4616,6 +4738,9 @@ if sekme_acik_mi[12]:
                     st.session_state.data_new_sonuc_df = pd.DataFrame(
                         columns=data_new_tum_sutunlar
                     )
+                    st.session_state.data_new_kaynak_df = pd.DataFrame(
+                        columns=data_new_tum_sutunlar
+                    )
                     st.session_state.data_new_kontrol_bilgisi = {}
                     st.session_state.data_new_buyume_ayarlari = {}
                     st.session_state.data_new_upload_imzasi = yeni_imza
@@ -4643,9 +4768,14 @@ if sekme_acik_mi[12]:
             st.session_state.data_new_sonuc_df = pd.DataFrame(
                 columns=data_new_tum_sutunlar
             )
+            st.session_state.data_new_kaynak_df = pd.DataFrame(
+                columns=data_new_tum_sutunlar
+            )
             st.session_state.data_new_upload_imzasi = None
             st.session_state.data_new_kontrol_bilgisi = {}
             st.session_state.data_new_buyume_ayarlari = {}
+            st.session_state.data_new_liste_filtreleri = {}
+            st.session_state.data_new_filtre_nonce += 1
             st.rerun()
 
         data_new_buluttan_getir_tiklandi = buluttan_getir_col.button(
@@ -4660,24 +4790,59 @@ if sekme_acik_mi[12]:
                     "data_new_tablosu", data_new_rev_id
                 )
                 if tum_kayitlar:
-                    gelen = pd.DataFrame(tum_kayitlar).drop(
+                    gelen_raw = pd.DataFrame(tum_kayitlar)
+                    manuel_ayarlar = {}
+                    for _, row in gelen_raw.iterrows():
+                        uniq_id = str(row.get("Uniq ID", ""))
+                        ham_ayar = row.get(DATA_NEW_MANUEL_BUYUME_DB, {})
+                        if isinstance(ham_ayar, str):
+                            try:
+                                ham_ayar = json.loads(ham_ayar)
+                            except (
+                                TypeError, ValueError, json.JSONDecodeError
+                            ):
+                                ham_ayar = {}
+                        if not isinstance(ham_ayar, dict):
+                            ham_ayar = {}
+                        temiz_ayar = {
+                            col: guvenli_sayi(value)
+                            for col, value in ham_ayar.items()
+                            if col in data_new_2026_buyume_sutunlari
+                            and nullable_sayi(value) is not None
+                        }
+                        if uniq_id and temiz_ayar:
+                            manuel_ayarlar[uniq_id] = temiz_ayar
+
+                    gelen = gelen_raw.drop(
                         columns=["id", "revizyon_id"], errors="ignore"
                     )
                     for col in data_new_tum_sutunlar:
                         if col not in gelen.columns:
                             gelen[col] = np.nan
-                    st.session_state.data_new_sonuc_df = gelen[
-                        data_new_tum_sutunlar
-                    ]
-                    # Bulutta kayıtlı satır/ay büyümeleri bir sonraki kaynak
-                    # hesaplamasında da korunabilsin.
-                    st.session_state.data_new_buyume_ayarlari = {
-                        str(row.get("Uniq ID")): {
-                            col: guvenli_sayi(row.get(col))
-                            for col in data_new_2026_buyume_sutunlari
-                        }
-                        for _, row in gelen.iterrows()
-                    }
+                    gelen = gelen[data_new_tum_sutunlar]
+
+                    buyume_kaynak = pd.DataFrame(
+                        supabase_revizyon_kayitlarini_getir(
+                            "buyume_tablosu", data_new_rev_id
+                        )
+                    )
+                    if buyume_kaynak.empty:
+                        buyume_kaynak = buyume_ayarlari_dataframe_olustur(
+                            st.session_state.get("buyume_ayarlari", {})
+                        )
+                    if buyume_kaynak.empty:
+                        kaynak_df = gelen.copy()
+                    else:
+                        kaynak_df, _ = data_new_buyume_kaynaklarini_uygula(
+                            gelen, buyume_kaynak, hesaplari_yenile=True
+                        )
+                    st.session_state.data_new_kaynak_df = kaynak_df
+                    st.session_state.data_new_buyume_ayarlari = manuel_ayarlar
+                    st.session_state.data_new_sonuc_df = (
+                        data_new_manuel_buyumeleri_uygula(
+                            kaynak_df, manuel_ayarlar
+                        )
+                    )
                     st.session_state.data_new_kontrol_bilgisi = {
                         "satir_sayisi": len(gelen),
                         "tekrarlanan_uniq": int(
@@ -4741,6 +4906,7 @@ if sekme_acik_mi[12]:
                         buyume_kaynak,
                         baz_birim_kaynak
                     )
+                    st.session_state.data_new_kaynak_df = hesaplanan.copy()
                     hesaplanan = data_new_manuel_buyumeleri_uygula(
                         hesaplanan,
                         st.session_state.data_new_buyume_ayarlari
@@ -4816,77 +4982,292 @@ if sekme_acik_mi[12]:
                         "Esk. Enf. Başlangıç Tarihi", format="DD.MM.YYYY"
                     )
                 }
-            data_new_editor_key = "data_new_buyume_editoru_v1"
+            data_new_editor_key = "data_new_buyume_editoru_v3"
 
-            def data_new_buyume_degisimini_uygula():
-                editor_durumu = st.session_state.get(data_new_editor_key, {})
-                edited_rows = (
-                    editor_durumu.get("edited_rows", {})
-                    if isinstance(editor_durumu, dict) else {}
+            def data_new_liste_filtrelerini_uygula(dataframe):
+                filtreli = dataframe.copy()
+                for col, secimler in (
+                    st.session_state.data_new_liste_filtreleri.items()
+                ):
+                    if col not in filtreli.columns:
+                        continue
+                    secimler = [str(v) for v in (secimler or [])]
+                    seri = filtreli[col].where(
+                        filtreli[col].notna(), "(boş)"
+                    ).astype(str)
+                    filtreli = filtreli[seri.isin(secimler)]
+                return filtreli
+
+            def data_new_manuel_degisiklikleri_kaydet(duzenlenmis_df):
+                if duzenlenmis_df is None:
+                    return False
+                duzenlenmis = pd.DataFrame(duzenlenmis_df).copy()
+                if duzenlenmis.empty or "Uniq ID" not in duzenlenmis.columns:
+                    return False
+
+                guncel = st.session_state.data_new_sonuc_df.copy()
+                kaynak = st.session_state.data_new_kaynak_df.copy()
+                if kaynak.empty:
+                    kaynak = guncel.copy()
+                    st.session_state.data_new_kaynak_df = kaynak.copy()
+                guncel_map = guncel.set_index(
+                    guncel["Uniq ID"].astype(str)
                 )
-                guncel_df = st.session_state.data_new_sonuc_df.copy()
-                if guncel_df.empty:
-                    return
-                degisen_uniqler = set()
-                for satir_no, degisiklikler in edited_rows.items():
-                    try:
-                        satir_index = int(satir_no)
-                    except (TypeError, ValueError):
+                kaynak_map = kaynak.set_index(
+                    kaynak["Uniq ID"].astype(str)
+                )
+                degisti = False
+
+                for _, row in duzenlenmis.iterrows():
+                    uniq_id = str(row.get("Uniq ID", ""))
+                    if uniq_id not in guncel_map.index:
                         continue
-                    if not 0 <= satir_index < len(guncel_df):
-                        continue
-                    if not isinstance(degisiklikler, dict):
-                        continue
-                    uniq_id = str(guncel_df.iloc[satir_index]["Uniq ID"])
-                    uniq_ayarlari = (
-                        st.session_state.data_new_buyume_ayarlari.setdefault(
+                    uniq_ayarlari = dict(
+                        st.session_state.data_new_buyume_ayarlari.get(
                             uniq_id, {}
                         )
                     )
-                    for col, value in degisiklikler.items():
-                        if col not in data_new_2026_buyume_sutunlari:
+                    for col in data_new_2026_buyume_sutunlari:
+                        if col not in row.index:
                             continue
-                        uniq_ayarlari[col] = guvenli_sayi(value)
-                        degisen_uniqler.add(uniq_id)
-
-                if degisen_uniqler:
-                    sadece_degisenler = {
-                        uniq_id: st.session_state.data_new_buyume_ayarlari[
+                        yeni = nullable_sayi(row.get(col))
+                        eski = nullable_sayi(guncel_map.at[uniq_id, col])
+                        ayni = (
+                            yeni is None and eski is None
+                        ) or (
+                            yeni is not None and eski is not None
+                            and np.isclose(yeni, eski, rtol=0.0, atol=1e-9)
+                        )
+                        if ayni:
+                            continue
+                        kaynak_deger = nullable_sayi(
+                            kaynak_map.at[uniq_id, col]
+                        )
+                        # Hücre temizlenirse veya kaynak değer yeniden yazılırsa
+                        # manuel geçersiz kılma kaldırılır.
+                        kaynaga_esit = (
+                            yeni is not None and kaynak_deger is not None
+                            and np.isclose(
+                                yeni, kaynak_deger, rtol=0.0, atol=1e-9
+                            )
+                        )
+                        if yeni is None or kaynaga_esit:
+                            uniq_ayarlari.pop(col, None)
+                        else:
+                            uniq_ayarlari[col] = guvenli_sayi(yeni)
+                        degisti = True
+                    if uniq_ayarlari:
+                        st.session_state.data_new_buyume_ayarlari[
                             uniq_id
-                        ]
-                        for uniq_id in degisen_uniqler
-                    }
+                        ] = uniq_ayarlari
+                    else:
+                        st.session_state.data_new_buyume_ayarlari.pop(
+                            uniq_id, None
+                        )
+
+                if degisti:
                     st.session_state.data_new_sonuc_df = (
                         data_new_manuel_buyumeleri_uygula(
-                            guncel_df, sadece_degisenler
+                            kaynak,
+                            st.session_state.data_new_buyume_ayarlari
                         )
                     )
+                return degisti
 
             data_new_fragment = getattr(st, "fragment", lambda func: func)
 
             @data_new_fragment
             def data_new_editorunu_goster():
-                gosterilecek_df = st.session_state.data_new_sonuc_df.copy()
-                kilitli_data_new = [
-                    col for col in data_new_tum_sutunlar
-                    if col not in data_new_2026_buyume_sutunlari
-                ]
+                tum_df = st.session_state.data_new_sonuc_df.copy()
+                nonce = st.session_state.data_new_filtre_nonce
                 st.caption(
-                    "Yalnızca 2026 Ocak–Aralık Büyüme sütunları düzenlenebilir. "
-                    "Değişen hücrenin 2026 Desi ve Tutar değeri anında yeniden "
-                    "hesaplanır; diğer satırlar etkilenmez."
+                    "Başlıkların altındaki kutular yazdıkça filtreler. "
+                    "Açılır liste filtresinde sütun seçip arama yapabilir, "
+                    "Tümünü Seç ile yeniden bütün kayıtları gösterebilirsiniz. "
+                    "Yalnızca 2026 büyüme hücreleri düzenlenebilir."
                 )
-                st.data_editor(
-                    gosterilecek_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=520,
-                    num_rows="fixed",
-                    disabled=kilitli_data_new,
-                    column_config=data_new_column_config,
-                    key=data_new_editor_key,
-                    on_change=data_new_buyume_degisimini_uygula
+
+                with st.expander("☑️ Açılır Liste Sütun Filtreleri", expanded=False):
+                    f1, f2, f3 = st.columns([2, 1, 1])
+                    filtre_col = f1.selectbox(
+                        "Filtrelenecek sütun",
+                        data_new_tum_sutunlar,
+                        key=f"dn_filter_col_{nonce}"
+                    )
+                    ham_degerler = tum_df[filtre_col].where(
+                        tum_df[filtre_col].notna(), "(boş)"
+                    ).astype(str)
+                    filtre_degerleri = sorted(
+                        ham_degerler.unique().tolist(),
+                        key=lambda value: value.casefold()
+                    )
+                    mevcut_secimler = (
+                        st.session_state.data_new_liste_filtreleri.get(
+                            filtre_col
+                        )
+                    )
+                    tumu_secili = f2.checkbox(
+                        "Tümünü Seç",
+                        value=mevcut_secimler is None,
+                        key=f"dn_filter_all_{nonce}_{filtre_col}"
+                    )
+                    if tumu_secili:
+                        st.session_state.data_new_liste_filtreleri.pop(
+                            filtre_col, None
+                        )
+                    else:
+                        secilenler = st.multiselect(
+                            "Ara ve değerleri seç",
+                            filtre_degerleri,
+                            default=(
+                                mevcut_secimler
+                                if mevcut_secimler is not None else []
+                            ),
+                            key=f"dn_filter_values_{nonce}_{filtre_col}"
+                        )
+                        st.session_state.data_new_liste_filtreleri[
+                            filtre_col
+                        ] = secilenler
+                    if f3.button(
+                        "🧹 Tüm Filtreleri Temizle",
+                        use_container_width=True,
+                        key=f"dn_filter_clear_{nonce}"
+                    ):
+                        st.session_state.data_new_liste_filtreleri = {}
+                        st.session_state.data_new_filtre_nonce += 1
+                        if hasattr(st, "fragment"):
+                            st.rerun(scope="fragment")
+                        else:
+                            st.rerun()
+
+                    aktifler = [
+                        f"{col}: {len(values)} seçim"
+                        for col, values in
+                        st.session_state.data_new_liste_filtreleri.items()
+                    ]
+                    if aktifler:
+                        st.info("Aktif liste filtreleri — " + " | ".join(aktifler))
+
+                gosterilecek_df = data_new_liste_filtrelerini_uygula(tum_df)
+                st.caption(
+                    f"Gösterilen satır: {len(gosterilecek_df):,} / "
+                    f"{len(tum_df):,}"
                 )
+
+                if gosterilecek_df.empty:
+                    st.warning("Seçili filtrelere uyan kayıt bulunamadı.")
+                    return
+
+                if ST_AGGRID_AVAILABLE:
+                    yuzde_formatter = JsCode(
+                        "function(p) { if (p.value === null || p.value === undefined || p.value === '') return ''; "
+                        "return Number(p.value).toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '%'; }"
+                    )
+                    para_formatter = JsCode(
+                        "function(p) { if (p.value === null || p.value === undefined || p.value === '') return ''; "
+                        "return '₺' + Number(p.value).toLocaleString('tr-TR', {minimumFractionDigits: 4, maximumFractionDigits: 4}); }"
+                    )
+                    sayi_formatter = JsCode(
+                        "function(p) { if (p.value === null || p.value === undefined || p.value === '') return ''; "
+                        "return Number(p.value).toLocaleString('tr-TR', {maximumFractionDigits: 2}); }"
+                    )
+                    gb = GridOptionsBuilder.from_dataframe(gosterilecek_df)
+                    gb.configure_default_column(
+                        editable=False,
+                        sortable=True,
+                        filter="agTextColumnFilter",
+                        floatingFilter=True,
+                        resizable=True,
+                        minWidth=110
+                    )
+                    for col in data_new_tum_sutunlar:
+                        col_ayari = {
+                            "editable": col in data_new_2026_buyume_sutunlari,
+                            "filter": (
+                                "agNumberColumnFilter"
+                                if col in yuzde_sutunlari
+                                or col in fiyat_sutunlari
+                                or col in sayisal_sutunlar
+                                else "agTextColumnFilter"
+                            ),
+                            "floatingFilter": True
+                        }
+                        if col in data_new_2026_buyume_sutunlari:
+                            col_ayari.update({
+                                "type": ["numericColumn"],
+                                "valueFormatter": yuzde_formatter,
+                                "cellStyle": {
+                                    "backgroundColor": "#fff3cd",
+                                    "fontWeight": "600"
+                                }
+                            })
+                        elif col in yuzde_sutunlari:
+                            col_ayari["valueFormatter"] = yuzde_formatter
+                        elif col in fiyat_sutunlari:
+                            col_ayari["valueFormatter"] = para_formatter
+                        elif col in sayisal_sutunlar:
+                            col_ayari["valueFormatter"] = sayi_formatter
+                        gb.configure_column(col, **col_ayari)
+                    gb.configure_grid_options(
+                        getRowId=JsCode(
+                            "function(params) { return String(params.data['Uniq ID']); }"
+                        ),
+                        singleClickEdit=True,
+                        stopEditingWhenCellsLoseFocus=True,
+                        suppressScrollOnNewData=True,
+                        animateRows=False
+                    )
+                    grid_response = AgGrid(
+                        gosterilecek_df,
+                        gridOptions=gb.build(),
+                        height=560,
+                        theme="streamlit",
+                        data_return_mode=DataReturnMode.AS_INPUT,
+                        update_on=["cellValueChanged"],
+                        allow_unsafe_jscode=True,
+                        enable_enterprise_modules=False,
+                        server_sync_strategy="server_wins",
+                        key="data_new_aggrid_community_v1"
+                    )
+                    grid_data = (
+                        grid_response.get("data")
+                        if isinstance(grid_response, dict)
+                        else getattr(grid_response, "data", None)
+                    )
+                    if data_new_manuel_degisiklikleri_kaydet(grid_data):
+                        if hasattr(st, "fragment"):
+                            st.rerun(scope="fragment")
+                        else:
+                            st.rerun()
+                else:
+                    st.warning(
+                        "Otomatik başlık filtreleri için requirements.txt "
+                        "dosyanıza streamlit-aggrid==1.2.1.post2 satırını ekleyin. "
+                        "Paket kurulana kadar güvenli Streamlit editörü kullanılıyor."
+                    )
+                    kilitli_data_new = [
+                        col for col in data_new_tum_sutunlar
+                        if col not in data_new_2026_buyume_sutunlari
+                    ]
+                    fallback_key = (
+                        f"{data_new_editor_key}_{nonce}_"
+                        f"{hash(tuple(gosterilecek_df['Uniq ID'].astype(str)))}"
+                    )
+                    fallback_sonuc = st.data_editor(
+                        gosterilecek_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=520,
+                        num_rows="fixed",
+                        disabled=kilitli_data_new,
+                        column_config=data_new_column_config,
+                        key=fallback_key
+                    )
+                    if data_new_manuel_degisiklikleri_kaydet(fallback_sonuc):
+                        if hasattr(st, "fragment"):
+                            st.rerun(scope="fragment")
+                        else:
+                            st.rerun()
 
             data_new_editorunu_goster()
 
@@ -4923,6 +5304,15 @@ if sekme_acik_mi[12]:
                                 for col in data_new_tum_sutunlar
                             }
                             rec["revizyon_id"] = data_new_rev_id
+                            rec[DATA_NEW_MANUEL_BUYUME_DB] = {
+                                col: guvenli_sayi(value)
+                                for col, value in (
+                                    st.session_state.data_new_buyume_ayarlari.get(
+                                        str(row.get("Uniq ID")), {}
+                                    )
+                                ).items()
+                                if col in data_new_2026_buyume_sutunlari
+                            }
                             records.append(rec)
                         client.table("data_new_tablosu").delete().eq(
                             "revizyon_id", data_new_rev_id
