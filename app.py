@@ -220,6 +220,12 @@ if "ana_veri" not in st.session_state: st.session_state.ana_veri = pd.DataFrame(
 if "editor_key" not in st.session_state: st.session_state.editor_key = 0
 if "musteri_ayarlari" not in st.session_state: st.session_state.musteri_ayarlari = {}
 if "deg_anah_veri" not in st.session_state: st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
+if "parametre_editor_nonce" not in st.session_state:
+    st.session_state.parametre_editor_nonce = 0
+if "parametre_upload_imzasi" not in st.session_state:
+    st.session_state.parametre_upload_imzasi = None
+if "parametre_bulut_mesaji" not in st.session_state:
+    st.session_state.parametre_bulut_mesaji = None
 if "baz_yakit_veri" not in st.session_state: st.session_state.baz_yakit_veri = pd.DataFrame(columns=baz_yakit_sutunlari)
 if "master_data_df" not in st.session_state: st.session_state.master_data_df = pd.DataFrame(columns=master_data_sutunlari)
 if "master_data_ayarlari" not in st.session_state: st.session_state.master_data_ayarlari = {}
@@ -425,6 +431,8 @@ def revizyon_oturumunu_temizle():
     st.session_state.musteri_ayarlari = {}
     st.session_state.musteri_ekran_df = pd.DataFrame()
     st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
+    st.session_state.parametre_upload_imzasi = None
+    st.session_state.parametre_editor_nonce += 1
     st.session_state.baz_yakit_veri = pd.DataFrame(columns=baz_yakit_sutunlari)
     st.session_state.master_data_df = pd.DataFrame(columns=master_data_sutunlari)
     st.session_state.master_data_ayarlari = {}
@@ -2994,22 +3002,40 @@ if sekme_acik_mi[4]:
 if sekme_acik_mi[5]:
     with sekmeler[5]:
         st.title("⚙️ değ.anah.-yakıt-kdv Parametre Yönetimi")
+        parametre_mesaji = st.session_state.pop(
+            "parametre_bulut_mesaji", None
+        )
+        if parametre_mesaji:
+            st.success(parametre_mesaji)
         yuklenen_param = st.file_uploader("Parametre Şablonunu Yükle", type=["xlsx", "xls", "csv"], key="param_up")
         if yuklenen_param:
-            df_p = pd.read_csv(yuklenen_param) if yuklenen_param.name.lower().endswith(".csv") else pd.read_excel(yuklenen_param)
-            df_p = sutun_adlarini_standartlastir(df_p)
-            if "Müşteri Kodu" in df_p.columns: df_p["Müşteri Kodu"] = df_p["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            st.session_state.deg_anah_veri = df_p.reindex(columns=deg_anah_sutunlari).copy()
+            yeni_parametre_imzasi = yuklenen_dosya_imzasi(yuklenen_param)
+            if yeni_parametre_imzasi != st.session_state.parametre_upload_imzasi:
+                df_p = pd.read_csv(yuklenen_param) if yuklenen_param.name.lower().endswith(".csv") else pd.read_excel(yuklenen_param)
+                df_p = sutun_adlarini_standartlastir(df_p)
+                if "Müşteri Kodu" in df_p.columns: df_p["Müşteri Kodu"] = df_p["Müşteri Kodu"].apply(guvenli_metin_kodu)
+                st.session_state.deg_anah_veri = df_p.reindex(columns=deg_anah_sutunlari).copy()
+                st.session_state.parametre_upload_imzasi = yeni_parametre_imzasi
+                st.session_state.parametre_editor_nonce += 1
+                st.success(
+                    f"{len(st.session_state.deg_anah_veri):,} parametre "
+                    "satırı dosyadan yüklendi."
+                )
 
         if not st.session_state.deg_anah_veri.empty:
             st.session_state.deg_anah_veri["Baz Yakıt Fiyatı"] = st.session_state.deg_anah_veri["Baz Yakıt Fiyatı"].apply(guvenli_sayi)
+
+        st.caption(
+            f"Ekrandaki parametre kaydı: "
+            f"{len(st.session_state.deg_anah_veri):,} satır"
+        )
 
         edited_p = st.data_editor(st.session_state.deg_anah_veri, use_container_width=True, num_rows="dynamic", height=350,
                                   column_config={
                                       "Müşteri Kodu": st.column_config.TextColumn("Müşteri Kodu", required=True),
                                       "KDV Durumu": st.column_config.SelectboxColumn("KDV Durumu", options=["KDV'li", "KDV'siz", "Muaf"]),
                                       "Baz Yakıt Fiyatı": st.column_config.NumberColumn("Baz Yakıt Fiyatı", format="₺%.2f")
-                                  }, key="ed_p_t5")
+                                  }, key=f"ed_p_t5_{st.session_state.parametre_editor_nonce}")
         st.session_state.deg_anah_veri = edited_p.copy()
         # Müşteri kaynağı hazırsa Baz Yakıt tablosunu parametre değişikliğinde yenile.
         st.session_state.baz_yakit_veri = otomatik_baz_yakit_tablosu_olustur()
@@ -3019,23 +3045,45 @@ if sekme_acik_mi[5]:
             cp1, cp2, cp3 = st.columns(3)
             r_id_p = sayfa_aktif_revizyonunu_getir(cp1)
             if cp2.button("💾 Parametreleri Seçili Versiyona Kaydet", type="primary", use_container_width=True, key="btn_p_sv"):
-                p_recs = [{str(col): json_uyumlu_deger(val) for col, val in row.items()} for _, row in edited_p.iterrows()]
-                for r in p_recs: r["revizyon_id"] = r_id_p
-                client.table("deg_anah_tablosu").delete().eq("revizyon_id", r_id_p).execute()
-                for i in range(0, len(p_recs), 500): client.table("deg_anah_tablosu").insert(p_recs[i:i+500]).execute()
-                revizyonu_degistirildi_isaretle(r_id_p)
-                st.success("Parametreler kaydedildi!")
+                try:
+                    p_recs = [{str(col): json_uyumlu_deger(val) for col, val in row.items()} for _, row in edited_p.iterrows()]
+                    for r in p_recs: r["revizyon_id"] = r_id_p
+                    client.table("deg_anah_tablosu").delete().eq("revizyon_id", r_id_p).execute()
+                    with st.spinner(
+                        f"{len(p_recs):,} parametre kaydı buluta aktarılıyor..."
+                    ):
+                        for i in range(0, len(p_recs), 500):
+                            client.table("deg_anah_tablosu").insert(
+                                p_recs[i:i + 500]
+                            ).execute()
+                    revizyonu_degistirildi_isaretle(r_id_p)
+                    st.success(
+                        f"{len(p_recs):,} parametre kaydı buluta kaydedildi."
+                    )
+                except Exception as ex:
+                    st.error(f"Parametreler buluta kaydedilemedi: {ex}")
             if cp3.button("🔄 Seçili Versiyonun Parametrelerini Çek", type="secondary", use_container_width=True, key="btn_p_ld"):
-                p_res = client.table("deg_anah_tablosu").select("*").eq("revizyon_id", r_id_p).execute()
-                if p_res.data:
+                with st.spinner("Parametrelerin tamamı buluttan getiriliyor..."):
+                    p_kayitlari = supabase_revizyon_kayitlarini_getir(
+                        "deg_anah_tablosu", r_id_p
+                    )
+                if p_kayitlari:
                     gelen_parametre = sutun_adlarini_standartlastir(
-                        pd.DataFrame(p_res.data)
+                        pd.DataFrame(p_kayitlari)
                     )
                     st.session_state.deg_anah_veri = gelen_parametre[
                         [c for c in deg_anah_sutunlari if c in gelen_parametre.columns]
                     ].reindex(columns=deg_anah_sutunlari)
+                    st.session_state.parametre_upload_imzasi = None
+                    st.session_state.parametre_editor_nonce += 1
                     st.session_state.baz_yakit_veri = otomatik_baz_yakit_tablosu_olustur()
+                    st.session_state.parametre_bulut_mesaji = (
+                        f"{len(st.session_state.deg_anah_veri):,} parametre "
+                        "kaydı buluttan getirildi."
+                    )
                     st.rerun()
+                else:
+                    st.warning("Aktif revizyonda parametre kaydı bulunamadı.")
 
 # ------------------------------------------------------------
 # 7. SEKME: BAZ YAKIT FİYATLARI
@@ -3073,25 +3121,27 @@ if sekme_acik_mi[6]:
                 key="btn_baz_kaynak_getir"
             ):
                 try:
-                    musteri_res = client.table("musteri_detay_tablosu").select("*").eq(
-                        "revizyon_id", kaynak_rev_id
-                    ).execute()
-                    parametre_res = client.table("deg_anah_tablosu").select("*").eq(
-                        "revizyon_id", kaynak_rev_id
-                    ).execute()
+                    musteri_kayitlari = supabase_revizyon_kayitlarini_getir(
+                        "musteri_detay_tablosu", kaynak_rev_id
+                    )
+                    parametre_kayitlari = supabase_revizyon_kayitlarini_getir(
+                        "deg_anah_tablosu", kaynak_rev_id
+                    )
 
-                    if musteri_res.data:
+                    if musteri_kayitlari:
                         gelen_musteriler = sutun_adlarini_standartlastir(
-                            pd.DataFrame(musteri_res.data)
+                            pd.DataFrame(musteri_kayitlari)
                         ).drop(columns=["id", "revizyon_id"], errors="ignore")
                         st.session_state.musteri_ekran_df = gelen_musteriler
-                    if parametre_res.data:
+                    if parametre_kayitlari:
                         gelen_parametreler = sutun_adlarini_standartlastir(
-                            pd.DataFrame(parametre_res.data)
+                            pd.DataFrame(parametre_kayitlari)
                         ).drop(columns=["id", "revizyon_id"], errors="ignore")
                         st.session_state.deg_anah_veri = gelen_parametreler.reindex(
                             columns=deg_anah_sutunlari
                         )
+                        st.session_state.parametre_upload_imzasi = None
+                        st.session_state.parametre_editor_nonce += 1
 
                     st.session_state.baz_yakit_veri = otomatik_baz_yakit_tablosu_olustur()
                     if st.session_state.baz_yakit_veri.empty:
