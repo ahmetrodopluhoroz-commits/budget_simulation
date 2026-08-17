@@ -41,6 +41,251 @@ st.set_page_config(
 )
 
 # ============================================================
+# 🎨 UYGULAMA GENELİ AÇIK / KOYU TEMA
+# ============================================================
+if "arayuz_koyu_tema" not in st.session_state:
+    st.session_state.arayuz_koyu_tema = False
+
+st.sidebar.caption("🎨 Görünüm")
+st.sidebar.toggle(
+    "🌙 Koyu tema",
+    key="arayuz_koyu_tema",
+    help="Tüm uygulamanın açık ve koyu görünümü arasında geçiş yapar."
+)
+
+if st.session_state.arayuz_koyu_tema:
+    TEMA = {
+        "bg": "#0d1117",
+        "surface": "#161b22",
+        "surface_2": "#21262d",
+        "surface_3": "#292f37",
+        "text": "#e6edf3",
+        "muted": "#9da7b3",
+        "border": "#30363d",
+        "primary": "#ff4b4b",
+        "shadow": "rgba(0, 0, 0, 0.35)",
+        "editable": "#4a3b12",
+        "editable_text": "#fff1b8",
+        "scheme": "dark"
+    }
+else:
+    TEMA = {
+        "bg": "#f7f9fc",
+        "surface": "#ffffff",
+        "surface_2": "#f1f5f9",
+        "surface_3": "#e8eef5",
+        "text": "#172033",
+        "muted": "#64748b",
+        "border": "#dbe3ee",
+        "primary": "#ff4b4b",
+        "shadow": "rgba(15, 23, 42, 0.08)",
+        "editable": "#fff3cd",
+        "editable_text": "#3d3100",
+        "scheme": "light"
+    }
+
+st.markdown(
+    f"""
+    <style>
+    :root {{
+        color-scheme: {TEMA['scheme']};
+        --app-bg: {TEMA['bg']};
+        --app-surface: {TEMA['surface']};
+        --app-surface-2: {TEMA['surface_2']};
+        --app-surface-3: {TEMA['surface_3']};
+        --app-text: {TEMA['text']};
+        --app-muted: {TEMA['muted']};
+        --app-border: {TEMA['border']};
+        --app-primary: {TEMA['primary']};
+    }}
+
+    html, body, .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"] {{
+        background: var(--app-bg) !important;
+        color: var(--app-text) !important;
+    }}
+
+    [data-testid="stHeader"] {{
+        background: var(--app-bg) !important;
+        border-bottom: 1px solid var(--app-border) !important;
+    }}
+
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] > div:first-child {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+        border-right: 1px solid var(--app-border) !important;
+    }}
+
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4,
+    .stApp h5, .stApp h6, .stApp p, .stApp label,
+    .stApp [data-testid="stMarkdownContainer"],
+    .stApp [data-testid="stCaptionContainer"],
+    .stApp [data-testid="stMetricLabel"],
+    .stApp [data-testid="stMetricValue"] {{
+        color: var(--app-text) !important;
+    }}
+
+    .stApp [data-testid="stCaptionContainer"],
+    .stApp small {{
+        color: var(--app-muted) !important;
+    }}
+
+    .stApp hr {{
+        border-color: var(--app-border) !important;
+    }}
+
+    .stApp [data-testid="stMetric"],
+    .stApp [data-testid="stFileUploaderDropzone"],
+    .stApp details,
+    .stApp [data-testid="stExpander"],
+    .stApp [data-testid="stForm"] {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+        border-color: var(--app-border) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 2px 10px {TEMA['shadow']} !important;
+    }}
+
+    .stApp input, .stApp textarea,
+    .stApp [data-baseweb="input"] > div,
+    .stApp [data-baseweb="select"] > div,
+    .stApp [data-baseweb="base-input"] {{
+        background: var(--app-surface-2) !important;
+        color: var(--app-text) !important;
+        border-color: var(--app-border) !important;
+        caret-color: var(--app-text) !important;
+    }}
+
+    .stApp input::placeholder, .stApp textarea::placeholder {{
+        color: var(--app-muted) !important;
+        opacity: 0.9 !important;
+    }}
+
+    [data-baseweb="popover"], [role="listbox"],
+    [data-baseweb="menu"] {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+        border-color: var(--app-border) !important;
+    }}
+
+    [role="option"] {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+    }}
+
+    [role="option"]:hover {{
+        background: var(--app-surface-2) !important;
+    }}
+
+    .stApp .stButton > button:not([kind="primary"]),
+    .stApp .stDownloadButton > button,
+    .stApp [data-testid="stFileUploader"] button {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+        border-color: var(--app-border) !important;
+    }}
+
+    .stApp .stButton > button:not([kind="primary"]):hover,
+    .stApp .stDownloadButton > button:hover {{
+        background: var(--app-surface-2) !important;
+        border-color: var(--app-primary) !important;
+        color: var(--app-primary) !important;
+    }}
+
+    .stApp .stButton > button[kind="primary"] {{
+        background: var(--app-primary) !important;
+        color: #ffffff !important;
+        border-color: var(--app-primary) !important;
+    }}
+
+    .stApp [data-baseweb="tab-list"] {{
+        background: var(--app-surface) !important;
+        border-bottom: 1px solid var(--app-border) !important;
+    }}
+
+    .stApp button[data-baseweb="tab"] {{
+        background: transparent !important;
+        color: var(--app-muted) !important;
+        border-color: transparent !important;
+    }}
+
+    .stApp button[data-baseweb="tab"][aria-selected="true"] {{
+        color: var(--app-primary) !important;
+        border-bottom-color: var(--app-primary) !important;
+        background: var(--app-surface-2) !important;
+    }}
+
+    .stApp [data-testid="stDataFrame"],
+    .stApp [data-testid="stDataEditor"] {{
+        background: var(--app-surface) !important;
+        color: var(--app-text) !important;
+        border: 1px solid var(--app-border) !important;
+        border-radius: 8px !important;
+    }}
+
+    .stApp [data-testid="stAlert"] {{
+        color: var(--app-text) !important;
+        border: 1px solid var(--app-border) !important;
+        box-shadow: none !important;
+    }}
+
+    .stApp [data-testid="stWidgetLabel"] {{
+        color: var(--app-text) !important;
+    }}
+
+    .stApp svg {{
+        color: currentColor;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# AG Grid iframe'ı ana sayfa CSS'inden etkilenmediği için renkler ayrıca verilir.
+DATA_NEW_GRID_CSS = {
+    ".ag-root-wrapper": {
+        "background-color": TEMA["surface"],
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    },
+    ".ag-header, .ag-floating-filter": {
+        "background-color": TEMA["surface_2"],
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    },
+    ".ag-header-cell, .ag-header-cell-text": {
+        "color": TEMA["text"]
+    },
+    ".ag-row": {
+        "background-color": TEMA["surface"],
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    },
+    ".ag-row-even": {
+        "background-color": TEMA["surface_2"]
+    },
+    ".ag-row-hover": {
+        "background-color": TEMA["surface_3"] + " !important"
+    },
+    ".ag-cell": {
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    },
+    ".ag-floating-filter input, .ag-input-field-input": {
+        "background-color": TEMA["surface"],
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    },
+    ".ag-paging-panel": {
+        "background-color": TEMA["surface_2"],
+        "color": TEMA["text"],
+        "border-color": TEMA["border"]
+    }
+}
+
+# ============================================================
 # 🔒 KULLANICI GİRİŞ (LOGIN) SİSTEMİ
 # ============================================================
 if "oturum_acik" not in st.session_state:
@@ -5780,7 +6025,8 @@ if sekme_acik_mi[12]:
                                 "type": ["numericColumn"],
                                 "valueFormatter": yuzde_formatter,
                                 "cellStyle": {
-                                    "backgroundColor": "#fff3cd",
+                                    "backgroundColor": TEMA["editable"],
+                                    "color": TEMA["editable_text"],
                                     "fontWeight": "600"
                                 }
                             })
@@ -5809,8 +6055,12 @@ if sekme_acik_mi[12]:
                         update_on=["cellValueChanged"],
                         allow_unsafe_jscode=True,
                         enable_enterprise_modules=False,
+                        custom_css=DATA_NEW_GRID_CSS,
                         server_sync_strategy="server_wins",
-                        key="data_new_aggrid_community_v1"
+                        key=(
+                            "data_new_aggrid_community_v2_"
+                            + TEMA["scheme"]
+                        )
                     )
                     grid_data = (
                         grid_response.get("data")
