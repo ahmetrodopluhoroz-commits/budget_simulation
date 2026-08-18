@@ -2152,7 +2152,7 @@ takvim_verisini_hazirla()
 # ARAYÜZ SEKMELERİ (YALNIZCA AÇIK SEKMEYİ HESAPLAYAN HIZLI YAPI)
 # ============================================================
 sekme_etiketleri = [
-    "📁 Data", "🚚 Çarşaf Liste & Bütçe", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
+    "📁 Data", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
     "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New"
@@ -2169,7 +2169,7 @@ if dinamik_sekme_destegi:
     sekmeler = st.tabs(
         sekme_etiketleri,
         on_change="rerun",
-        key="ana_uygulama_sekmesi"
+        key="ana_uygulama_sekmesi_v2"
     )
     sekme_acik_mi = [bool(sekme.open) for sekme in sekmeler]
 else:
@@ -2181,7 +2181,7 @@ else:
         sekme_etiketleri,
         horizontal=True,
         label_visibility="collapsed",
-        key="ana_uygulama_sekmesi_eski_surum"
+        key="ana_uygulama_sekmesi_eski_surum_v2"
     )
     sekmeler = [st.container() for _ in sekme_etiketleri]
     sekme_acik_mi = [
@@ -2525,126 +2525,10 @@ if sekme_acik_mi[0]:
                     st.error(f"Data havuzu buluttan getirilemedi: {ex}")
 
 # ------------------------------------------------------------
-# 2. SEKME: ÇARŞAF LİSTE & BÜTÇE
+# 2. SEKME: ÇALIŞMA GÜNLERİ (KAYIT VE EXCEL DESTEKLİ DİNAMİK MATRİS 📅)
 # ------------------------------------------------------------
 if sekme_acik_mi[1]:
     with sekmeler[1]:
-        st.title("🚚 Operasyonel Bütçe Simülatörü")
-        yuklenen_dosya = st.sidebar.file_uploader("Excel / CSV Yükle", type=["xlsx", "xls", "csv"], key="main_file_uploader_key")
-        yukleme_tipi = st.sidebar.radio("Yükleme Amacı:", ["Yeni Satırlar Ekle", "Düşeyara (VLOOKUP) ile Güncelle"], key="main_upload_purpose")
-    
-        c1, c2 = st.sidebar.columns(2)
-        if c1.button("📥 Veriyi İşle", key="veri_isle_btn") and yuklenen_dosya:
-            yeni_df = pd.read_csv(yuklenen_dosya) if yuklenen_dosya.name.lower().endswith(".csv") else pd.read_excel(yuklenen_dosya)
-            yeni_df.columns = [str(c).strip() for c in yeni_df.columns]
-            if yukleme_tipi == "Düşeyara (VLOOKUP) ile Güncelle":
-                if "Uniq ID" in yeni_df.columns and not st.session_state.ana_veri.empty:
-                    st.session_state.ana_veri["Uniq ID"] = st.session_state.ana_veri["Uniq ID"].astype(str)
-                    yeni_df["Uniq ID"] = yeni_df["Uniq ID"].astype(str)
-                    existing_df = st.session_state.ana_veri.set_index("Uniq ID")
-                    update_df = yeni_df.set_index("Uniq ID")
-                    guncellenecek_sutunlar = [c for c in update_df.columns if c in existing_df.columns and c != "Uniq ID"]
-                    existing_df.update(update_df[guncellenecek_sutunlar])
-                    st.session_state.ana_veri = existing_df.reset_index()
-                    st.session_state.ana_veri["Uniq ID"] = st.session_state.ana_veri["Uniq ID"].apply(guvenli_tamsayi)
-                    st.session_state.editor_key += 1
-                    st.sidebar.success("Düşeyara başarıyla tamamlandı!")
-                    st.rerun()
-            else:
-                yeni_df = yeni_df.reindex(columns=tum_kolonlar)
-                st.session_state.ana_veri = pd.concat([st.session_state.ana_veri, yeni_df], ignore_index=True)
-                st.session_state.editor_key += 1
-                st.rerun()
-
-        if c2.button("🗑️ Havuzu Temizle", key="havuzu_temizle_btn"):
-            st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
-            st.session_state.musteri_ayarlari = {}
-            st.session_state.editor_key += 1
-            st.rerun()
-
-        filtre_kolonlari = st.sidebar.multiselect("Filtrelemek İstediğiniz Sütunları Seçin:", options=tum_kolonlar, key="main_filter_cols")
-        mask = pd.Series(True, index=st.session_state.ana_veri.index)
-        if filtre_kolonlari:
-            for col in filtre_kolonlari:
-                unique_vals = st.session_state.ana_veri[col].dropna().unique().tolist()
-                secilen_degerler = st.sidebar.multiselect(f"{col}:", options=unique_vals, default=unique_vals, key=f"filter_{col}")
-                mask &= st.session_state.ana_veri[col].isin(secilen_degerler)
-            
-        gosterilecek_df = st.session_state.ana_veri[mask]
-        gizli_df = st.session_state.ana_veri[~mask]
-        global_enflasyon = st.sidebar.slider("2026 Global Eskalasyon (%)", 0, 100, 0, step=1, key="main_global_esk_slider")
-    
-        duzenlenen_df = st.data_editor(gosterilecek_df, num_rows="dynamic", use_container_width=True, height=400, key=f"butce_veri_{st.session_state.editor_key}")
-        df_birlestirilmis = pd.concat([gizli_df, duzenlenen_df]).copy()
-
-        if not df_birlestirilmis.empty:
-            df_nihai = df_birlestirilmis.copy()
-            df_nihai.columns = [str(c).strip() for c in df_nihai.columns]
-            df_nihai = df_nihai.reindex(columns=tum_kolonlar)
-        
-            for ay in aylar:
-                Kg_col, fiyat_col, tutar_col = f"2025 {ay} Kg", f"2025 {ay} Fiyat", f"2025 {ay} Tutar"
-                df_nihai[Kg_col] = pd.to_numeric(df_nihai[Kg_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-                df_nihai[fiyat_col] = pd.to_numeric(df_nihai[fiyat_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-                df_nihai[tutar_col] = df_nihai[Kg_col] * df_nihai[fiyat_col]
-            
-            onceki_fiyat = pd.to_numeric(df_nihai["2025 Aralık Fiyat"].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-            for ay in aylar:
-                buyume_col, esk_col, Kg_col, fiyat_col, tutar_col = f"2026 {ay} Büyüme", f"2026 {ay} Esk.", f"2026 {ay} Kg", f"2026 {ay} Fiyat", f"2026 {ay} Tutar"
-                df_nihai[buyume_col] = pd.to_numeric(df_nihai[buyume_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-                df_nihai[esk_col] = pd.to_numeric(df_nihai[esk_col].apply(guvenli_sayi), errors='coerce').fillna(0.0)
-            
-                aktif_eskalasyon = np.where(df_nihai[esk_col] == 0, float(global_enflasyon), df_nihai[esk_col])
-                df_nihai[Kg_col] = df_nihai[f"2025 {ay} Kg"] * (1 + (df_nihai[buyume_col] / 100))
-                df_nihai[fiyat_col] = onceki_fiyat * (1 + (aktif_eskalasyon / 100))
-                df_nihai[tutar_col] = df_nihai[Kg_col] * df_nihai[fiyat_col]
-                onceki_fiyat = df_nihai[fiyat_col]
-            
-            st.session_state.ana_veri = df_nihai.copy()
-
-            st.markdown("---")
-            t25 = sum(df_nihai[f"2025 {ay} Tutar"].sum() for ay in aylar)
-            t26 = sum(df_nihai[f"2026 {ay} Tutar"].sum() for ay in aylar)
-            m1, m2, m3 = st.columns(3)
-            m1.metric("2025 Toplam Gerçekleşen", value=f"₺{t25:,.2f}")
-            m2.metric("2026 Projeksiyon Toplamı", value=f"₺{t26:,.2f}", delta="Artış")
-            m3.metric("Bütçeye Gelen Ek Yük", value=f"₺{(t26-t25):,.2f}")
-
-            col_down1, col_down2 = st.columns([1, 1.5])
-            with col_down1:
-                output_excel = io.BytesIO()
-                with pd.ExcelWriter(output_excel, engine="openpyxl") as writer: df_nihai.to_excel(writer, index=False, sheet_name="Bütçe")
-                st.download_button("📥 Excel Olarak İndir", output_excel.getvalue(), "horoz_butce.xlsx", use_container_width=True, key="main_excel_down_btn")
-            with col_down2:
-                aktif_butce_rev_id = sayfa_aktif_revizyonunu_getir(col_down2)
-                if st.button(
-                    "💾 Senaryoyu Aktif Revizyona Kaydet",
-                    use_container_width=True,
-                    key="main_save_btn",
-                    disabled=(not client or not aktif_butce_rev_id)
-                ):
-                    try:
-                        _, records = supabase_verisini_hazirla(df_nihai)
-                        for record in records:
-                            record["revizyon_id"] = aktif_butce_rev_id
-                        client.table("butce_tablosu").delete().eq(
-                            "revizyon_id", aktif_butce_rev_id
-                        ).execute()
-                        for i in range(0, len(records), 500):
-                            client.table("butce_tablosu").insert(
-                                records[i:i + 500]
-                            ).execute()
-                        revizyonu_degistirildi_isaretle(aktif_butce_rev_id)
-                        st.success("🎉 Senaryo aktif revizyona kaydedildi.")
-                    except Exception as e:
-                        st.error(f"Hata: {e}")
-            st.dataframe(df_nihai, use_container_width=True)
-
-# ------------------------------------------------------------
-# 3. SEKME: ÇALIŞMA GÜNLERİ (KAYIT VE EXCEL DESTEKLİ DİNAMİK MATRİS 📅)
-# ------------------------------------------------------------
-if sekme_acik_mi[2]:
-    with sekmeler[2]:
         st.title("📅 Operasyonel Çalışma Günleri Takvimi")
         st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. Yapılan değişiklikleri **Buluta Kaydet** butonu ile kalıcı hale getirebilir veya **Excel** olarak indirebilirsiniz.")
 
@@ -2815,10 +2699,10 @@ if sekme_acik_mi[2]:
         takvim_modulunu_calistir()
 
 # ------------------------------------------------------------
-# 4. SEKME: BULUT REVİZYON YÖNETİMİ
+# 3. SEKME: BULUT REVİZYON YÖNETİMİ
 # ------------------------------------------------------------
-if sekme_acik_mi[3]:
-    with sekmeler[3]:
+if sekme_acik_mi[2]:
+    with sekmeler[2]:
         st.title("☁️ Bulut Revizyon Geçmişi")
         st.caption(
             "Revizyonu burada oluşturun ve aktif edin. Diğer bütün bütçe "
@@ -3054,10 +2938,10 @@ if sekme_acik_mi[3]:
             st.info("Bulut tabanlı bir kayıt bulunmuyor.")
 
 # ------------------------------------------------------------
-# 5. SEKME: YENİ-BÜTÇE MÜŞTERİ
+# 4. SEKME: YENİ-BÜTÇE MÜŞTERİ
 # ------------------------------------------------------------
-if sekme_acik_mi[4]:
-    with sekmeler[4]:
+if sekme_acik_mi[3]:
+    with sekmeler[3]:
         st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
 
         MUSTERI_GERCEKLESEN_AYLAR = aylar[:10]
@@ -3242,10 +3126,10 @@ if sekme_acik_mi[4]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 6. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
+# 5. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
 # ------------------------------------------------------------
-if sekme_acik_mi[5]:
-    with sekmeler[5]:
+if sekme_acik_mi[4]:
+    with sekmeler[4]:
         st.title("⚙️ değ.anah.-yakıt-kdv Parametre Yönetimi")
         parametre_mesaji = st.session_state.pop(
             "parametre_bulut_mesaji", None
@@ -3331,10 +3215,10 @@ if sekme_acik_mi[5]:
                     st.warning("Aktif revizyonda parametre kaydı bulunamadı.")
 
 # ------------------------------------------------------------
-# 7. SEKME: BAZ YAKIT FİYATLARI
+# 6. SEKME: BAZ YAKIT FİYATLARI
 # ------------------------------------------------------------
-if sekme_acik_mi[6]:
-    with sekmeler[6]:
+if sekme_acik_mi[5]:
+    with sekmeler[5]:
         st.title("⛽ Baz Yakıt Fiyatları KDV Dağılım Yönetimi")
         st.caption(
             "Müşteri bilgileri Yeni-Bütçe Müşteri sayfasından; KDV Durumu ve "
@@ -3528,10 +3412,10 @@ if sekme_acik_mi[6]:
             )
 
 # ------------------------------------------------------------
-# 8. SEKME: ESKALASYON & MASTER DATA
+# 7. SEKME: ESKALASYON & MASTER DATA
 # ------------------------------------------------------------
-if sekme_acik_mi[7]:
-    with sekmeler[7]:
+if sekme_acik_mi[6]:
+    with sekmeler[6]:
         st.title("🧾 Eskalasyon ve Master Data Yönetimi")
         st.caption(
             "Müşteri kimlikleri ve Durum (Durum_2) Yeni-Bütçe sayfasından; "
@@ -4106,10 +3990,10 @@ if sekme_acik_mi[7]:
                         )
 
 # ------------------------------------------------------------
-# 9. SEKME: 2026 MAZOT ANALİZİ
+# 8. SEKME: 2026 MAZOT ANALİZİ
 # ------------------------------------------------------------
-if sekme_acik_mi[8]:
-    with sekmeler[8]:
+if sekme_acik_mi[7]:
+    with sekmeler[7]:
         st.title("📊 2026 Mazot Fiyat Değişim Periyot Analizörü")
         st.caption(
             "Baz Motorin ve Ocak-Aralık fiyatlarının tamamı elle değiştirilebilir. "
@@ -4162,10 +4046,10 @@ if sekme_acik_mi[8]:
                         st.rerun()
 
 # ------------------------------------------------------------
-# 10. SEKME: MÜŞTERİ BÜYÜME ORANLARI
+# 9. SEKME: MÜŞTERİ BÜYÜME ORANLARI
 # ------------------------------------------------------------
-if sekme_acik_mi[9]:
-    with sekmeler[9]:
+if sekme_acik_mi[8]:
+    with sekmeler[8]:
         st.title("📈 Müşteri Büyüme Oranları ve Kg Simülasyonu")
         st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel Kg dosyası yüklenir.")
 
@@ -5127,10 +5011,10 @@ if sekme_acik_mi[9]:
                         )
 
 # ------------------------------------------------------------
-# 11. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
+# 10. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
 # ------------------------------------------------------------
-if sekme_acik_mi[10]:
-    with sekmeler[10]:
+if sekme_acik_mi[9]:
+    with sekmeler[9]:
         st.title("📉 ÜFE–TÜFE Veri Yönetimi")
         st.caption(
             "Gerçekleşen aylık oranlar TCMB EVDS'den alınır. Tahmin alanları "
@@ -5374,10 +5258,10 @@ if sekme_acik_mi[10]:
 
 
 # ------------------------------------------------------------
-# 12. SEKME: BAZ BİRİM FİYATLAR
+# 11. SEKME: BAZ BİRİM FİYATLAR
 # ------------------------------------------------------------
-if sekme_acik_mi[11]:
-    with sekmeler[11]:
+if sekme_acik_mi[10]:
+    with sekmeler[10]:
         st.title("💳 Baz Birim Fiyatlar")
         st.caption(
             "2026 fiyat zincirinin başlangıç değeri bu sayfadan alınır. "
@@ -5528,10 +5412,10 @@ if sekme_acik_mi[11]:
 
 
 # ------------------------------------------------------------
-# 13. SEKME: DATA_NEW
+# 12. SEKME: DATA_NEW
 # ------------------------------------------------------------
-if sekme_acik_mi[12]:
-    with sekmeler[12]:
+if sekme_acik_mi[11]:
+    with sekmeler[11]:
         st.title("🆕 Data_New Hesaplama Havuzu")
         st.caption(
             "Mevcut Data sayfası korunur. 2025 Desi/Tutar dosyası bu sayfaya "
