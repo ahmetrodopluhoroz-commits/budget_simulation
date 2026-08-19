@@ -490,6 +490,8 @@ if st.session_state.get("master_enflasyon_izleme_surumu") != 1:
 if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
+if "buyume_tarihsel_upload_imzalari" not in st.session_state:
+    st.session_state.buyume_tarihsel_upload_imzalari = {}
 if "baz_birim_fiyat_df" not in st.session_state:
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
@@ -686,6 +688,7 @@ def revizyon_oturumunu_temizle():
     st.session_state.master_editor_nonce += 1
     st.session_state.buyume_ayarlari = {}
     st.session_state.buyume_ekran_df = pd.DataFrame()
+    st.session_state.buyume_tarihsel_upload_imzalari = {}
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
     )
@@ -2152,7 +2155,7 @@ takvim_verisini_hazirla()
 # ARAYÜZ SEKMELERİ (YALNIZCA AÇIK SEKMEYİ HESAPLAYAN HIZLI YAPI)
 # ============================================================
 sekme_etiketleri = [
-    "📁 Data", "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
+    "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
     "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New"
@@ -2169,7 +2172,7 @@ if dinamik_sekme_destegi:
     sekmeler = st.tabs(
         sekme_etiketleri,
         on_change="rerun",
-        key="ana_uygulama_sekmesi_v2"
+        key="ana_uygulama_sekmesi_v3"
     )
     sekme_acik_mi = [bool(sekme.open) for sekme in sekmeler]
 else:
@@ -2181,7 +2184,7 @@ else:
         sekme_etiketleri,
         horizontal=True,
         label_visibility="collapsed",
-        key="ana_uygulama_sekmesi_eski_surum_v2"
+        key="ana_uygulama_sekmesi_eski_surum_v3"
     )
     sekmeler = [st.container() for _ in sekme_etiketleri]
     sekme_acik_mi = [
@@ -2189,346 +2192,10 @@ else:
     ]
 
 # ------------------------------------------------------------
-# 1. SEKME: 📁 DATA GİRİŞ VE ÇAPRAZ PARAMETRE HAVUZU
+# 1. SEKME: ÇALIŞMA GÜNLERİ (KAYIT VE EXCEL DESTEKLİ DİNAMİK MATRİS 📅)
 # ------------------------------------------------------------
 if sekme_acik_mi[0]:
     with sekmeler[0]:
-        st.title("📁 Operasyonel Ana Data Yönetim Havuzu")
-        st.markdown("Aşağıya operasyonel ham listenizi yükleyin. Yıl ve dosyanızdaki metrik tipini seçerek veri ambarını dinamik olarak besleyebilirsiniz.")
-
-        c_cfg1, c_cfg2 = st.columns(2)
-        with c_cfg1:
-            secilen_yil = st.selectbox("📅 Yüklenecek / Gösterilecek Veri Hangi Yıla Ait?", ["2024", "2025", "2026"], index=1, key="data_cfg_yil")
-        with c_cfg2:
-            metrik_tipi = st.radio("📊 Excel'deki Hangi Sütun Kg Olarak Kabul Edilsin? (Metrik Tipi)", ["Kg (Örn: Ocak Kg)", "Tutar (Örn: Ocak Tutar)"], horizontal=True, key="data_cfg_metrik")
-
-        sabit_data_sutunlari = [
-            "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
-            "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi", "Müşteri Grubu",
-            "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
-            "Enf. Değişim Periyodu (Ay)", "Esk. Baz Yakıt Fiyatı", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
-        ]
-    
-        dinamik_Kg_kolonlari = [f"{secilen_yil} {ay} Kg" for ay in aylar] + [f"{secilen_yil} Toplam Kg" ]
-        yuklenen_data_havuzu = st.file_uploader("Data Listenizi Yükleyin (Excel/CSV)", type=["xlsx", "xls", "csv"], key="data_havuz_up")
-
-        if yuklenen_data_havuzu:
-            with st.spinner("⚡ Büyük veri seti işleniyor, RAM kalkanı aktif..."):
-                df_d_giren = pd.read_csv(yuklenen_data_havuzu) if yuklenen_data_havuzu.name.lower().endswith(".csv") else pd.read_excel(yuklenen_data_havuzu)
-                df_d_giren.columns = [str(c).strip() for c in df_d_giren.columns]
-                df_d_giren["Müşteri Kodu"] = df_d_giren["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            
-                sonek = " Kg" if "Kg" in metrik_tipi else " Tutar"
-            
-                if secilen_yil in ["2024", "2025"]:
-                    mapped_cols = {}
-                    for ay in aylar:
-                        for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
-                            if col in df_d_giren.columns:
-                                df_d_giren[col] = df_d_giren[col].apply(guvenli_sayi)
-                                mapped_cols[col] = f"{secilen_yil} {ay} Kg"
-                                break
-                
-                    grup_sutunlari = ["Müşteri Kodu"]
-                    if "Müşteri Grubu" in df_d_giren.columns:
-                        grup_sutunlari.append("Müşteri Grubu")
-                        df_d_giren["Müşteri Grubu"] = df_d_giren["Müşteri Grubu"].fillna("DİĞER").astype(str).str.strip().str.upper()
-                
-                    keep_cols = grup_sutunlari + list(mapped_cols.keys())
-                    df_compressed = df_d_giren[keep_cols].rename(columns=mapped_cols)
-                    df_summary = df_compressed.groupby(grup_sutunlari, as_index=False).sum()
-                
-                    calc_cols = [v for v in mapped_cols.values()]
-                    df_summary[f"{secilen_yil} Toplam Kg"] = df_summary[calc_cols].sum(axis=1)
-                
-                    if st.session_state.data_sayfası_df.empty:
-                        df_base = pd.DataFrame(columns=data_ekran_sutunlari)
-                        df_base["Müşteri Kodu"] = df_summary["Müşteri Kodu"]
-                        if "Müşteri Grubu" in df_summary.columns: df_base["Müşteri Grubu"] = df_summary["Müşteri Grubu"]
-                        df_base["Yıl"] = "2026"
-                        df_base["Durum"] = "GEÇERLİ"
-                    
-                        join_cols_id = ["Yıl", "Müşteri Kodu"]
-                        df_base["Uniq ID"] = df_base[join_cols_id].fillna("").astype(str).agg("".join, axis=1)
-                    
-                        st.session_state.data_sayfası_df = pd.merge(df_base, df_summary, on="Müşteri Kodu", how="left")
-                    else:
-                        if "Müşteri Grubu" in df_summary.columns and "Müşteri Grubu" in st.session_state.data_sayfası_df.columns:
-                            df_summary = df_summary.drop(columns=["Müşteri Grubu"])
-                    
-                        st.session_state.data_sayfası_df = pd.merge(
-                            st.session_state.data_sayfası_df, 
-                            df_summary, 
-                            on="Müşteri Kodu", 
-                            how="left",
-                            suffixes=('', '_new')
-                        )
-                        for col in calc_cols + [f"{secilen_yil} Toplam Kg"]:
-                            if f"{col}_new" in st.session_state.data_sayfası_df.columns:
-                                st.session_state.data_sayfası_df[col] = st.session_state.data_sayfası_df[col].fillna(0.0) + st.session_state.data_sayfası_df[f"{col}_new"].fillna(0.0)
-                                st.session_state.data_sayfası_df = st.session_state.data_sayfası_df.drop(columns=[f"{col}_new"])
-                
-                    st.success(f"🎉 {secilen_yil} yılı geçmiş verisi Müşteri bazında özetlenerek hafızaya sıkıştırıldı! RAM yükü engellendi.")
-                    st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
-
-                else:
-                    join_cols = ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu"]
-                    for c in join_cols:
-                        if c not in df_d_giren.columns: df_d_giren[c] = ""
-                
-                    df_d_giren["Uniq ID"] = df_d_giren[join_cols].fillna("").astype(str).agg("".join, axis=1).str.replace("nan", "").str.replace("None", "")
-                
-                    if st.session_state.musteri_ayarlari:
-                        m_ayarlar_df = pd.DataFrame.from_dict(st.session_state.musteri_ayarlari, orient='index').reset_index().rename(columns={"index": "Müşteri Kodu"})
-                        df_d_giren = pd.merge(df_d_giren, m_ayarlar_df[["Müşteri Kodu", "Durum_2"]], on="Müşteri Kodu", how="left") if "Durum_2" in m_ayarlar_df.columns else df_d_giren.assign(Durum_2=np.nan)
-                    else: df_d_giren["Durum_2"] = np.nan
-                    
-                    if "Durum" not in df_d_giren.columns: df_d_giren["Durum"] = "GEÇERLİ"
-                    df_d_giren["Durum_Nihai"] = df_d_giren["Durum_2"].fillna(df_d_giren["Durum"]).fillna("GEÇERLİ")
-
-                    otomatik_baz_df = otomatik_baz_yakit_tablosu_olustur()
-                    if not otomatik_baz_df.empty:
-                        st.session_state.baz_yakit_veri = otomatik_baz_df.copy()
-                        by_df = otomatik_baz_df.drop_duplicates(subset=["Müşteri Kodu"])[
-                            ["Müşteri Kodu", "Esk. Baz Yakıt Fiyatı (KDV Hariç)"]
-                        ].rename(columns={"Esk. Baz Yakıt Fiyatı (KDV Hariç)": "Yakıt Fiyat"})
-                        df_d_giren = pd.merge(df_d_giren, by_df, on="Müşteri Kodu", how="left")
-                    else: df_d_giren["Yakıt Fiyat"] = np.nan
-
-                    # Master Data manuel alanları yeni akışta ana parametre kaynağıdır.
-                    master_kaynak = st.session_state.get("master_data_df", pd.DataFrame()).copy()
-                    if not master_kaynak.empty and "Müşteri Kodu" in master_kaynak.columns:
-                        master_kaynak["Müşteri Kodu"] = master_kaynak["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                        master_aktarim = [
-                            "Müşteri Kodu", "Yakıt Değişim Yüzdesi (%)",
-                            "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)",
-                            "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)",
-                            "Esk. Baz Yakıt Fiyatı (KDV Hariç)",
-                            "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"
-                        ]
-                        master_aktarim = [c for c in master_aktarim if c in master_kaynak.columns]
-                        master_kaynak = master_kaynak.drop_duplicates("Müşteri Kodu")[master_aktarim]
-                        df_d_giren = pd.merge(
-                            df_d_giren, master_kaynak, on="Müşteri Kodu", how="left",
-                            suffixes=("", "_master")
-                        )
-                        master_fiyat_col = "Esk. Baz Yakıt Fiyatı (KDV Hariç)"
-                        if master_fiyat_col in df_d_giren.columns:
-                            df_d_giren["Yakıt Fiyat"] = df_d_giren[master_fiyat_col].combine_first(
-                                df_d_giren["Yakıt Fiyat"]
-                            )
-                        for c in [
-                            "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)",
-                            "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)",
-                            "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi",
-                            "Esk. Enf. Başlangıç Tarihi"
-                        ]:
-                            master_col = f"{c}_master"
-                            if master_col in df_d_giren.columns:
-                                if c in df_d_giren.columns:
-                                    df_d_giren[c] = df_d_giren[master_col].combine_first(df_d_giren[c])
-                                else:
-                                    df_d_giren[c] = df_d_giren[master_col]
-                    
-                    if "Esk. Baz Yakıt Fiyatı" not in df_d_giren.columns: df_d_giren["Esk. Baz Yakıt Fiyatı"] = 0.0
-                    df_d_giren["Esk_Baz_Yakit_Nihai"] = df_d_giren["Yakıt Fiyat"].fillna(df_d_giren["Esk. Baz Yakıt Fiyatı"]).apply(guvenli_sayi)
-
-                    fallback_cols = ["Kayıt Tarihi", "Müşteri Grubu", "Yakıt Değişim Yüzdesi (%)", "Yakıt Anlık Değişim Oranı (%)", "Yakıt Değişim Periyodu (Ay)", "Enf. Değişim Yüzdesi (%)", "Enf. Değişim Periyodu (Ay)", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]
-                    if not st.session_state.ana_veri.empty:
-                        av_df = st.session_state.ana_veri.copy()
-                        av_df["Müşteri Kodu"] = av_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
-                    
-                        av_df = av_df.drop_duplicates(subset=["Müşteri Kodu"])[["Müşteri Kodu"] + [c for c in fallback_cols if c in av_df.columns]]
-                        df_d_giren = pd.merge(df_d_giren, av_df, on="Müşteri Kodu", how="left", suffixes=("", "_av"))
-                
-                    df_built = pd.DataFrame()
-                    df_built["Uniq ID"] = df_d_giren["Uniq ID"]
-                    for c in ["Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "Müşteri Temsilcisi"]:
-                        df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ""
-                    df_built["Sap Kodu"] = df_d_giren["Sap Kodu"] if "Sap Kodu" in df_d_giren.columns else (df_d_giren["Sap No"] if "Sap No" in df_d_giren.columns else "")
-                    df_built["Durum"] = df_d_giren["Durum_Nihai"]
-                
-                    for c in fallback_cols:
-                        col_av = f"{c}_av"
-                        if col_av in df_d_giren.columns:
-                            df_built[c] = df_d_giren[c].fillna(df_d_giren[col_av]) if c in df_d_giren.columns else df_d_giren[col_av]
-                        else:
-                            df_built[c] = df_d_giren[c] if c in df_d_giren.columns else ("DİĞER" if c == "Müşteri Grubu" else "")
-                
-                    df_built["Esk. Baz Yakıt Fiyatı"] = df_d_giren["Esk_Baz_Yakit_Nihai"]
-                    df_built["Yakıt Değişim Yüzdesi (%)"] = df_built["Yakıt Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-                    df_built["Yakıt Anlık Değişim Oranı (%)"] = df_built["Yakıt Anlık Değişim Oranı (%)"].apply(guvenli_sayi)
-                    df_built["Enf. Değişim Yüzdesi (%)"] = df_built["Enf. Değişim Yüzdesi (%)"].apply(guvenli_sayi)
-                    df_built["Yakıt Değişim Periyodu (Ay)"] = df_built["Yakıt Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-                    df_built["Enf. Değişim Periyodu (Ay)"] = df_built["Enf. Değişim Periyodu (Ay)"].apply(lambda x: guvenli_tamsayi(x, nullable=False))
-
-                    toplam_Kg = np.zeros(len(df_d_giren))
-                    for ay in aylar:
-                        col_to_use = None
-                        for col in [f"{ay}{sonek}", f"{secilen_yil} {ay}{sonek}", ay, f"{secilen_yil} {ay}"]:
-                            if col in df_d_giren.columns:
-                                col_to_use = col
-                                break
-                        vals = df_d_giren[col_to_use].apply(guvenli_sayi).to_numpy() if col_to_use else np.zeros(len(df_d_giren))
-                        df_built[f"{secilen_yil} {ay} Kg"] = vals
-                        toplam_Kg += vals
-                    df_built[f"{secilen_yil} Toplam Kg"] = toplam_Kg
-
-                    if st.session_state.data_sayfası_df.empty:
-                        agg_init = {col: ("sum" if "Kg" in col else "first") for col in df_built.columns if col != "Uniq ID"}
-                        st.session_state.data_sayfası_df = df_built.groupby("Uniq ID", as_index=False).agg(agg_init)
-                    else:
-                        df_combined = pd.concat([st.session_state.data_sayfası_df, df_built], ignore_index=True)
-                        agg_strategy = {col: ("sum" if "Kg" in col else "first") for col in df_combined.columns if col != "Uniq ID"}
-                        st.session_state.data_sayfası_df = df_combined.groupby("Uniq ID", as_index=False).agg(agg_strategy)
-                    
-                    st.success(f"🎉 2026 Ana bütçe yılı detaylı sevkiyat satırları başarıyla entegre edildi.")
-                    st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
-
-        if st.session_state.pop("data_bulut_yukleme_basarili", False):
-            st.success("🎉 Kayıtlı Data havuzu buluttan getirildi. 2024 ve 2025 değerleri artık büyüme sayfasında kullanılabilir.")
-
-        if not st.session_state.data_sayfası_df.empty:
-            gosterim_kolonlari = [c for c in sabit_data_sutunlari + dinamik_Kg_kolonlari if c in st.session_state.data_sayfası_df.columns]
-            df_ekran = st.session_state.data_sayfası_df[gosterim_kolonlari]
-        
-            toplam_satir_sayisi = len(df_ekran)
-            st.warning(f"⚠️ Sistemde toplam {toplam_satir_sayisi:,} satır veri bulunuyor. Tarayıcının çökmesini engellemek amacıyla ilk 500 satır listelenmektedir.")
-        
-            st.dataframe(
-                df_ekran.head(500), 
-                use_container_width=True,
-                column_config={
-                    "Esk. Baz Yakıt Fiyatı": st.column_config.NumberColumn("Esk. Baz Yakıt Fiyatı", format="₺%.2f"),
-                    **{c: st.column_config.NumberColumn(c, format="%d") for c in dinamik_Kg_kolonlari}
-                }
-            )
-
-        else:
-            st.info("Lütfen işlem yapmak istediğiniz ham operasyonel Excel/CSV dosyanızı yükleyin ya da alttaki butondan bulut yedeğinizi çağırın.")
-
-        st.markdown("---")
-        st.subheader("☁️ Bulut Data Kaydı")
-        st.caption("2024 ve 2025'i bir kez mühürleyin; sonraki oturumlarda aynı versiyonu seçip buluttan getirin.")
-
-        if not client:
-            st.error("Bulut bağlantısı kurulamadı. Supabase paketi, URL ve anahtar ayarlarını kontrol edin.")
-        elif not rev_secenekleri:
-            st.warning("Bulut Revizyon Yönetimi bölümünde henüz bir revizyon bulunmuyor. Önce bir revizyon oluşturun; ardından Data sekmesine geri dönün.")
-        else:
-            r_id_data = sayfa_aktif_revizyonunu_getir()
-            cd1, cd2, cd3 = st.columns(3)
-
-            if not st.session_state.data_sayfası_df.empty:
-                output_d_excel = io.BytesIO()
-                with pd.ExcelWriter(output_d_excel, engine="openpyxl") as writer:
-                    st.session_state.data_sayfası_df.to_excel(writer, index=False, sheet_name="Data_Master")
-                cd1.download_button(
-                    "📥 Tüm Tabloyu Excel Olarak İndir",
-                    output_d_excel.getvalue(),
-                    "data_master_havuz.xlsx",
-                    use_container_width=True
-                )
-            else:
-                cd1.info("Excel indirmek için önce veri yükleyin veya buluttan çağırın.")
-
-            kaydet_tiklandi = cd2.button(
-                "💾 Bu Tabloyu Buluta Kaydet (Mühürle)",
-                type="primary",
-                use_container_width=True,
-                key="btn_data_cloud_sv",
-                disabled=st.session_state.data_sayfası_df.empty
-            )
-
-            getir_tiklandi = cd3.button(
-                "🔄 Dosya Yüklemeden Buluttan Datayı Getir",
-                type="secondary",
-                use_container_width=True,
-                key="btn_data_cloud_ld"
-            )
-
-            if kaydet_tiklandi:
-                tum_Kg_sutunlari_db = []
-                for y in ["2024", "2025", "2026"]:
-                    for m in aylar:
-                        tum_Kg_sutunlari_db.append(f"{y} {m} Kg")
-                    tum_Kg_sutunlari_db.append(f"{y} Toplam Kg")
-
-                izin_verilen_db_sutunlari_data = sabit_data_sutunlari + tum_Kg_sutunlari_db
-                mevcut_db_sutunlari = [
-                    c for c in izin_verilen_db_sutunlari_data
-                    if c in st.session_state.data_sayfası_df.columns
-                ]
-                df_to_save = (
-                    st.session_state.data_sayfası_df[mevcut_db_sutunlari]
-                    .copy()
-                    .assign(revizyon_id=r_id_data)
-                    .replace({np.nan: None})
-                )
-                data_records = df_to_save.to_dict(orient="records")
-
-                try:
-                    with st.spinner(f"🚀 {len(data_records):,} satır buluta aktarılıyor..."):
-                        client.table("data_tablosu").delete().eq("revizyon_id", r_id_data).execute()
-                        for i in range(0, len(data_records), 500):
-                            client.table("data_tablosu").insert(data_records[i:i + 500]).execute()
-                    revizyonu_degistirildi_isaretle(r_id_data)
-                    st.success("🎉 Data havuzu bu revizyona başarıyla mühürlendi.")
-                except Exception as ex:
-                    st.error(f"Data havuzu buluta kaydedilemedi: {ex}")
-
-            if getir_tiklandi:
-                try:
-                    with st.spinner("Kayıtlı Data havuzunun tamamı buluttan getiriliyor..."):
-                        tum_kayitlar = []
-                        baslangic = 0
-                        paket_boyutu = 1000
-
-                        while True:
-                            d_res = (
-                                client.table("data_tablosu")
-                                .select("*")
-                                .eq("revizyon_id", r_id_data)
-                                .range(baslangic, baslangic + paket_boyutu - 1)
-                                .execute()
-                            )
-                            paket = d_res.data or []
-                            tum_kayitlar.extend(paket)
-                            if len(paket) < paket_boyutu:
-                                break
-                            baslangic += paket_boyutu
-
-                    if tum_kayitlar:
-                        gelen_d_df = pd.DataFrame(tum_kayitlar)
-                        gelen_d_df = gelen_d_df.drop(
-                            columns=[c for c in ["id", "revizyon_id"] if c in gelen_d_df.columns]
-                        )
-                        gelen_d_df["Müşteri Kodu"] = gelen_d_df["Müşteri Kodu"].apply(guvenli_metin_kodu)
-
-                        for y in ["2024", "2025", "2026"]:
-                            yil_aylari = []
-                            for m in aylar:
-                                col = f"{y} {m} Kg"
-                                if col in gelen_d_df.columns:
-                                    gelen_d_df[col] = gelen_d_df[col].apply(guvenli_sayi)
-                                    yil_aylari.append(col)
-                            if yil_aylari:
-                                gelen_d_df[f"{y} Toplam Kg"] = gelen_d_df[yil_aylari].sum(axis=1)
-
-                        st.session_state.data_sayfası_df = gelen_d_df
-                        st.session_state.data_bulut_yukleme_basarili = True
-                        st.session_state.data_sayfası_df.to_parquet(CACHE_DATA_MASTER, index=False)
-                        st.rerun()
-                    else:
-                        st.warning("Seçilen revizyona ait mühürlenmiş Data kaydı bulunamadı.")
-                except Exception as ex:
-                    st.error(f"Data havuzu buluttan getirilemedi: {ex}")
-
-# ------------------------------------------------------------
-# 2. SEKME: ÇALIŞMA GÜNLERİ (KAYIT VE EXCEL DESTEKLİ DİNAMİK MATRİS 📅)
-# ------------------------------------------------------------
-if sekme_acik_mi[1]:
-    with sekmeler[1]:
         st.title("📅 Operasyonel Çalışma Günleri Takvimi")
         st.markdown("Aşağıdaki matristen çalışma günlerini düzenleyebilirsiniz. Yapılan değişiklikleri **Buluta Kaydet** butonu ile kalıcı hale getirebilir veya **Excel** olarak indirebilirsiniz.")
 
@@ -2699,10 +2366,10 @@ if sekme_acik_mi[1]:
         takvim_modulunu_calistir()
 
 # ------------------------------------------------------------
-# 3. SEKME: BULUT REVİZYON YÖNETİMİ
+# 2. SEKME: BULUT REVİZYON YÖNETİMİ
 # ------------------------------------------------------------
-if sekme_acik_mi[2]:
-    with sekmeler[2]:
+if sekme_acik_mi[1]:
+    with sekmeler[1]:
         st.title("☁️ Bulut Revizyon Geçmişi")
         st.caption(
             "Revizyonu burada oluşturun ve aktif edin. Diğer bütün bütçe "
@@ -2938,10 +2605,10 @@ if sekme_acik_mi[2]:
             st.info("Bulut tabanlı bir kayıt bulunmuyor.")
 
 # ------------------------------------------------------------
-# 4. SEKME: YENİ-BÜTÇE MÜŞTERİ
+# 3. SEKME: YENİ-BÜTÇE MÜŞTERİ
 # ------------------------------------------------------------
-if sekme_acik_mi[3]:
-    with sekmeler[3]:
+if sekme_acik_mi[2]:
+    with sekmeler[2]:
         st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
 
         MUSTERI_GERCEKLESEN_AYLAR = aylar[:10]
@@ -3126,10 +2793,10 @@ if sekme_acik_mi[3]:
                     st.rerun()
 
 # ------------------------------------------------------------
-# 5. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
+# 4. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
 # ------------------------------------------------------------
-if sekme_acik_mi[4]:
-    with sekmeler[4]:
+if sekme_acik_mi[3]:
+    with sekmeler[3]:
         st.title("⚙️ değ.anah.-yakıt-kdv Parametre Yönetimi")
         parametre_mesaji = st.session_state.pop(
             "parametre_bulut_mesaji", None
@@ -3215,10 +2882,10 @@ if sekme_acik_mi[4]:
                     st.warning("Aktif revizyonda parametre kaydı bulunamadı.")
 
 # ------------------------------------------------------------
-# 6. SEKME: BAZ YAKIT FİYATLARI
+# 5. SEKME: BAZ YAKIT FİYATLARI
 # ------------------------------------------------------------
-if sekme_acik_mi[5]:
-    with sekmeler[5]:
+if sekme_acik_mi[4]:
+    with sekmeler[4]:
         st.title("⛽ Baz Yakıt Fiyatları KDV Dağılım Yönetimi")
         st.caption(
             "Müşteri bilgileri Yeni-Bütçe Müşteri sayfasından; KDV Durumu ve "
@@ -3412,10 +3079,10 @@ if sekme_acik_mi[5]:
             )
 
 # ------------------------------------------------------------
-# 7. SEKME: ESKALASYON & MASTER DATA
+# 6. SEKME: ESKALASYON & MASTER DATA
 # ------------------------------------------------------------
-if sekme_acik_mi[6]:
-    with sekmeler[6]:
+if sekme_acik_mi[5]:
+    with sekmeler[5]:
         st.title("🧾 Eskalasyon ve Master Data Yönetimi")
         st.caption(
             "Müşteri kimlikleri ve Durum (Durum_2) Yeni-Bütçe sayfasından; "
@@ -3990,10 +3657,10 @@ if sekme_acik_mi[6]:
                         )
 
 # ------------------------------------------------------------
-# 8. SEKME: 2026 MAZOT ANALİZİ
+# 7. SEKME: 2026 MAZOT ANALİZİ
 # ------------------------------------------------------------
-if sekme_acik_mi[7]:
-    with sekmeler[7]:
+if sekme_acik_mi[6]:
+    with sekmeler[6]:
         st.title("📊 2026 Mazot Fiyat Değişim Periyot Analizörü")
         st.caption(
             "Baz Motorin ve Ocak-Aralık fiyatlarının tamamı elle değiştirilebilir. "
@@ -4046,12 +3713,15 @@ if sekme_acik_mi[7]:
                         st.rerun()
 
 # ------------------------------------------------------------
-# 9. SEKME: MÜŞTERİ BÜYÜME ORANLARI
+# 8. SEKME: MÜŞTERİ BÜYÜME ORANLARI
 # ------------------------------------------------------------
-if sekme_acik_mi[8]:
-    with sekmeler[8]:
+if sekme_acik_mi[7]:
+    with sekmeler[7]:
         st.title("📈 Müşteri Büyüme Oranları ve Kg Simülasyonu")
-        st.caption("2024 ve 2025 verileri doğrudan 📁 Data sekmesindeki ana havuzdan alınır. Bu sayfada yalnızca 31 kolonlu 2026 güncel Kg dosyası yüklenir.")
+        st.caption(
+            "2024–2025 tarihsel Kg havuzu, 2026 güncel Kg yüklemesi, tahmin "
+            "ve müşteri büyüme oranları artık bu sayfada birlikte yönetilir."
+        )
 
         NIHAI_SUTUNLAR_9 = [
             "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
@@ -4158,18 +3828,466 @@ if sekme_acik_mi[8]:
                         return value
             return varsayilan
 
-        # ------------------------------------------------------------
-        # 2024-2025: YALNIZCA ANA DATA HAVUZUNDAN
-        # ------------------------------------------------------------
-        data_havuzu_9 = st.session_state.get("data_sayfası_df", pd.DataFrame()).copy()
-        hist_24_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2024")
-        hist_25_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2025")
-
         HEDEF_GRUPLAR_9 = ["MP", "HOROZ CÜZDAN", "DİĞER"]
 
         def grup_adi_standartlastir_9(value):
             grup = temiz_metin_9(value, "DİĞER").upper()
             return grup if grup in {"MP", "HOROZ CÜZDAN"} else "DİĞER"
+
+        def tarihsel_havuzu_sikistir_9(dataframe):
+            """Eski veya yeni tarihsel kaydı müşteri başına tek satıra indirir."""
+            if dataframe is None or dataframe.empty:
+                return pd.DataFrame(columns=data_ekran_sutunlari)
+            work = dataframe.copy()
+            if "Müşteri Kodu" not in work.columns:
+                return pd.DataFrame(columns=data_ekran_sutunlari)
+            work["Müşteri Kodu"] = work["Müşteri Kodu"].apply(
+                guvenli_metin_kodu
+            )
+            work = work[work["Müşteri Kodu"] != ""].copy()
+            if "Müşteri Grubu" not in work.columns:
+                work["Müşteri Grubu"] = "DİĞER"
+            grup_haritasi = (
+                work.drop_duplicates("Müşteri Kodu", keep="last")
+                .set_index("Müşteri Kodu")["Müşteri Grubu"]
+                .to_dict()
+            )
+            aylik_kolonlar = [
+                f"{yil} {ay} Kg"
+                for yil in ["2024", "2025"]
+                for ay in aylar
+            ]
+            for col in aylik_kolonlar:
+                if col not in work.columns:
+                    work[col] = 0.0
+                work[col] = work[col].apply(guvenli_sayi).astype(float)
+            sonuc = work.groupby("Müşteri Kodu", as_index=False)[
+                aylik_kolonlar
+            ].sum()
+            sonuc["Müşteri Grubu"] = (
+                sonuc["Müşteri Kodu"].map(grup_haritasi)
+                .apply(grup_adi_standartlastir_9)
+            )
+            for yil in ["2024", "2025"]:
+                yil_kolonlari = [f"{yil} {ay} Kg" for ay in aylar]
+                sonuc[f"{yil} Toplam Kg"] = sonuc[yil_kolonlari].sum(axis=1)
+            sonuc["Yıl"] = "2026"
+            sonuc["Durum"] = "GEÇERLİ"
+            sonuc["Uniq ID"] = "2026" + sonuc["Müşteri Kodu"].astype(str)
+            for col in data_ekran_sutunlari:
+                if col not in sonuc.columns:
+                    sonuc[col] = np.nan
+            kolon_sirasi = (
+                data_ekran_sutunlari
+                + [f"2024 {ay} Kg" for ay in aylar]
+                + ["2024 Toplam Kg"]
+                + [f"2025 {ay} Kg" for ay in aylar]
+                + ["2025 Toplam Kg"]
+            )
+            return sonuc.reindex(columns=kolon_sirasi).reset_index(drop=True)
+
+        # ------------------------------------------------------------
+        # 2024-2025 TARİHSEL KG HAVUZU
+        # Eski Data sayfasının gerekli işlevleri bu sayfaya taşınmıştır.
+        # ------------------------------------------------------------
+        st.session_state.data_sayfası_df = tarihsel_havuzu_sikistir_9(
+            st.session_state.get("data_sayfası_df", pd.DataFrame())
+        )
+        st.subheader("📚 2024–2025 Tarihsel Kg Havuzu")
+        st.caption(
+            "Büyüme ve sezon dağılımı için kullanılan 2024–2025 verilerini "
+            "buradan yükleyebilir, seçili revizyona mühürleyebilir ve sonraki "
+            "oturumlarda dosya yüklemeden buluttan çağırabilirsiniz."
+        )
+
+        with st.expander(
+            "📥 2024–2025 tarihsel veriyi yükle / buluttan getir",
+            expanded=st.session_state.get("data_sayfası_df", pd.DataFrame()).empty
+        ):
+            th1, th2 = st.columns(2)
+            tarihsel_yil_9 = th1.selectbox(
+                "Yüklenecek yıl",
+                ["2024", "2025"],
+                index=1,
+                key="buyume_tarihsel_yil_9"
+            )
+            tarihsel_metrik_9 = th2.radio(
+                "Dosyadaki aylık metrik",
+                ["Kg", "Tutar"],
+                horizontal=True,
+                key="buyume_tarihsel_metrik_9",
+                help=(
+                    "Normal kullanım Kg'dır. Kaynak dosyada aylık hacim "
+                    "kolonları Tutar adıyla tutulmuşsa Tutar seçilebilir."
+                )
+            )
+            tarihsel_upload_9 = st.file_uploader(
+                f"{tarihsel_yil_9} tarihsel müşteri verisini yükleyin",
+                type=["xlsx", "xls", "csv"],
+                key=f"buyume_tarihsel_upload_9_{tarihsel_yil_9}"
+            )
+
+            if tarihsel_upload_9 is not None:
+                try:
+                    tarihsel_imza_9 = (
+                        tarihsel_yil_9,
+                        tarihsel_metrik_9,
+                        yuklenen_dosya_imzasi(tarihsel_upload_9)
+                    )
+                    onceki_imza_9 = (
+                        st.session_state.buyume_tarihsel_upload_imzalari.get(
+                            tarihsel_yil_9
+                        )
+                    )
+                    if tarihsel_imza_9 != onceki_imza_9:
+                        tarihsel_raw_9 = oku_excel_csv_9(tarihsel_upload_9)
+                        tarihsel_raw_9.columns = [
+                            str(c).strip() for c in tarihsel_raw_9.columns
+                        ]
+                        if "Müşteri Kodu" not in tarihsel_raw_9.columns:
+                            raise ValueError(
+                                "Dosyada Müşteri Kodu sütunu bulunamadı."
+                            )
+
+                        tarihsel_raw_9["Müşteri Kodu"] = (
+                            tarihsel_raw_9["Müşteri Kodu"]
+                            .apply(guvenli_metin_kodu)
+                        )
+                        tarihsel_raw_9 = tarihsel_raw_9[
+                            tarihsel_raw_9["Müşteri Kodu"] != ""
+                        ].copy()
+                        if "Müşteri Grubu" not in tarihsel_raw_9.columns:
+                            tarihsel_raw_9["Müşteri Grubu"] = "DİĞER"
+                        tarihsel_raw_9["Müşteri Grubu"] = (
+                            tarihsel_raw_9["Müşteri Grubu"]
+                            .apply(grup_adi_standartlastir_9)
+                        )
+
+                        sonek_9 = f" {tarihsel_metrik_9}"
+                        bulunan_aylar_9 = []
+                        tarihsel_gecici_9 = tarihsel_raw_9[
+                            ["Müşteri Kodu", "Müşteri Grubu"]
+                        ].copy()
+                        for ay in aylar:
+                            hedef_col_9 = f"{tarihsel_yil_9} {ay} Kg"
+                            adaylar_9 = [
+                                f"{ay}{sonek_9}",
+                                f"{tarihsel_yil_9} {ay}{sonek_9}",
+                                ay,
+                                f"{tarihsel_yil_9} {ay}"
+                            ]
+                            kaynak_col_9 = next(
+                                (c for c in adaylar_9 if c in tarihsel_raw_9.columns),
+                                None
+                            )
+                            if kaynak_col_9 is None:
+                                tarihsel_gecici_9[hedef_col_9] = 0.0
+                            else:
+                                tarihsel_gecici_9[hedef_col_9] = (
+                                    tarihsel_raw_9[kaynak_col_9]
+                                    .apply(guvenli_sayi).astype(float)
+                                )
+                                bulunan_aylar_9.append(ay)
+
+                        if not bulunan_aylar_9:
+                            raise ValueError(
+                                f"{tarihsel_yil_9} için aylık "
+                                f"{tarihsel_metrik_9} sütunları bulunamadı."
+                            )
+
+                        hedef_ay_kolonlari_9 = [
+                            f"{tarihsel_yil_9} {ay} Kg" for ay in aylar
+                        ]
+                        tarihsel_ozet_9 = (
+                            tarihsel_gecici_9.groupby(
+                                ["Müşteri Kodu", "Müşteri Grubu"],
+                                as_index=False
+                            )[hedef_ay_kolonlari_9].sum()
+                        )
+                        tarihsel_ozet_9[
+                            f"{tarihsel_yil_9} Toplam Kg"
+                        ] = tarihsel_ozet_9[hedef_ay_kolonlari_9].sum(axis=1)
+
+                        mevcut_havuz_9 = st.session_state.get(
+                            "data_sayfası_df", pd.DataFrame()
+                        ).copy()
+                        mevcut_grup_haritasi_9 = {}
+                        if not mevcut_havuz_9.empty:
+                            mevcut_havuz_9["Müşteri Kodu"] = (
+                                mevcut_havuz_9["Müşteri Kodu"]
+                                .apply(guvenli_metin_kodu)
+                            )
+                            if "Müşteri Grubu" in mevcut_havuz_9.columns:
+                                mevcut_grup_haritasi_9 = (
+                                    mevcut_havuz_9
+                                    .drop_duplicates("Müşteri Kodu", keep="last")
+                                    .set_index("Müşteri Kodu")["Müşteri Grubu"]
+                                    .to_dict()
+                                )
+                            diger_yil_9 = (
+                                "2025" if tarihsel_yil_9 == "2024" else "2024"
+                            )
+                            diger_kolonlar_9 = [
+                                f"{diger_yil_9} {ay} Kg" for ay in aylar
+                            ]
+                            for col in diger_kolonlar_9:
+                                if col not in mevcut_havuz_9.columns:
+                                    mevcut_havuz_9[col] = 0.0
+                                mevcut_havuz_9[col] = (
+                                    mevcut_havuz_9[col]
+                                    .apply(guvenli_sayi).astype(float)
+                                )
+                            mevcut_ozet_9 = (
+                                mevcut_havuz_9.groupby(
+                                    "Müşteri Kodu", as_index=False
+                                )[diger_kolonlar_9].sum()
+                            )
+                            tarihsel_birlesik_9 = pd.merge(
+                                mevcut_ozet_9,
+                                tarihsel_ozet_9,
+                                on="Müşteri Kodu",
+                                how="outer"
+                            )
+                        else:
+                            tarihsel_birlesik_9 = tarihsel_ozet_9.copy()
+
+                        if "Müşteri Grubu" not in tarihsel_birlesik_9.columns:
+                            tarihsel_birlesik_9["Müşteri Grubu"] = (
+                                tarihsel_birlesik_9["Müşteri Kodu"]
+                                .map(mevcut_grup_haritasi_9)
+                            )
+                        else:
+                            eski_gruplar_9 = (
+                                tarihsel_birlesik_9["Müşteri Kodu"]
+                                .map(mevcut_grup_haritasi_9)
+                            )
+                            tarihsel_birlesik_9["Müşteri Grubu"] = (
+                                tarihsel_birlesik_9["Müşteri Grubu"]
+                                .where(
+                                    tarihsel_birlesik_9[
+                                        "Müşteri Grubu"
+                                    ].notna(),
+                                    eski_gruplar_9
+                                )
+                            )
+                        tarihsel_birlesik_9["Müşteri Grubu"] = (
+                            tarihsel_birlesik_9["Müşteri Grubu"]
+                            .apply(grup_adi_standartlastir_9)
+                        )
+                        for yil_9 in ["2024", "2025"]:
+                            yil_kolonlari_9 = [
+                                f"{yil_9} {ay} Kg" for ay in aylar
+                            ]
+                            for col in yil_kolonlari_9:
+                                if col not in tarihsel_birlesik_9.columns:
+                                    tarihsel_birlesik_9[col] = 0.0
+                                tarihsel_birlesik_9[col] = (
+                                    tarihsel_birlesik_9[col]
+                                    .fillna(0.0).apply(guvenli_sayi).astype(float)
+                                )
+                            tarihsel_birlesik_9[f"{yil_9} Toplam Kg"] = (
+                                tarihsel_birlesik_9[yil_kolonlari_9].sum(axis=1)
+                            )
+
+                        tarihsel_birlesik_9["Yıl"] = "2026"
+                        tarihsel_birlesik_9["Durum"] = "GEÇERLİ"
+                        tarihsel_birlesik_9["Uniq ID"] = (
+                            "2026"
+                            + tarihsel_birlesik_9["Müşteri Kodu"].astype(str)
+                        )
+                        for col in data_ekran_sutunlari:
+                            if col not in tarihsel_birlesik_9.columns:
+                                tarihsel_birlesik_9[col] = np.nan
+
+                        st.session_state.data_sayfası_df = (
+                            tarihsel_havuzu_sikistir_9(tarihsel_birlesik_9)
+                        )
+                        st.session_state.buyume_tarihsel_upload_imzalari[
+                            tarihsel_yil_9
+                        ] = tarihsel_imza_9
+                        st.session_state.data_sayfası_df.to_parquet(
+                            CACHE_DATA_MASTER, index=False
+                        )
+                        st.success(
+                            f"{tarihsel_yil_9} verisi müşteri bazında "
+                            f"özetlendi: {len(tarihsel_ozet_9):,} müşteri; "
+                            f"bulunan aylar: {', '.join(bulunan_aylar_9)}."
+                        )
+                except Exception as ex:
+                    st.error(f"Tarihsel veri işlenemedi: {ex}")
+
+            tarihsel_havuz_9 = st.session_state.get(
+                "data_sayfası_df", pd.DataFrame()
+            ).copy()
+            if not tarihsel_havuz_9.empty:
+                tarihsel_gosterim_kolonlari_9 = [
+                    "Müşteri Kodu", "Müşteri Grubu",
+                    *[f"2024 {ay} Kg" for ay in aylar], "2024 Toplam Kg",
+                    *[f"2025 {ay} Kg" for ay in aylar], "2025 Toplam Kg"
+                ]
+                for col in tarihsel_gosterim_kolonlari_9:
+                    if col not in tarihsel_havuz_9.columns:
+                        tarihsel_havuz_9[col] = (
+                            "" if col in ["Müşteri Kodu", "Müşteri Grubu"]
+                            else 0.0
+                        )
+                st.caption(
+                    f"Tarihsel havuz: {len(tarihsel_havuz_9):,} müşteri. "
+                    "Ön izleme ilk 500 kaydı gösterir."
+                )
+                st.dataframe(
+                    tarihsel_havuz_9[tarihsel_gosterim_kolonlari_9].head(500),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300,
+                    column_config={
+                        col: st.column_config.NumberColumn(
+                            col, format="localized"
+                        )
+                        for col in tarihsel_gosterim_kolonlari_9
+                        if col not in ["Müşteri Kodu", "Müşteri Grubu"]
+                    }
+                )
+            else:
+                st.info(
+                    "Henüz 2024–2025 tarihsel veri yok. Dosya yükleyin veya "
+                    "seçili revizyondan bulut kaydını çağırın."
+                )
+
+            if client and rev_secenekleri:
+                tarihsel_rev_id_9 = sayfa_aktif_revizyonunu_getir()
+                tb1, tb2, tb3 = st.columns(3)
+
+                if tarihsel_havuz_9.empty:
+                    tb1.info("Excel için önce tarihsel veri yükleyin.")
+                else:
+                    tarihsel_excel_9 = io.BytesIO()
+                    with pd.ExcelWriter(
+                        tarihsel_excel_9, engine="openpyxl"
+                    ) as writer:
+                        tarihsel_havuz_9.to_excel(
+                            writer, index=False, sheet_name="Tarihsel Kg"
+                        )
+                    tb1.download_button(
+                        "📥 Tarihsel Havuzu Excel İndir",
+                        data=tarihsel_excel_9.getvalue(),
+                        file_name="buyume_tarihsel_2024_2025.xlsx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        ),
+                        use_container_width=True,
+                        key="btn_buyume_tarihsel_excel_9"
+                    )
+
+                if tb2.button(
+                    "💾 Tarihsel Havuzu Buluta Kaydet",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=tarihsel_havuz_9.empty,
+                    key="btn_buyume_tarihsel_save_9"
+                ):
+                    try:
+                        tarihsel_db_kolonlari_9 = (
+                            data_ekran_sutunlari
+                            + [f"2024 {ay} Kg" for ay in aylar]
+                            + ["2024 Toplam Kg"]
+                            + [f"2025 {ay} Kg" for ay in aylar]
+                            + ["2025 Toplam Kg"]
+                        )
+                        tarihsel_records_9 = []
+                        for _, row in tarihsel_havuz_9.iterrows():
+                            rec_9 = {
+                                col: json_uyumlu_deger(row.get(col))
+                                for col in tarihsel_db_kolonlari_9
+                                if col in tarihsel_havuz_9.columns
+                            }
+                            rec_9["revizyon_id"] = tarihsel_rev_id_9
+                            tarihsel_records_9.append(rec_9)
+                        client.table("data_tablosu").delete().eq(
+                            "revizyon_id", tarihsel_rev_id_9
+                        ).execute()
+                        for i in range(0, len(tarihsel_records_9), 500):
+                            client.table("data_tablosu").insert(
+                                tarihsel_records_9[i:i + 500]
+                            ).execute()
+                        revizyonu_degistirildi_isaretle(tarihsel_rev_id_9)
+                        st.success(
+                            "2024–2025 tarihsel havuz seçili revizyona "
+                            "mühürlendi."
+                        )
+                    except Exception as ex:
+                        st.error(f"Tarihsel havuz buluta kaydedilemedi: {ex}")
+
+                if tb3.button(
+                    "🔄 Tarihsel Havuzu Buluttan Getir",
+                    use_container_width=True,
+                    key="btn_buyume_tarihsel_load_9"
+                ):
+                    try:
+                        tarihsel_kayitlar_9 = (
+                            supabase_revizyon_kayitlarini_getir(
+                                "data_tablosu", tarihsel_rev_id_9
+                            )
+                        )
+                        if tarihsel_kayitlar_9:
+                            gelen_tarihsel_9 = pd.DataFrame(
+                                tarihsel_kayitlar_9
+                            ).drop(
+                                columns=["id", "revizyon_id"],
+                                errors="ignore"
+                            )
+                            gelen_tarihsel_9["Müşteri Kodu"] = (
+                                gelen_tarihsel_9["Müşteri Kodu"]
+                                .apply(guvenli_metin_kodu)
+                            )
+                            for yil_9 in ["2024", "2025"]:
+                                yil_kolonlari_9 = [
+                                    f"{yil_9} {ay} Kg" for ay in aylar
+                                ]
+                                for col in yil_kolonlari_9:
+                                    if col not in gelen_tarihsel_9.columns:
+                                        gelen_tarihsel_9[col] = 0.0
+                                    gelen_tarihsel_9[col] = (
+                                        gelen_tarihsel_9[col]
+                                        .apply(guvenli_sayi).astype(float)
+                                    )
+                                gelen_tarihsel_9[f"{yil_9} Toplam Kg"] = (
+                                    gelen_tarihsel_9[yil_kolonlari_9]
+                                    .sum(axis=1)
+                                )
+                            st.session_state.data_sayfası_df = (
+                                tarihsel_havuzu_sikistir_9(gelen_tarihsel_9)
+                            )
+                            st.session_state.buyume_tarihsel_upload_imzalari = {}
+                            st.session_state.data_sayfası_df.to_parquet(
+                                CACHE_DATA_MASTER, index=False
+                            )
+                            st.success(
+                                "Tarihsel havuz seçili revizyondan getirildi."
+                            )
+                            st.rerun()
+                        else:
+                            st.warning(
+                                "Seçili revizyonda 2024–2025 tarihsel kayıt "
+                                "bulunamadı."
+                            )
+                    except Exception as ex:
+                        st.error(f"Tarihsel havuz buluttan getirilemedi: {ex}")
+            elif not client:
+                st.warning("Bulut bağlantısı olmadığı için kayıt kullanılamıyor.")
+            else:
+                st.warning(
+                    "Tarihsel havuzu kaydetmek için önce bir bulut revizyonu açın."
+                )
+
+        # Tarihsel veriler artık doğrudan bu sayfanın kendi havuzundan alınır.
+        data_havuzu_9 = tarihsel_havuzu_sikistir_9(
+            st.session_state.get("data_sayfası_df", pd.DataFrame())
+        )
+        st.session_state.data_sayfası_df = data_havuzu_9.copy()
+        hist_24_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2024")
+        hist_25_9 = musteri_bazinda_ozetle_9(data_havuzu_9, "2025")
 
         def tarihsel_grup_dagilimlarini_hazirla_9():
             """2024 ve 2025'in grup bazlı aylık dağılım ortalamasını üretir."""
@@ -4294,7 +4412,7 @@ if sekme_acik_mi[8]:
             mevcut_yillar_9.append("2025")
 
         c_bilgi1, c_bilgi2, c_bilgi3 = st.columns(3)
-        c_bilgi1.metric("Ana Data satırı", f"{len(data_havuzu_9):,}")
+        c_bilgi1.metric("Tarihsel havuz satırı", f"{len(data_havuzu_9):,}")
         c_bilgi2.metric("Hazır geçmiş yıllar", ", ".join(mevcut_yillar_9) if mevcut_yillar_9 else "Yok")
         c_bilgi3.metric(
             "2026 yükleme durumu",
@@ -4303,7 +4421,11 @@ if sekme_acik_mi[8]:
         )
 
         if len(mevcut_yillar_9) < 2:
-            st.warning("2024 ve/veya 2025 Kgleri ana Data havuzunda bulunamadı. Önce 📁 Data sekmesinden eksik yılı yükleyin veya buluttaki Data revizyonunu çağırın.")
+            st.warning(
+                "2024 ve/veya 2025 Kg verisi tarihsel havuzda bulunamadı. "
+                "Bu sayfanın üstündeki tarihsel veri alanından eksik yılı "
+                "yükleyin veya seçili revizyonun bulut kaydını çağırın."
+            )
 
         # ------------------------------------------------------------
         # 2026: SADECE BU SEKMEDE 31 KOLONLU DOSYA
@@ -5011,10 +5133,10 @@ if sekme_acik_mi[8]:
                         )
 
 # ------------------------------------------------------------
-# 10. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
+# 9. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
 # ------------------------------------------------------------
-if sekme_acik_mi[9]:
-    with sekmeler[9]:
+if sekme_acik_mi[8]:
+    with sekmeler[8]:
         st.title("📉 ÜFE–TÜFE Veri Yönetimi")
         st.caption(
             "Gerçekleşen aylık oranlar TCMB EVDS'den alınır. Tahmin alanları "
@@ -5258,10 +5380,10 @@ if sekme_acik_mi[9]:
 
 
 # ------------------------------------------------------------
-# 11. SEKME: BAZ BİRİM FİYATLAR
+# 10. SEKME: BAZ BİRİM FİYATLAR
 # ------------------------------------------------------------
-if sekme_acik_mi[10]:
-    with sekmeler[10]:
+if sekme_acik_mi[9]:
+    with sekmeler[9]:
         st.title("💳 Baz Birim Fiyatlar")
         st.caption(
             "2026 fiyat zincirinin başlangıç değeri bu sayfadan alınır. "
@@ -5412,15 +5534,16 @@ if sekme_acik_mi[10]:
 
 
 # ------------------------------------------------------------
-# 12. SEKME: DATA_NEW
+# 11. SEKME: DATA_NEW
 # ------------------------------------------------------------
-if sekme_acik_mi[11]:
-    with sekmeler[11]:
+if sekme_acik_mi[10]:
+    with sekmeler[10]:
         st.title("🆕 Data_New Hesaplama Havuzu")
         st.caption(
-            "Mevcut Data sayfası korunur. 2025 Desi/Tutar dosyası bu sayfaya "
-            "yüklenir; büyüme, Master Data eskalasyonu ve Baz Birim Fiyatlar "
-            "seçilen revizyon üzerinden birleştirilerek 2026 hesaplanır."
+            "Nihai hesaplama tablosudur. 2025 Desi/Tutar dosyası burada; "
+            "2024–2025 tarihsel havuz ve büyüme oranları Müşteri Büyüme "
+            "sayfasında yönetilir. Master Data eskalasyonu ve Baz Birim "
+            "Fiyatlar seçilen revizyon üzerinden birleştirilerek 2026 hesaplanır."
         )
 
         data_new_rev_id = None
