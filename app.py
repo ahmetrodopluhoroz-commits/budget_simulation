@@ -426,6 +426,14 @@ buyume_ekran_sutunlari = [
     "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
 ]
 BUYUME_AYLIK_ORANLAR_DB = "Aylık Büyüme Oranları"
+KG_MUSTERI_DB_TABLOSU = "kg_musteri_tablosu"
+YIL_KAPANIS_DB_TABLOSU = "yil_kapanis_tablosu"
+kg_musteri_sutunlari = [
+    "Yıl", "Müşteri Kodu", "Müşteri Grubu"
+] + [f"{ay} Kg" for ay in aylar]
+yil_kapanis_sonuc_sutunlari = [
+    "Müşteri Grubu"
+] + [f"{ay} (%)" for ay in aylar] + ["Gerçekleşen Dönem Payı (%)"]
 
 # ============================================================
 # SESSION STATE (OTOMATİK YÜKLEME DAHİL)
@@ -492,6 +500,18 @@ if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari =
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
 if "buyume_tarihsel_upload_imzalari" not in st.session_state:
     st.session_state.buyume_tarihsel_upload_imzalari = {}
+if "yil_kapanis_kg_df" not in st.session_state:
+    st.session_state.yil_kapanis_kg_df = pd.DataFrame(
+        columns=kg_musteri_sutunlari
+    )
+if "yil_kapanis_upload_imzasi" not in st.session_state:
+    st.session_state.yil_kapanis_upload_imzasi = None
+if "yil_kapanis_kayitli_sonuc_df" not in st.session_state:
+    st.session_state.yil_kapanis_kayitli_sonuc_df = pd.DataFrame(
+        columns=yil_kapanis_sonuc_sutunlari
+    )
+if "yil_kapanis_bulut_ayarlari" not in st.session_state:
+    st.session_state.yil_kapanis_bulut_ayarlari = {}
 if "baz_birim_fiyat_df" not in st.session_state:
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
@@ -689,6 +709,14 @@ def revizyon_oturumunu_temizle():
     st.session_state.buyume_ayarlari = {}
     st.session_state.buyume_ekran_df = pd.DataFrame()
     st.session_state.buyume_tarihsel_upload_imzalari = {}
+    st.session_state.yil_kapanis_kg_df = pd.DataFrame(
+        columns=kg_musteri_sutunlari
+    )
+    st.session_state.yil_kapanis_upload_imzasi = None
+    st.session_state.yil_kapanis_kayitli_sonuc_df = pd.DataFrame(
+        columns=yil_kapanis_sonuc_sutunlari
+    )
+    st.session_state.yil_kapanis_bulut_ayarlari = {}
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
     )
@@ -1108,6 +1136,165 @@ def supabase_revizyon_kayitlarini_getir(
             break
         baslangic += paket_boyutu
     return tum_kayitlar
+
+
+def yil_kapanis_grup_adi(value):
+    grup = temiz_metin(value, "DİĞER").upper()
+    return grup if grup in {"MP", "HOROZ CÜZDAN"} else "DİĞER"
+
+
+def kg_musteri_verisini_hazirla(dataframe, varsayilan_yil=None):
+    """Uzun veya yıl önekli müşteri-Kg kaynağını ortak şemaya dönüştürür."""
+    if dataframe is None or dataframe.empty:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+    df = sutun_adlarini_standartlastir(dataframe)
+    if "Müşteri Kodu" not in df.columns:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+    df["Müşteri Kodu"] = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    df = df[df["Müşteri Kodu"] != ""].copy()
+    if df.empty:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+    if "Müşteri Grubu" not in df.columns:
+        df["Müşteri Grubu"] = "DİĞER"
+    df["Müşteri Grubu"] = df["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
+
+    yillik_kolon_yillari = sorted({
+        int(eslesme.group(1))
+        for col in df.columns
+        for eslesme in [re.match(r"^(20\d{2})\s+", str(col).strip())]
+        if eslesme
+    })
+    parcalar = []
+
+    def yil_parcasini_olustur(kaynak, yil, yillik_onek=False):
+        parca = kaynak[["Müşteri Kodu", "Müşteri Grubu"]].copy()
+        parca["Yıl"] = int(yil)
+        for ay in aylar:
+            adaylar = (
+                [f"{yil} {ay} Kg", f"{yil} {ay} Desi"]
+                if yillik_onek else
+                [f"{ay} Kg", f"{ay} Desi", ay]
+            )
+            kaynak_col = next((c for c in adaylar if c in kaynak.columns), None)
+            parca[f"{ay} Kg"] = (
+                kaynak[kaynak_col].apply(guvenli_sayi).astype(float)
+                if kaynak_col else 0.0
+            )
+        return parca
+
+    if yillik_kolon_yillari:
+        for yil in yillik_kolon_yillari:
+            parcalar.append(yil_parcasini_olustur(df, yil, True))
+    else:
+        if "Yıl" in df.columns:
+            yil_serisi = df["Yıl"].apply(
+                lambda value: guvenli_tamsayi(value, nullable=True)
+            )
+        else:
+            yil_serisi = pd.Series(varsayilan_yil, index=df.index)
+        gecici = df.copy()
+        gecici["__YIL"] = yil_serisi
+        for yil in sorted({
+            int(v) for v in gecici["__YIL"].dropna().tolist()
+        }):
+            yil_df = gecici[gecici["__YIL"] == yil].copy()
+            parcalar.append(yil_parcasini_olustur(yil_df, yil, False))
+
+    if not parcalar:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+    birlesik = pd.concat(parcalar, ignore_index=True)
+    ayliklar = [f"{ay} Kg" for ay in aylar]
+    grup_haritasi = (
+        birlesik.drop_duplicates(["Yıl", "Müşteri Kodu"], keep="last")
+        .set_index(["Yıl", "Müşteri Kodu"])["Müşteri Grubu"]
+        .to_dict()
+    )
+    sonuc = birlesik.groupby(
+        ["Yıl", "Müşteri Kodu"], as_index=False
+    )[ayliklar].sum()
+    sonuc["Müşteri Grubu"] = [
+        yil_kapanis_grup_adi(grup_haritasi.get((yil, kod), "DİĞER"))
+        for yil, kod in zip(sonuc["Yıl"], sonuc["Müşteri Kodu"])
+    ]
+    return sonuc.reindex(columns=kg_musteri_sutunlari).reset_index(drop=True)
+
+
+def kg_musteri_kaynaklarini_birlestir(*kaynaklar):
+    """Sonraki kaynak öncelikli olacak şekilde müşteri-yıl kayıtlarını birleştirir."""
+    hazirlar = [
+        kaynak.copy() for kaynak in kaynaklar
+        if kaynak is not None and not kaynak.empty
+    ]
+    if not hazirlar:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+    sonuc = pd.concat(hazirlar, ignore_index=True)
+    sonuc["Yıl"] = sonuc["Yıl"].apply(
+        lambda value: guvenli_tamsayi(value, nullable=False)
+    )
+    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    sonuc = sonuc.drop_duplicates(
+        ["Yıl", "Müşteri Kodu"], keep="last"
+    )
+    return sonuc.reindex(columns=kg_musteri_sutunlari).reset_index(drop=True)
+
+
+def yil_kapanis_yuzde_matrisi(kg_musteri_df, yil):
+    """Seçilen yılda her grubun aylık Kg paylarını yüzde puanı olarak üretir."""
+    grup_sirasi = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+    kaynak = kg_musteri_df[
+        pd.to_numeric(kg_musteri_df["Yıl"], errors="coerce") == int(yil)
+    ].copy()
+    ayliklar = [f"{ay} Kg" for ay in aylar]
+    for col in ayliklar:
+        kaynak[col] = pd.to_numeric(kaynak[col], errors="coerce").fillna(0.0)
+    kaynak["Müşteri Grubu"] = kaynak["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    grup_toplamlari = (
+        kaynak.groupby("Müşteri Grubu")[ayliklar].sum()
+        .reindex(grup_sirasi, fill_value=0.0)
+    )
+    satirlar = []
+    for grup in grup_sirasi:
+        aylik_degerler = grup_toplamlari.loc[grup].to_numpy(dtype=float)
+        yillik_toplam = float(aylik_degerler.sum())
+        yuzdeler = (
+            aylik_degerler / yillik_toplam * 100.0
+            if yillik_toplam > 0 else np.zeros(len(aylar), dtype=float)
+        )
+        satirlar.append({
+            "Müşteri Grubu": grup,
+            **{ay: float(yuzdeler[i]) for i, ay in enumerate(aylar)}
+        })
+    return pd.DataFrame(satirlar)
+
+
+def yil_kapanis_ortalamasini_hesapla(
+    kg_musteri_df, yil_1, yil_2, son_gerceklesen_ay
+):
+    """İki yılın grup/ay yüzdelerinin aritmetik ortalamasını hesaplar."""
+    matris_1 = yil_kapanis_yuzde_matrisi(kg_musteri_df, yil_1)
+    matris_2 = yil_kapanis_yuzde_matrisi(kg_musteri_df, yil_2)
+    harita_1 = matris_1.set_index("Müşteri Grubu")
+    harita_2 = matris_2.set_index("Müşteri Grubu")
+    son_ay_index = aylar.index(son_gerceklesen_ay)
+    sonuc = []
+    for grup in ["DİĞER", "HOROZ CÜZDAN", "MP"]:
+        aylik_ortalamalar = {
+            ay: (
+                guvenli_sayi(harita_1.at[grup, ay])
+                + guvenli_sayi(harita_2.at[grup, ay])
+            ) / 2.0
+            for ay in aylar
+        }
+        sonuc.append({
+            "Müşteri Grubu": grup,
+            **{f"{ay} (%)": aylik_ortalamalar[ay] for ay in aylar},
+            "Gerçekleşen Dönem Payı (%)": sum(
+                aylik_ortalamalar[ay] for ay in aylar[:son_ay_index + 1]
+            )
+        })
+    return matris_1, matris_2, pd.DataFrame(sonuc)
 
 
 def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
@@ -2158,7 +2345,7 @@ sekme_etiketleri = [
     "📅 Çalışma Günleri Takvimi", "☁️ Bulut Revizyon Yönetimi",
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
-    "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New"
+    "🏁 Yıl Kapanış", "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New"
 ]
 
 # Streamlit 1.55 ve üzerinde sekmelerin yalnızca açık olanı çalıştırılabilir.
@@ -2172,7 +2359,7 @@ if dinamik_sekme_destegi:
     sekmeler = st.tabs(
         sekme_etiketleri,
         on_change="rerun",
-        key="ana_uygulama_sekmesi_v3"
+        key="ana_uygulama_sekmesi_v4"
     )
     sekme_acik_mi = [bool(sekme.open) for sekme in sekmeler]
 else:
@@ -2184,7 +2371,7 @@ else:
         sekme_etiketleri,
         horizontal=True,
         label_visibility="collapsed",
-        key="ana_uygulama_sekmesi_eski_surum_v3"
+        key="ana_uygulama_sekmesi_eski_surum_v4"
     )
     sekmeler = [st.container() for _ in sekme_etiketleri]
     sekme_acik_mi = [
@@ -2487,6 +2674,7 @@ if sekme_acik_mi[1]:
                                 "baz_yakit_tablosu", "master_data_tablosu",
                                 "mazot_tablosu", "buyume_tablosu",
                                 "baz_birim_fiyat_tablosu", "data_new_tablosu",
+                                "kg_musteri_tablosu", "yil_kapanis_tablosu",
                                 "takvim_revizyon_tablosu",
                                 "enflasyon_revizyon_tablosu"
                             ]
@@ -2581,6 +2769,7 @@ if sekme_acik_mi[1]:
                     "musteri_detay_tablosu", "master_data_tablosu",
                     "mazot_tablosu", "buyume_tablosu",
                     "baz_birim_fiyat_tablosu", "data_new_tablosu",
+                    "kg_musteri_tablosu", "yil_kapanis_tablosu",
                     "takvim_revizyon_tablosu",
                     "enflasyon_revizyon_tablosu"
                 ]
@@ -5133,10 +5322,421 @@ if sekme_acik_mi[7]:
                         )
 
 # ------------------------------------------------------------
-# 9. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
+# 9. SEKME: YIL KAPANIŞ
 # ------------------------------------------------------------
 if sekme_acik_mi[8]:
     with sekmeler[8]:
+        st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
+        st.caption(
+            "Verisi bulunan iki yılı seçerek MP, HOROZ CÜZDAN ve DİĞER "
+            "gruplarının aylık paylarını ve iki yılın aritmetik ortalamasını "
+            "hesaplayabilirsiniz. Gerçekleşen dönem toplamı seçilen son ayın "
+            "kendi sütununda gösterilir."
+        )
+
+        aktif_yk_rev_id = sayfa_aktif_revizyonunu_getir()
+
+        # Mevcut uygulama kaynakları otomatik kullanılır. Ekrandan yüklenen veya
+        # buluttan getirilen kg_musteri kaydı en yüksek önceliğe sahiptir.
+        tarihsel_kg_kaynak = kg_musteri_verisini_hazirla(
+            st.session_state.get("data_sayfası_df", pd.DataFrame())
+        )
+        guncel_2026_kaynak = kg_musteri_verisini_hazirla(
+            st.session_state.get("df_2026_buyume_9", pd.DataFrame()),
+            varsayilan_yil=2026
+        )
+
+        with st.expander("📥 Müşteri-Kg veri kaynağı", expanded=True):
+            yu1, yu2 = st.columns([1, 3])
+            yukleme_yili = yu1.number_input(
+                "Dosyada Yıl yoksa kullanılacak yıl",
+                min_value=2000,
+                max_value=2100,
+                value=2025,
+                step=1,
+                key="yil_kapanis_upload_yili"
+            )
+            yil_kapanis_upload = yu2.file_uploader(
+                "Müşteri-Kg dosyasını yükleyin",
+                type=["xlsx", "xls", "csv"],
+                key="yil_kapanis_kg_upload",
+                help=(
+                    "Beklenen temel alanlar: Yıl, Müşteri Kodu, Müşteri Grubu "
+                    "ve Ocak Kg–Aralık Kg. Yıl yoksa soldaki yıl kullanılır. "
+                    "2024 Ocak Kg gibi yıl önekli kolonlar da kabul edilir."
+                )
+            )
+            if yil_kapanis_upload is not None:
+                try:
+                    upload_imzasi = (
+                        int(yukleme_yili),
+                        yuklenen_dosya_imzasi(yil_kapanis_upload)
+                    )
+                    if upload_imzasi != st.session_state.yil_kapanis_upload_imzasi:
+                        ham_kg = yuklenen_tabloyu_oku(yil_kapanis_upload)
+                        yeni_kg = kg_musteri_verisini_hazirla(
+                            ham_kg, varsayilan_yil=int(yukleme_yili)
+                        )
+                        if yeni_kg.empty:
+                            raise ValueError(
+                                "Dosyada kullanılabilir müşteri ve aylık Kg "
+                                "verisi bulunamadı."
+                            )
+                        yeni_yillar = set(
+                            pd.to_numeric(yeni_kg["Yıl"], errors="coerce")
+                            .dropna().astype(int).tolist()
+                        )
+                        mevcut_kg = st.session_state.yil_kapanis_kg_df.copy()
+                        if not mevcut_kg.empty:
+                            mevcut_yil_serisi = pd.to_numeric(
+                                mevcut_kg["Yıl"], errors="coerce"
+                            )
+                            mevcut_kg = mevcut_kg[
+                                ~mevcut_yil_serisi.isin(yeni_yillar)
+                            ]
+                        st.session_state.yil_kapanis_kg_df = (
+                            kg_musteri_kaynaklarini_birlestir(
+                                mevcut_kg, yeni_kg
+                            )
+                        )
+                        st.session_state.yil_kapanis_upload_imzasi = upload_imzasi
+                        st.success(
+                            f"{len(yeni_kg):,} müşteri-yıl kaydı işlendi. "
+                            f"Yıllar: {', '.join(map(str, sorted(yeni_yillar)))}"
+                        )
+                except Exception as ex:
+                    st.error(f"Müşteri-Kg dosyası işlenemedi: {ex}")
+
+            bulut1, bulut2 = st.columns(2)
+            buluttan_getir = bulut1.button(
+                "🔄 Kg ve Yıl Kapanışı Buluttan Getir",
+                use_container_width=True,
+                disabled=(not client or not aktif_yk_rev_id),
+                key="btn_yil_kapanis_cloud_load"
+            )
+            hafizayi_temizle = bulut2.button(
+                "🧹 Yıl Kapanış Hafızasını Temizle",
+                use_container_width=True,
+                key="btn_yil_kapanis_clear"
+            )
+
+            if hafizayi_temizle:
+                st.session_state.yil_kapanis_kg_df = pd.DataFrame(
+                    columns=kg_musteri_sutunlari
+                )
+                st.session_state.yil_kapanis_upload_imzasi = None
+                st.session_state.yil_kapanis_kayitli_sonuc_df = pd.DataFrame(
+                    columns=yil_kapanis_sonuc_sutunlari
+                )
+                st.session_state.yil_kapanis_bulut_ayarlari = {}
+                st.rerun()
+
+            if buluttan_getir:
+                try:
+                    kg_kayitlari = []
+                    try:
+                        kg_kayitlari = supabase_revizyon_kayitlarini_getir(
+                            KG_MUSTERI_DB_TABLOSU, aktif_yk_rev_id
+                        )
+                    except Exception:
+                        kg_kayitlari = []
+
+                    if kg_kayitlari:
+                        bulut_kg = pd.DataFrame(kg_kayitlari).drop(
+                            columns=["id", "revizyon_id", "created_at", "updated_at"],
+                            errors="ignore"
+                        )
+                        st.session_state.yil_kapanis_kg_df = (
+                            kg_musteri_verisini_hazirla(bulut_kg)
+                        )
+                    else:
+                        # Yeni kg_musteri tablosu henüz kullanılmadıysa önceki
+                        # tarihsel data_tablosu kaydı da kaynak olarak kabul edilir.
+                        eski_kayitlar = supabase_revizyon_kayitlarini_getir(
+                            "data_tablosu", aktif_yk_rev_id
+                        )
+                        if eski_kayitlar:
+                            eski_kg = pd.DataFrame(eski_kayitlar).drop(
+                                columns=["id", "revizyon_id"], errors="ignore"
+                            )
+                            st.session_state.yil_kapanis_kg_df = (
+                                kg_musteri_verisini_hazirla(eski_kg)
+                            )
+
+                    kapanis_kayitlari = []
+                    try:
+                        kapanis_kayitlari = supabase_revizyon_kayitlarini_getir(
+                            YIL_KAPANIS_DB_TABLOSU, aktif_yk_rev_id
+                        )
+                    except Exception:
+                        kapanis_kayitlari = []
+                    if kapanis_kayitlari:
+                        kapanis_raw = pd.DataFrame(kapanis_kayitlari)
+                        ilk_kayit = kapanis_raw.iloc[0]
+                        st.session_state.yil_kapanis_bulut_ayarlari = {
+                            "yil_1": guvenli_tamsayi(
+                                ilk_kayit.get("Yıl 1"), nullable=False
+                            ),
+                            "yil_2": guvenli_tamsayi(
+                                ilk_kayit.get("Yıl 2"), nullable=False
+                            ),
+                            "son_ay": temiz_metin(
+                                ilk_kayit.get("Gerçekleşen Son Ay"), "Ağustos"
+                            )
+                        }
+                        st.session_state.yil_kapanis_kayitli_sonuc_df = (
+                            kapanis_raw.drop(
+                                columns=[
+                                    "id", "revizyon_id", "Yıl 1", "Yıl 2",
+                                    "Gerçekleşen Son Ay", "created_at", "updated_at"
+                                ],
+                                errors="ignore"
+                            ).reindex(columns=yil_kapanis_sonuc_sutunlari)
+                        )
+                    st.success("Kayıtlı müşteri-Kg ve yıl kapanış verileri getirildi.")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Yıl kapanış verileri buluttan getirilemedi: {ex}")
+
+        kg_kaynak = kg_musteri_kaynaklarini_birlestir(
+            tarihsel_kg_kaynak,
+            guncel_2026_kaynak,
+            st.session_state.get("yil_kapanis_kg_df", pd.DataFrame())
+        )
+        mevcut_yillar = sorted({
+            int(yil) for yil in pd.to_numeric(
+                kg_kaynak.get("Yıl", pd.Series(dtype=float)), errors="coerce"
+            ).dropna().tolist()
+        })
+
+        if kg_kaynak.empty or len(mevcut_yillar) < 2:
+            st.warning(
+                "Yıl kapanışı için en az iki farklı yılın müşteri-Kg verisi "
+                "gerekir. Dosya yükleyin, Büyüme sayfasındaki tarihsel havuzu "
+                "doldurun veya bulut kaydını çağırın."
+            )
+        else:
+            kaynak_ozet = (
+                kg_kaynak.groupby("Yıl")["Müşteri Kodu"]
+                .nunique().reset_index(name="Müşteri Sayısı")
+            )
+            st.dataframe(
+                kaynak_ozet,
+                use_container_width=True,
+                hide_index=True,
+                height=min(220, 38 * len(kaynak_ozet) + 40)
+            )
+
+            kayitli_ayar = st.session_state.get(
+                "yil_kapanis_bulut_ayarlari", {}
+            )
+            varsayilan_yil_1 = int(kayitli_ayar.get("yil_1", mevcut_yillar[-2]))
+            varsayilan_yil_2 = int(kayitli_ayar.get("yil_2", mevcut_yillar[-1]))
+            if varsayilan_yil_1 not in mevcut_yillar:
+                varsayilan_yil_1 = mevcut_yillar[-2]
+            if varsayilan_yil_2 not in mevcut_yillar:
+                varsayilan_yil_2 = mevcut_yillar[-1]
+            varsayilan_son_ay = kayitli_ayar.get(
+                "son_ay",
+                st.session_state.get("son_gerceklesen_ay_2026_9", "Ağustos")
+            )
+            if varsayilan_son_ay not in aylar:
+                varsayilan_son_ay = "Ağustos"
+
+            if (
+                "yil_kapanis_yil_1" not in st.session_state
+                or st.session_state.yil_kapanis_yil_1 not in mevcut_yillar
+            ):
+                st.session_state.yil_kapanis_yil_1 = varsayilan_yil_1
+            if (
+                "yil_kapanis_yil_2" not in st.session_state
+                or st.session_state.yil_kapanis_yil_2 not in mevcut_yillar
+            ):
+                st.session_state.yil_kapanis_yil_2 = varsayilan_yil_2
+            if "yil_kapanis_son_ay" not in st.session_state:
+                st.session_state.yil_kapanis_son_ay = varsayilan_son_ay
+
+            ys1, ys2, ys3 = st.columns(3)
+            yil_1 = ys1.selectbox(
+                "Karşılaştırılacak 1. yıl",
+                mevcut_yillar,
+                key="yil_kapanis_yil_1"
+            )
+            yil_2 = ys2.selectbox(
+                "Karşılaştırılacak 2. yıl",
+                mevcut_yillar,
+                key="yil_kapanis_yil_2"
+            )
+            son_gerceklesen_ay = ys3.selectbox(
+                "Gerçekleşen son ay",
+                aylar,
+                key="yil_kapanis_son_ay"
+            )
+
+            if yil_1 == yil_2:
+                st.error("Ortalama hesabı için iki farklı yıl seçin.")
+            else:
+                matris_1, matris_2, ortalama_sonuc = (
+                    yil_kapanis_ortalamasini_hesapla(
+                        kg_kaynak, yil_1, yil_2, son_gerceklesen_ay
+                    )
+                )
+                yuzde_config = {
+                    ay: st.column_config.NumberColumn(ay, format="%.2f%%")
+                    for ay in aylar
+                }
+
+                st.subheader(f"📊 {yil_1} Aylık Dağılımı")
+                st.dataframe(
+                    matris_1,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=yuzde_config
+                )
+                st.subheader(f"📊 {yil_2} Aylık Dağılımı")
+                st.dataframe(
+                    matris_2,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=yuzde_config
+                )
+
+                tamamlanacak_aylar = aylar[
+                    aylar.index(son_gerceklesen_ay) + 1:
+                ]
+                st.subheader("📌 ORTALAMA")
+                st.caption(
+                    f"Gerçekleşen dönem: Ocak–{son_gerceklesen_ay}. "
+                    + (
+                        "Yılı tamamlamak için kullanılacak aylar: "
+                        + ", ".join(tamamlanacak_aylar)
+                        if tamamlanacak_aylar else
+                        "Yılın 12 ayı da gerçekleşmiştir."
+                    )
+                )
+
+                ortalama_gosterim_satirlari = []
+                for _, row in ortalama_sonuc.iterrows():
+                    grup = row["Müşteri Grubu"]
+                    toplam_satiri = {
+                        "Müşteri Grubu": (
+                            f"{grup} — Ocak–{son_gerceklesen_ay} Toplamı"
+                        ),
+                        **{ay: np.nan for ay in aylar}
+                    }
+                    toplam_satiri[son_gerceklesen_ay] = row[
+                        "Gerçekleşen Dönem Payı (%)"
+                    ]
+                    ortalama_gosterim_satirlari.append(toplam_satiri)
+                    ortalama_gosterim_satirlari.append({
+                        "Müşteri Grubu": grup,
+                        **{ay: row[f"{ay} (%)"] for ay in aylar}
+                    })
+                ortalama_gosterim = pd.DataFrame(
+                    ortalama_gosterim_satirlari,
+                    columns=["Müşteri Grubu"] + aylar
+                )
+                st.dataframe(
+                    ortalama_gosterim,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=yuzde_config
+                )
+
+                yk_excel = io.BytesIO()
+                with pd.ExcelWriter(yk_excel, engine="openpyxl") as writer:
+                    matris_1.to_excel(
+                        writer, index=False, sheet_name=str(yil_1)
+                    )
+                    matris_2.to_excel(
+                        writer, index=False, sheet_name=str(yil_2)
+                    )
+                    ortalama_gosterim.to_excel(
+                        writer, index=False, sheet_name="ORTALAMA"
+                    )
+
+                yk1, yk2 = st.columns(2)
+                yk1.download_button(
+                    "📥 Yıl Kapanışını Excel İndir",
+                    data=yk_excel.getvalue(),
+                    file_name=f"yil_kapanis_{yil_1}_{yil_2}.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                    key="btn_yil_kapanis_excel"
+                )
+
+                if yk2.button(
+                    "💾 Kg ve Yıl Kapanışını Buluta Kaydet",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=(not client or not aktif_yk_rev_id),
+                    key="btn_yil_kapanis_cloud_save"
+                ):
+                    try:
+                        kg_records = []
+                        for _, row in kg_kaynak.iterrows():
+                            rec = {
+                                col: json_uyumlu_deger(row.get(col))
+                                for col in kg_musteri_sutunlari
+                            }
+                            rec["revizyon_id"] = aktif_yk_rev_id
+                            kg_records.append(rec)
+                        client.table(KG_MUSTERI_DB_TABLOSU).delete().eq(
+                            "revizyon_id", aktif_yk_rev_id
+                        ).execute()
+                        for i in range(0, len(kg_records), 500):
+                            client.table(KG_MUSTERI_DB_TABLOSU).insert(
+                                kg_records[i:i + 500]
+                            ).execute()
+
+                        kapanis_records = []
+                        for _, row in ortalama_sonuc.iterrows():
+                            rec = {
+                                "revizyon_id": aktif_yk_rev_id,
+                                "Yıl 1": int(yil_1),
+                                "Yıl 2": int(yil_2),
+                                "Gerçekleşen Son Ay": son_gerceklesen_ay,
+                                **{
+                                    col: json_uyumlu_deger(row.get(col))
+                                    for col in yil_kapanis_sonuc_sutunlari
+                                }
+                            }
+                            kapanis_records.append(rec)
+                        client.table(YIL_KAPANIS_DB_TABLOSU).delete().eq(
+                            "revizyon_id", aktif_yk_rev_id
+                        ).execute()
+                        client.table(YIL_KAPANIS_DB_TABLOSU).insert(
+                            kapanis_records
+                        ).execute()
+                        revizyonu_degistirildi_isaretle(aktif_yk_rev_id)
+                        st.session_state.yil_kapanis_kg_df = kg_kaynak.copy()
+                        st.session_state.yil_kapanis_kayitli_sonuc_df = (
+                            ortalama_sonuc.copy()
+                        )
+                        st.session_state.yil_kapanis_bulut_ayarlari = {
+                            "yil_1": int(yil_1),
+                            "yil_2": int(yil_2),
+                            "son_ay": son_gerceklesen_ay
+                        }
+                        st.success(
+                            "Müşteri-Kg kaynağı ve yıl kapanış sonucu seçili "
+                            "revizyona kaydedildi."
+                        )
+                    except Exception as ex:
+                        st.error(
+                            "Yıl kapanışı buluta kaydedilemedi. Önce Yıl "
+                            f"Kapanış Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
+                        )
+
+
+# ------------------------------------------------------------
+# 10. SEKME: ÜFE-TÜFE YÖNETİMİ VE EVDS ENTEGRASYONU
+# ------------------------------------------------------------
+if sekme_acik_mi[9]:
+    with sekmeler[9]:
         st.title("📉 ÜFE–TÜFE Veri Yönetimi")
         st.caption(
             "Gerçekleşen aylık oranlar TCMB EVDS'den alınır. Tahmin alanları "
@@ -5380,10 +5980,10 @@ if sekme_acik_mi[8]:
 
 
 # ------------------------------------------------------------
-# 10. SEKME: BAZ BİRİM FİYATLAR
+# 11. SEKME: BAZ BİRİM FİYATLAR
 # ------------------------------------------------------------
-if sekme_acik_mi[9]:
-    with sekmeler[9]:
+if sekme_acik_mi[10]:
+    with sekmeler[10]:
         st.title("💳 Baz Birim Fiyatlar")
         st.caption(
             "2026 fiyat zincirinin başlangıç değeri bu sayfadan alınır. "
@@ -5534,10 +6134,10 @@ if sekme_acik_mi[9]:
 
 
 # ------------------------------------------------------------
-# 11. SEKME: DATA_NEW
+# 12. SEKME: DATA_NEW
 # ------------------------------------------------------------
-if sekme_acik_mi[10]:
-    with sekmeler[10]:
+if sekme_acik_mi[11]:
+    with sekmeler[11]:
         st.title("🆕 Data_New Hesaplama Havuzu")
         st.caption(
             "Nihai hesaplama tablosudur. 2025 Desi/Tutar dosyası burada; "
