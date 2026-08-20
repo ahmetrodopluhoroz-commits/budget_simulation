@@ -1518,6 +1518,23 @@ def yil_kapanis_detay_tahminini_hesapla(
     return sonuc.reindex(columns=yil_kapanis_detay_sutunlari)
 
 
+def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
+    """Detay tablosunun aylık ve dönemsel genel toplam satırını oluşturur."""
+    toplam = {col: "" for col in yil_kapanis_detay_sutunlari}
+    toplam["Uniq ID"] = "🔥 GENEL TOPLAM"
+    toplam["Müşteri Adı"] = "🔥 GENEL TOPLAM"
+    toplam["Yıl"] = int(kapanis_yili) if kapanis_yili is not None else ""
+    sayisal_sutunlar = (
+        yil_kapanis_detay_ay_sutunlari
+        + ["Gerçekleşen Toplam Desi", "Tahmini Yıl Sonu Toplam Desi"]
+    )
+    for col in sayisal_sutunlar:
+        toplam[col] = float(
+            pd.to_numeric(detay_df[col], errors="coerce").fillna(0.0).sum()
+        )
+    return toplam
+
+
 def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
     """Data_New'un bütün 2025/2026 alanlarını toplu olarak hesaplar."""
     sonuc = girdi_df.copy().reset_index(drop=True)
@@ -6012,6 +6029,9 @@ if sekme_acik_mi[8]:
                 detay_sonuc = pd.DataFrame(
                     columns=yil_kapanis_detay_sutunlari
                 )
+                detay_export_df = pd.DataFrame(
+                    columns=yil_kapanis_detay_sutunlari
+                )
                 kapanis_yili = None
                 calisma_orani_etiketi = ""
                 st.subheader("🧮 Yıl Kapanış Detay ve Tahmin")
@@ -6130,13 +6150,119 @@ if sekme_acik_mi[8]:
                             )
                         )
                     }
-                    st.dataframe(
-                        detay_sonuc,
-                        use_container_width=True,
-                        hide_index=True,
-                        height=520,
-                        column_config=detay_column_config
+                    detay_toplam = yil_kapanis_detay_toplam_satiri(
+                        detay_sonuc, kapanis_yili
                     )
+                    detay_export_df = pd.concat(
+                        [detay_sonuc, pd.DataFrame([detay_toplam])],
+                        ignore_index=True
+                    ).reindex(columns=yil_kapanis_detay_sutunlari)
+
+                    if ST_AGGRID_AVAILABLE:
+                        detay_grid_df = detay_sonuc.copy()
+                        tarih_sutunlari = [
+                            "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
+                            "Esk. Enf. Başlangıç Tarihi"
+                        ]
+                        for col in tarih_sutunlari:
+                            detay_grid_df[col] = detay_grid_df[col].apply(
+                                lambda value: (
+                                    "" if pd.isna(value)
+                                    else pd.Timestamp(value).strftime("%d.%m.%Y")
+                                )
+                            )
+                        sayi_formatter = JsCode(
+                            "function(p) { if (p.value === null || "
+                            "p.value === undefined || p.value === '') "
+                            "return ''; return Number(p.value).toLocaleString("
+                            "'tr-TR', {maximumFractionDigits: 0}); }"
+                        )
+                        grid_builder = GridOptionsBuilder.from_dataframe(
+                            detay_grid_df
+                        )
+                        grid_builder.configure_default_column(
+                            editable=False,
+                            sortable=True,
+                            filter=True,
+                            resizable=True,
+                            minWidth=115
+                        )
+                        grid_builder.configure_column(
+                            "Uniq ID", pinned="left", minWidth=180
+                        )
+                        for col in (
+                            yil_kapanis_detay_ay_sutunlari
+                            + [
+                                "Gerçekleşen Toplam Desi",
+                                "Tahmini Yıl Sonu Toplam Desi"
+                            ]
+                        ):
+                            grid_builder.configure_column(
+                                col,
+                                type=["numericColumn"],
+                                filter="agNumberColumnFilter",
+                                valueFormatter=sayi_formatter,
+                                minWidth=125
+                            )
+                        grid_builder.configure_grid_options(
+                            pinnedBottomRowData=[detay_toplam],
+                            suppressScrollOnNewData=True,
+                            animateRows=False
+                        )
+                        yil_kapanis_grid_css = {
+                            **DATA_NEW_GRID_CSS,
+                            ".ag-row-pinned": {
+                                "background-color": TEMA["surface_3"],
+                                "color": TEMA["text"],
+                                "font-weight": "800",
+                                "border-top": (
+                                    f"2px solid {TEMA['primary']} !important"
+                                )
+                            }
+                        }
+                        AgGrid(
+                            detay_grid_df,
+                            gridOptions=grid_builder.build(),
+                            height=560,
+                            theme="streamlit",
+                            data_return_mode=DataReturnMode.AS_INPUT,
+                            allow_unsafe_jscode=True,
+                            enable_enterprise_modules=False,
+                            custom_css=yil_kapanis_grid_css,
+                            server_sync_strategy="server_wins",
+                            key=(
+                                "yil_kapanis_detay_grid_v1_"
+                                f"{TEMA['scheme']}_{int(kapanis_yili)}_"
+                                f"{son_gerceklesen_ay}"
+                            )
+                        )
+                    else:
+                        st.dataframe(
+                            detay_sonuc,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=520,
+                            column_config=detay_column_config
+                        )
+                        toplam_fallback = pd.DataFrame([detay_toplam])
+                        for col in [
+                            "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
+                            "Esk. Enf. Başlangıç Tarihi"
+                        ]:
+                            toplam_fallback[col] = pd.NaT
+                        st.dataframe(
+                            toplam_fallback.reindex(
+                                columns=yil_kapanis_detay_sutunlari
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=90,
+                            column_config=detay_column_config
+                        )
+                        st.caption(
+                            "Sabit dip toplam için requirements.txt dosyasında "
+                            "streamlit-aggrid==1.2.1.post2 bulunmalıdır."
+                        )
 
                 yk_excel = io.BytesIO()
                 with pd.ExcelWriter(yk_excel, engine="openpyxl") as writer:
@@ -6149,8 +6275,8 @@ if sekme_acik_mi[8]:
                     ortalama_gosterim.to_excel(
                         writer, index=False, sheet_name="ORTALAMA"
                     )
-                    if not detay_sonuc.empty and len(detay_sonuc) <= 20000:
-                        detay_sonuc.to_excel(
+                    if not detay_export_df.empty and len(detay_sonuc) <= 20000:
+                        detay_export_df.to_excel(
                             writer, index=False, sheet_name="KAPANIŞ DETAY"
                         )
 
@@ -6168,7 +6294,7 @@ if sekme_acik_mi[8]:
                 )
 
                 if not detay_sonuc.empty:
-                    detay_csv = detay_sonuc.to_csv(
+                    detay_csv = detay_export_df.to_csv(
                         index=False,
                         sep=";",
                         decimal=",",
