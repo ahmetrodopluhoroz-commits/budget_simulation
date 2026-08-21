@@ -547,6 +547,10 @@ if "yil_kapanis_data_new_bulut_revizyon" not in st.session_state:
     st.session_state.yil_kapanis_data_new_bulut_revizyon = None
 if "yil_kapanis_detay_manuel_ayarlari" not in st.session_state:
     st.session_state.yil_kapanis_detay_manuel_ayarlari = {}
+if "yil_kapanis_ortalama_manuel_ayarlari" not in st.session_state:
+    st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
+if "yil_kapanis_ortalama_editor_surumu" not in st.session_state:
+    st.session_state.yil_kapanis_ortalama_editor_surumu = 0
 if "baz_birim_fiyat_df" not in st.session_state:
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
@@ -765,6 +769,8 @@ def revizyon_oturumunu_temizle():
     st.session_state.yil_kapanis_data_new_bulut_df = pd.DataFrame()
     st.session_state.yil_kapanis_data_new_bulut_revizyon = None
     st.session_state.yil_kapanis_detay_manuel_ayarlari = {}
+    st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
+    st.session_state.yil_kapanis_ortalama_editor_surumu += 1
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
     )
@@ -1808,8 +1814,8 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
 def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
     """Detay tablosunun aylık ve dönemsel genel toplam satırını oluşturur."""
     toplam = {col: "" for col in yil_kapanis_detay_sutunlari}
-    toplam["Uniq ID"] = "GENEL TOPLAM"
-    toplam["Müşteri Adı"] = "GENEL TOPLAM"
+    toplam["Uniq ID"] = " GENEL TOPLAM"
+    toplam["Müşteri Adı"] = " GENEL TOPLAM"
     toplam["Yıl"] = int(kapanis_yili) if kapanis_yili is not None else ""
     sayisal_sutunlar = (
         yil_kapanis_detay_ay_sutunlari
@@ -5298,7 +5304,7 @@ if sekme_acik_mi[7]:
                         df_work_2026[col] = sayisal_seri
                         toplam_dict[col] = sayisal_seri.sum()
                     elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                        toplam_dict[col] = "GENEL TOPLAM"
+                        toplam_dict[col] = " GENEL TOPLAM"
                     else:
                         toplam_dict[col] = "-"
 
@@ -5340,7 +5346,7 @@ if sekme_acik_mi[7]:
                 )
 
                 # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
-                st.markdown("##### GENEL TOPLAM")
+                st.markdown("#####  GENEL TOPLAM")
                 st.dataframe(
                     df_toplam_formatli,
                     use_container_width=True,
@@ -6064,6 +6070,9 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                 )
                 st.session_state.yil_kapanis_data_new_bulut_df = pd.DataFrame()
                 st.session_state.yil_kapanis_data_new_bulut_revizyon = None
+                st.session_state.yil_kapanis_detay_manuel_ayarlari = {}
+                st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
+                st.session_state.yil_kapanis_ortalama_editor_surumu += 1
                 st.rerun()
 
             if buluttan_getir:
@@ -6176,6 +6185,8 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                             pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
                         )
                     st.session_state.yil_kapanis_detay_manuel_ayarlari = {}
+                    st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
+                    st.session_state.yil_kapanis_ortalama_editor_surumu += 1
                     st.success(
                         "Kayıtlı müşteri-Kg, yıl kapanış ve detay verileri "
                         "getirildi."
@@ -6301,33 +6312,136 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                     )
                 )
 
-                ortalama_gosterim_satirlari = []
-                for _, row in ortalama_sonuc.iterrows():
-                    grup = row["Müşteri Grubu"]
-                    toplam_satiri = {
-                        "Müşteri Grubu": (
-                            f"{grup} — Ocak–{son_gerceklesen_ay} Toplamı"
-                        ),
-                        **{ay: np.nan for ay in aylar}
-                    }
-                    toplam_satiri[son_gerceklesen_ay] = row[
-                        "Gerçekleşen Dönem Payı (%)"
-                    ]
-                    ortalama_gosterim_satirlari.append(toplam_satiri)
-                    ortalama_gosterim_satirlari.append({
-                        "Müşteri Grubu": grup,
-                        **{ay: row[f"{ay} (%)"] for ay in aylar}
-                    })
-                ortalama_gosterim = pd.DataFrame(
-                    ortalama_gosterim_satirlari,
-                    columns=["Müşteri Grubu"] + aylar
+                ortalama_baglam = "|".join([
+                    temiz_metin(aktif_yk_rev_id, "yerel"),
+                    str(int(yil_1)), str(int(yil_2))
+                ])
+
+                # Seçili revizyonda daha önce kaydedilmiş ortalamalar varsa,
+                # aynı yıl çifti için otomatik hesabın üzerinde önceliklidir.
+                kayitli_ortalama = st.session_state.get(
+                    "yil_kapanis_kayitli_sonuc_df", pd.DataFrame()
                 )
-                st.dataframe(
-                    ortalama_gosterim,
+                kayitli_yillar_uygun = (
+                    guvenli_tamsayi(kayitli_ayar.get("yil_1")) == int(yil_1)
+                    and guvenli_tamsayi(kayitli_ayar.get("yil_2")) == int(yil_2)
+                )
+                if kayitli_yillar_uygun and not kayitli_ortalama.empty:
+                    kayitli_harita = (
+                        kayitli_ortalama.drop_duplicates(
+                            "Müşteri Grubu", keep="last"
+                        ).set_index("Müşteri Grubu")
+                    )
+                    for idx, row in ortalama_sonuc.iterrows():
+                        grup = row["Müşteri Grubu"]
+                        if grup not in kayitli_harita.index:
+                            continue
+                        for ay in aylar:
+                            col = f"{ay} (%)"
+                            if col in kayitli_harita.columns:
+                                ortalama_sonuc.at[idx, col] = guvenli_sayi(
+                                    kayitli_harita.at[grup, col]
+                                )
+
+                # Bu oturumda yapılan fakat henüz buluta kaydedilmemiş manuel
+                # oranları da kaynağın üzerine uygula.
+                ortalama_ayarlari = (
+                    st.session_state.yil_kapanis_ortalama_manuel_ayarlari.get(
+                        ortalama_baglam, {}
+                    )
+                )
+                for idx, row in ortalama_sonuc.iterrows():
+                    grup = row["Müşteri Grubu"]
+                    for col, value in ortalama_ayarlari.get(grup, {}).items():
+                        if col in [f"{ay} (%)" for ay in aylar]:
+                            ortalama_sonuc.at[idx, col] = guvenli_sayi(value)
+
+                gercek_son_index = aylar.index(son_gerceklesen_ay)
+                ortalama_sonuc["Gerçekleşen Dönem Payı (%)"] = (
+                    ortalama_sonuc[
+                        [f"{ay} (%)" for ay in aylar[:gercek_son_index + 1]]
+                    ].sum(axis=1)
+                )
+
+                ortalama_onceki = ortalama_sonuc.copy()
+                ortalama_editor_config = {
+                    **{
+                        f"{ay} (%)": st.column_config.NumberColumn(
+                            ay, format="%.2f%%"
+                        )
+                        for ay in aylar
+                    },
+                    "Gerçekleşen Dönem Payı (%)": (
+                        st.column_config.NumberColumn(
+                            f"Ocak–{son_gerceklesen_ay} Toplamı",
+                            format="%.2f%%"
+                        )
+                    )
+                }
+                ortalama_duzenlenen = st.data_editor(
+                    ortalama_sonuc,
                     use_container_width=True,
                     hide_index=True,
-                    column_config=yuzde_config
+                    num_rows="fixed",
+                    disabled=[
+                        "Müşteri Grubu", "Gerçekleşen Dönem Payı (%)"
+                    ],
+                    column_config=ortalama_editor_config,
+                    key=(
+                        "yil_kapanis_ortalama_editor_v1_"
+                        f"{TEMA['scheme']}_"
+                        f"{st.session_state.yil_kapanis_ortalama_editor_surumu}_"
+                        + hashlib.sha1(
+                            (
+                                ortalama_baglam + "|" + son_gerceklesen_ay
+                            ).encode("utf-8")
+                        ).hexdigest()[:12]
+                    )
                 )
+
+                ortalama_degisti = False
+                oturum_ortalama_ayarlari = (
+                    st.session_state.yil_kapanis_ortalama_manuel_ayarlari
+                    .setdefault(ortalama_baglam, {})
+                )
+                onceki_harita = ortalama_onceki.set_index("Müşteri Grubu")
+                for idx, row in ortalama_duzenlenen.iterrows():
+                    grup = temiz_metin(row.get("Müşteri Grubu"))
+                    if grup not in onceki_harita.index:
+                        continue
+                    grup_ayarlari = oturum_ortalama_ayarlari.setdefault(
+                        grup, {}
+                    )
+                    for ay in aylar:
+                        col = f"{ay} (%)"
+                        yeni = guvenli_sayi(row.get(col))
+                        eski = guvenli_sayi(onceki_harita.at[grup, col])
+                        if not np.isclose(yeni, eski):
+                            grup_ayarlari[col] = yeni
+                            ortalama_degisti = True
+
+                for col in [f"{ay} (%)" for ay in aylar]:
+                    ortalama_duzenlenen[col] = pd.to_numeric(
+                        ortalama_duzenlenen[col], errors="coerce"
+                    ).fillna(0.0)
+                ortalama_duzenlenen["Gerçekleşen Dönem Payı (%)"] = (
+                    ortalama_duzenlenen[
+                        [f"{ay} (%)" for ay in aylar[:gercek_son_index + 1]]
+                    ].sum(axis=1)
+                )
+                ortalama_sonuc = ortalama_duzenlenen.reindex(
+                    columns=yil_kapanis_sonuc_sutunlari
+                )
+                ortalama_gosterim = ortalama_sonuc.rename(
+                    columns={f"{ay} (%)": ay for ay in aylar}
+                )
+                st.caption(
+                    "Aylık yüzdeler düzenlenebilir; dönem toplamı otomatik "
+                    "hesaplanır. Değişiklikler alttaki tahminlere doğrudan "
+                    "uygulanır."
+                )
+                if ortalama_degisti:
+                    st.rerun()
 
                 # Detay kaynağı önceliği: bu sayfadaki yükleme, Data_New,
                 # ardından seçili revizyondan çağrılan bulut kaydıdır.
@@ -6734,27 +6848,9 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                             manuel_baglam=detay_manuel_baglam,
                             gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
                         )
-                        detay_toplam = yil_kapanis_detay_toplam_satiri(
-                            detay_sonuc, kapanis_yili
-                        )
-                        toplam_fallback = pd.DataFrame([detay_toplam])
-                        for col in [
-                            "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
-                            "Esk. Enf. Başlangıç Tarihi"
-                        ]:
-                            toplam_fallback[col] = pd.NaT
-                        st.dataframe(
-                            toplam_fallback.reindex(
-                                columns=yil_kapanis_detay_sutunlari
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
-                            height=90,
-                            column_config=detay_column_config
-                        )
                         st.caption(
                             "Excel'den tek hücre veya çok hücreli blok "
-                            "kopyalayıp sarı Desi/tarih alanlarına "
+                            "kopyalayıp düzenlenebilir Desi/tarih alanlarına "
                             "yapıştırabilirsiniz."
                         )
                         if detay_degisti:
