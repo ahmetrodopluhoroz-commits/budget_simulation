@@ -1517,13 +1517,26 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
         "".join, axis=1
     )
     sonuc["Uniq ID"] = uniq_ham.where(uniq_ham != "", olusturulan_uniq)
+    # Buluttan çağrılan kapanış detayında daha önce kaydedilmiş manuel
+    # gerçekleşen/yıl sonu toplamlarını koru. Ham operasyon dosyasında bu
+    # alanlar yoksa ilk toplam aylardan oluşturulur.
+    if "Gerçekleşen Toplam Desi" in kaynak.columns:
+        sonuc["Gerçekleşen Toplam Desi"] = kaynak.loc[
+            sonuc.index, "Gerçekleşen Toplam Desi"
+        ].apply(guvenli_sayi).astype(float)
+    else:
+        sonuc["Gerçekleşen Toplam Desi"] = sonuc[
+            yil_kapanis_detay_ay_sutunlari
+        ].sum(axis=1)
+    if "Tahmini Yıl Sonu Toplam Desi" in kaynak.columns:
+        sonuc["Tahmini Yıl Sonu Toplam Desi"] = kaynak.loc[
+            sonuc.index, "Tahmini Yıl Sonu Toplam Desi"
+        ].apply(guvenli_sayi).astype(float)
+    else:
+        sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
+            yil_kapanis_detay_ay_sutunlari
+        ].sum(axis=1)
     sonuc = sonuc.drop_duplicates("Uniq ID", keep="last")
-    sonuc["Gerçekleşen Toplam Desi"] = sonuc[
-        yil_kapanis_detay_ay_sutunlari
-    ].sum(axis=1)
-    sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
-        "Gerçekleşen Toplam Desi"
-    ]
     return sonuc.reindex(columns=yil_kapanis_detay_sutunlari).reset_index(
         drop=True
     )
@@ -1636,9 +1649,15 @@ def yil_kapanis_detay_tahminini_hesapla(
 
 
 def yil_kapanis_detay_toplamlarini_yenile(
-    detay_df, son_gerceklesen_ay
+    detay_df, son_gerceklesen_ay, manuel_baglam=None,
+    gerceklesen_toplam_bazi=None
 ):
-    """Manuel Desi değişikliklerinden sonra dönem ve yıl toplamlarını yeniler."""
+    """Manuel Desi değişikliklerinden sonra dönem ve yıl toplamlarını yeniler.
+
+    Seçili gerçekleşen son aydan sonraki otomatik tahminler gerçekleşene
+    katılmaz. Kullanıcının elle değiştirdiği gelecek aylar ise fiili kabul
+    edilerek Gerçekleşen Toplam Desi'ye eklenir.
+    """
     if detay_df is None or detay_df.empty:
         return pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
     sonuc = detay_df.copy()
@@ -1650,7 +1669,40 @@ def yil_kapanis_detay_toplamlarini_yenile(
     gercek_sutunlar = [
         f"{ay} Desi" for ay in aylar[:son_ay_index + 1]
     ]
-    sonuc["Gerçekleşen Toplam Desi"] = sonuc[gercek_sutunlar].sum(axis=1)
+    if gerceklesen_toplam_bazi is None:
+        gerceklesen = sonuc[gercek_sutunlar].sum(axis=1).astype(float)
+    else:
+        gerceklesen = pd.to_numeric(
+            pd.Series(gerceklesen_toplam_bazi, index=sonuc.index),
+            errors="coerce"
+        ).fillna(0.0).astype(float)
+
+    if manuel_baglam:
+        ayarlar = st.session_state.yil_kapanis_detay_manuel_ayarlari.get(
+            manuel_baglam, {}
+        )
+        gelecek_aylar = aylar[son_ay_index + 1:]
+        for idx, uniq_id in sonuc["Uniq ID"].items():
+            satir_ayarlari = ayarlar.get(temiz_metin(uniq_id), {})
+            for ay in gelecek_aylar:
+                col = f"{ay} Desi"
+                if col not in satir_ayarlari:
+                    continue
+                yeni = guvenli_sayi(sonuc.at[idx, col])
+                if gerceklesen_toplam_bazi is None:
+                    # Otomatik tahmin gerçekleşen sayılmaz; manuel girilen
+                    # değerin tamamı gerçekleşene eklenir.
+                    gerceklesen.at[idx] += yeni
+                else:
+                    # Bulut kaydındaki toplam eski manuel değeri zaten içerir.
+                    # Yalnızca kullanıcının yaptığı farkı ekle.
+                    eski = guvenli_sayi(
+                        satir_ayarlari.get(f"__onceki__{col}", yeni)
+                    )
+                    gerceklesen.at[idx] += yeni - eski
+    sonuc["Gerçekleşen Toplam Desi"] = desi_kg_serisini_yuvarla(
+        gerceklesen
+    )
     sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
         yil_kapanis_detay_ay_sutunlari
     ].sum(axis=1)
@@ -1731,6 +1783,7 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
             yeni = desi_kg_tam_sayiya_yuvarla(row.get(col))
             eski = desi_kg_tam_sayiya_yuvarla(onceki.at[uniq_id, col])
             if not np.isclose(yeni, eski):
+                satir_ayarlari.setdefault(f"__onceki__{col}", eski)
                 satir_ayarlari[col] = yeni
                 degisti = True
         for col in tarih_sutunlari:
@@ -1755,8 +1808,8 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
 def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
     """Detay tablosunun aylık ve dönemsel genel toplam satırını oluşturur."""
     toplam = {col: "" for col in yil_kapanis_detay_sutunlari}
-    toplam["Uniq ID"] = "🔥 GENEL TOPLAM"
-    toplam["Müşteri Adı"] = "🔥 GENEL TOPLAM"
+    toplam["Uniq ID"] = "GENEL TOPLAM"
+    toplam["Müşteri Adı"] = "GENEL TOPLAM"
     toplam["Yıl"] = int(kapanis_yili) if kapanis_yili is not None else ""
     sayisal_sutunlar = (
         yil_kapanis_detay_ay_sutunlari
@@ -4297,6 +4350,17 @@ if sekme_acik_mi[5]:
                                 col: json_uyumlu_deger(row.get(col))
                                 for col in master_data_sutunlari
                             }
+                            # Streamlit/pandas tam sayı hücrelerini 4.0 gibi
+                            # float olarak döndürebilir. Supabase BIGINT alanları
+                            # yalnızca 4 biçimini kabul ettiği için kayıt öncesi
+                            # iki periyot alanını açıkça tam sayıya çevir.
+                            for bigint_col in [
+                                "Yakıt Değişim Periyodu (Ay)",
+                                "Enf. Değişim Periyodu (Ay)"
+                            ]:
+                                record[bigint_col] = guvenli_tamsayi(
+                                    row.get(bigint_col), nullable=True
+                                )
                             mkod = guvenli_metin_kodu(row.get("Müşteri Kodu"))
                             record[MASTER_MAZOT_MANUEL_ALANLAR_DB] = sorted(
                                 st.session_state.master_mazot_ayarlari.get(
@@ -4327,8 +4391,9 @@ if sekme_acik_mi[5]:
                         st.success("Master Data seçilen bulut versiyonuna kaydedildi.")
                     except Exception as ex:
                         st.error(
-                            "Master Data buluta kaydedilemedi. Önce verilen Supabase SQL'ini "
-                            f"çalıştırın. Ayrıntı: {ex}"
+                            "Master Data buluta kaydedilemedi. Veri tipi veya "
+                            "Supabase şeması kontrol edilmeli. "
+                            f"Ayrıntı: {ex}"
                         )
 
                 if md3.button(
@@ -5233,7 +5298,7 @@ if sekme_acik_mi[7]:
                         df_work_2026[col] = sayisal_seri
                         toplam_dict[col] = sayisal_seri.sum()
                     elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                        toplam_dict[col] = "🔥 GENEL TOPLAM"
+                        toplam_dict[col] = "GENEL TOPLAM"
                     else:
                         toplam_dict[col] = "-"
 
@@ -5275,7 +5340,7 @@ if sekme_acik_mi[7]:
                 )
 
                 # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
-                st.markdown("##### 🔥 GENEL TOPLAM")
+                st.markdown("##### GENEL TOPLAM")
                 st.dataframe(
                     df_toplam_formatli,
                     use_container_width=True,
@@ -6355,7 +6420,7 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                         pd.to_numeric(
                             secili_detay_kaynak["Yıl"], errors="coerce"
                         ) == int(kapanis_yili)
-                    ].copy()
+                    ].copy().reset_index(drop=True)
                     gun_oranlari, calisma_orani_etiketi, oran_bulundu = (
                         yil_kapanis_calisma_gunu_oranlari(
                             st.session_state.get(
@@ -6364,9 +6429,15 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                             kapanis_yili
                         )
                     )
+                    gerceklesen_toplam_bazi = None
                     if detay_buluttan_final:
+                        gerceklesen_toplam_bazi = pd.to_numeric(
+                            kapanacak_detay["Gerçekleşen Toplam Desi"],
+                            errors="coerce"
+                        ).fillna(0.0).reset_index(drop=True)
                         detay_sonuc = yil_kapanis_detay_toplamlarini_yenile(
-                            kapanacak_detay, son_gerceklesen_ay
+                            kapanacak_detay, son_gerceklesen_ay,
+                            gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
                         )
                     else:
                         detay_sonuc = yil_kapanis_detay_tahminini_hesapla(
@@ -6383,7 +6454,9 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                         detay_sonuc, detay_manuel_baglam
                     )
                     detay_sonuc = yil_kapanis_detay_toplamlarini_yenile(
-                        detay_sonuc, son_gerceklesen_ay
+                        detay_sonuc, son_gerceklesen_ay,
+                        manuel_baglam=detay_manuel_baglam,
+                        gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
                     )
                     st.caption(
                         f"Kaynak: {detay_kaynak_adi} · Satır: "
@@ -6398,7 +6471,7 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                             "bulunamadığı için aylık katsayılar 1 kabul edildi."
                         )
                     st.caption(
-                        "Sarı hücrelerde aylık Desi ve tarihleri elle "
+                        "Düzenlenebilir hücrelerde aylık Desi ve tarihleri elle "
                         "değiştirebilirsiniz. Manuel değerler toplam, dışa "
                         "aktarım ve bulut kaydında önceliklidir."
                     )
@@ -6461,8 +6534,31 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                     dk3_ph.metric(
                         "Tahmin Edilen Ay", str(len(tamamlanacak_aylar))
                     )
+                    st.caption(
+                        "📌 Aylık toplamlar — aşağıdaki tabloyu kendi içinde "
+                        "kaydırırken bu özet görünür kalır."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([detay_toplam])[
+                            ["Uniq ID"]
+                            + yil_kapanis_detay_ay_sutunlari
+                            + [
+                                "Gerçekleşen Toplam Desi",
+                                "Tahmini Yıl Sonu Toplam Desi"
+                            ]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        height=82,
+                        column_config=detay_column_config
+                    )
 
-                    if ST_AGGRID_AVAILABLE:
+                    # Excel'den çok hücreli kopyala-yapıştır lisanssız AG Grid
+                    # paketinde bulunmadığı için Yıl Kapanışta Streamlit'in
+                    # yerleşik editörü kullanılır. Data_New filtreli görünümü
+                    # AG Grid kullanmaya devam eder.
+                    yil_kapanis_excel_editoru = True
+                    if ST_AGGRID_AVAILABLE and not yil_kapanis_excel_editoru:
                         detay_onceki_df = detay_sonuc.copy()
                         detay_grid_df = detay_sonuc.copy()
                         tarih_sutunlari = [
@@ -6621,16 +6717,22 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                                     ]
                                 )
                             ],
+                            num_rows="fixed",
                             key=(
-                                "yil_kapanis_detay_editor_v2_"
-                                f"{int(kapanis_yili)}_{son_gerceklesen_ay}"
+                                "yil_kapanis_detay_editor_v3_"
+                                f"{TEMA['scheme']}_"
+                                + hashlib.sha1(
+                                    detay_manuel_baglam.encode("utf-8")
+                                ).hexdigest()[:12]
                             )
                         )
-                        yil_kapanis_manuel_degisikliklerini_kaydet(
+                        detay_degisti = yil_kapanis_manuel_degisikliklerini_kaydet(
                             detay_onceki_df, detay_sonuc, detay_manuel_baglam
                         )
                         detay_sonuc = yil_kapanis_detay_toplamlarini_yenile(
-                            detay_sonuc, son_gerceklesen_ay
+                            detay_sonuc, son_gerceklesen_ay,
+                            manuel_baglam=detay_manuel_baglam,
+                            gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
                         )
                         detay_toplam = yil_kapanis_detay_toplam_satiri(
                             detay_sonuc, kapanis_yili
@@ -6651,9 +6753,15 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                             column_config=detay_column_config
                         )
                         st.caption(
-                            "Sabit dip toplam için requirements.txt dosyasında "
-                            "streamlit-aggrid==1.2.1.post2 bulunmalıdır."
+                            "Excel'den tek hücre veya çok hücreli blok "
+                            "kopyalayıp sarı Desi/tarih alanlarına "
+                            "yapıştırabilirsiniz."
                         )
+                        if detay_degisti:
+                            # İlk çalıştırmada editör yeni hücreyi döndürür;
+                            # ikinci ve tek seferlik çalıştırmada yeni toplamlar
+                            # aynı satırlarda görünür hale gelir.
+                            st.rerun()
 
                     # Griddeki manuel değerler Excel/CSV, dip toplam ve bulut
                     # kaydına aynı anda yansısın.
