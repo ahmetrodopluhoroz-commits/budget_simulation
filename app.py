@@ -3447,11 +3447,11 @@ if sekme_acik_mi[2]:
                 disabled=kilitli,
                 column_config={
                     **{
-                        col: st.column_config.NumberColumn(col, format="%.0f")
+                        col: st.column_config.NumberColumn(col, format="localized",     step=1)
                         for col in MUSTERI_AYLIK_KG_KOLONLARI
                     },
                     MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
-                        MUSTERI_TOPLAM_KOLONU, format="%.0f"
+                        MUSTERI_TOPLAM_KOLONU, format="localized",     step=1
                     ),
                     "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn(
                         "Yeni/Bütçelenen Müşteri",
@@ -4912,7 +4912,7 @@ if sekme_acik_mi[7]:
                     height=300,
                     column_config={
                         col: st.column_config.NumberColumn(
-                            col, format="%.0f"
+                            col, format="localized",     step=1
                         )
                         for col in tarihsel_gosterim_kolonlari_9
                         if col not in ["Müşteri Kodu", "Müşteri Grubu"]
@@ -5601,10 +5601,10 @@ if sekme_acik_mi[7]:
                     disabled=kilitli_9,
                     column_config={
                         donem_24_adi_9: st.column_config.NumberColumn(
-                            donem_24_adi_9, format="%.0f"
+                            donem_24_adi_9, format="localized",     step=1
                         ),
                         donem_25_adi_9: st.column_config.NumberColumn(
-                            donem_25_adi_9, format="%.0f"
+                            donem_25_adi_9, format="localized",     step=1
                         ),
                         pay_25_adi_9: st.column_config.NumberColumn(
                             pay_25_adi_9, format="%.2f%%"
@@ -6598,7 +6598,7 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                     detay_column_config = {
                         **{
                             col: st.column_config.NumberColumn(
-                                col, format="%.0f"
+                                col, format="localized",     step=1
                             )
                             for col in (
                                 yil_kapanis_detay_ay_sutunlari
@@ -7695,7 +7695,7 @@ if sekme_acik_mi[11]:
                     },
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="%.0f"
+                            col, format="localized",     step=1
                         ) for col in desi_sutunlari
                     },
                     **{
