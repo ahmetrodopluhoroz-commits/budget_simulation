@@ -2345,6 +2345,15 @@ def data_new_tablosunu_hesapla(
         )
     if DATA_NEW_TAHMIN_KAYNAGI_DB not in sonuc.columns:
         sonuc[DATA_NEW_TAHMIN_KAYNAGI_DB] = ""
+    # Ham giriş tablosunda hedef yıl sütunları henüz bulunmaz. Desi Tahminleme
+    # kaydı eşleşmese bile eski hesap akışının güvenle devam edebilmesi için
+    # teknik hedef yuvalarını hesap başlamadan oluştur.
+    for col in data_new_2026_desi_sutunlari + data_new_2026_tutar_sutunlari:
+        if col not in sonuc.columns:
+            sonuc[col] = 0.0
+    for col in data_new_2026_fiyat_sutunlari:
+        if col not in sonuc.columns:
+            sonuc[col] = np.nan
 
     master = sutun_adlarini_standartlastir(master_df) if master_df is not None else pd.DataFrame()
     master_parametre_eslesmesi = pd.Series(False, index=sonuc.index)
@@ -2436,7 +2445,10 @@ def data_new_tablosunu_hesapla(
             "Desi Tahminleme"
         )
         mevcut_tahmin = desi_kg_serisini_yuvarla(
-            sonuc[f"2026 {ay} Desi"]
+            sonuc.get(
+                f"2026 {ay} Desi",
+                pd.Series(0.0, index=sonuc.index, dtype=float)
+            )
         )
         sonuc[f"2026 {ay} Desi"] = mevcut_tahmin.where(
             tahminden_gelen, hesaplanan_desi
