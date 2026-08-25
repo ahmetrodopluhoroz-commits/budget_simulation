@@ -429,6 +429,8 @@ BUYUME_AYLIK_ORANLAR_DB = "Aylık Büyüme Oranları"
 KG_MUSTERI_DB_TABLOSU = "kg_musteri_tablosu"
 YIL_KAPANIS_DB_TABLOSU = "yil_kapanis_tablosu"
 YIL_KAPANIS_DETAY_DB_TABLOSU = "yil_kapanis_detay_tablosu"
+DESI_TAHMIN_ORTALAMA_DB_TABLOSU = "desi_tahmin_ortalama_tablosu"
+DESI_TAHMIN_DETAY_DB_TABLOSU = "desi_tahmin_detay_tablosu"
 kg_musteri_sutunlari = [
     "Yıl", "Müşteri Kodu", "Müşteri Grubu"
 ] + [f"{ay} Kg" for ay in aylar]
@@ -449,6 +451,15 @@ yil_kapanis_detay_sutunlari = (
     + yil_kapanis_detay_ay_sutunlari
     + ["Gerçekleşen Toplam Desi", "Tahmini Yıl Sonu Toplam Desi"]
 )
+desi_tahmin_detay_sutunlari = (
+    yil_kapanis_detay_kimlik_sutunlari
+    + ["Kaynak Yıl", "Kaynak Yıl Toplam Desi"]
+    + yil_kapanis_detay_ay_sutunlari
+    + ["Tahmini Yıl Toplam Desi"]
+)
+desi_tahmin_ortalama_sutunlari = [
+    "Müşteri Grubu"
+] + [f"{ay} (%)" for ay in aylar] + ["Toplam (%)"]
 
 # ============================================================
 # SESSION STATE (OTOMATİK YÜKLEME DAHİL)
@@ -551,6 +562,22 @@ if "yil_kapanis_ortalama_manuel_ayarlari" not in st.session_state:
     st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
 if "yil_kapanis_ortalama_editor_surumu" not in st.session_state:
     st.session_state.yil_kapanis_ortalama_editor_surumu = 0
+if "desi_tahmin_ortalama_manuel_ayarlari" not in st.session_state:
+    st.session_state.desi_tahmin_ortalama_manuel_ayarlari = {}
+if "desi_tahmin_detay_manuel_ayarlari" not in st.session_state:
+    st.session_state.desi_tahmin_detay_manuel_ayarlari = {}
+if "desi_tahmin_bulut_ortalama_df" not in st.session_state:
+    st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
+if "desi_tahmin_bulut_detay_df" not in st.session_state:
+    st.session_state.desi_tahmin_bulut_detay_df = pd.DataFrame()
+if "desi_tahmin_bulut_ayarlari" not in st.session_state:
+    st.session_state.desi_tahmin_bulut_ayarlari = {}
+if "desi_tahmin_buyume_df" not in st.session_state:
+    st.session_state.desi_tahmin_buyume_df = pd.DataFrame()
+if "desi_tahmin_bulut_revizyon" not in st.session_state:
+    st.session_state.desi_tahmin_bulut_revizyon = None
+if "desi_tahmin_editor_surumu" not in st.session_state:
+    st.session_state.desi_tahmin_editor_surumu = 0
 if "baz_birim_fiyat_df" not in st.session_state:
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
@@ -771,6 +798,14 @@ def revizyon_oturumunu_temizle():
     st.session_state.yil_kapanis_detay_manuel_ayarlari = {}
     st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
     st.session_state.yil_kapanis_ortalama_editor_surumu += 1
+    st.session_state.desi_tahmin_ortalama_manuel_ayarlari = {}
+    st.session_state.desi_tahmin_detay_manuel_ayarlari = {}
+    st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
+    st.session_state.desi_tahmin_bulut_detay_df = pd.DataFrame()
+    st.session_state.desi_tahmin_bulut_ayarlari = {}
+    st.session_state.desi_tahmin_buyume_df = pd.DataFrame()
+    st.session_state.desi_tahmin_bulut_revizyon = None
+    st.session_state.desi_tahmin_editor_surumu += 1
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
     )
@@ -1814,8 +1849,8 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
 def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
     """Detay tablosunun aylık ve dönemsel genel toplam satırını oluşturur."""
     toplam = {col: "" for col in yil_kapanis_detay_sutunlari}
-    toplam["Uniq ID"] = " GENEL TOPLAM"
-    toplam["Müşteri Adı"] = " GENEL TOPLAM"
+    toplam["Uniq ID"] = "🔥 GENEL TOPLAM"
+    toplam["Müşteri Adı"] = "🔥 GENEL TOPLAM"
     toplam["Yıl"] = int(kapanis_yili) if kapanis_yili is not None else ""
     sayisal_sutunlar = (
         yil_kapanis_detay_ay_sutunlari
@@ -1826,6 +1861,261 @@ def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
             pd.to_numeric(detay_df[col], errors="coerce").fillna(0.0).sum()
         )
     return toplam
+
+
+def desi_tahmin_ortalamasini_hesapla(kg_musteri_df, referans_yillar):
+    """Seçilen tüm yılların grup/ay dağılımlarının aritmetik ortalaması."""
+    yillar = sorted({int(yil) for yil in referans_yillar})
+    matrisler = {
+        yil: yil_kapanis_yuzde_matrisi(kg_musteri_df, yil)
+        for yil in yillar
+    }
+    satirlar = []
+    for grup in ["DİĞER", "HOROZ CÜZDAN", "MP"]:
+        ayliklar = {}
+        for ay in aylar:
+            degerler = []
+            for matris in matrisler.values():
+                grup_satiri = matris[matris["Müşteri Grubu"] == grup]
+                if not grup_satiri.empty:
+                    degerler.append(guvenli_sayi(grup_satiri.iloc[0][ay]))
+            ayliklar[f"{ay} (%)"] = (
+                float(np.mean(degerler)) if degerler else 0.0
+            )
+        satirlar.append({
+            "Müşteri Grubu": grup,
+            **ayliklar,
+            "Toplam (%)": sum(ayliklar.values())
+        })
+    return matrisler, pd.DataFrame(
+        satirlar, columns=desi_tahmin_ortalama_sutunlari
+    )
+
+
+def desi_tahmin_calisma_gunu_oranlari(takvim_df, tahmin_yili):
+    """Önce YYtoYY satırını, yoksa iki yılın gün oranını kullanır."""
+    kaynak_yil = int(tahmin_yili) - 1
+    etiket = f"{str(kaynak_yil)[-2:]}to{str(int(tahmin_yili))[-2:]}"
+    varsayilan = {ay: 1.0 for ay in aylar}
+    if takvim_df is None or takvim_df.empty or "YIL" not in takvim_df.columns:
+        return varsayilan, etiket, False
+
+    takvim = takvim_df.copy()
+    yil_serisi = takvim["YIL"].astype(str).str.strip()
+    hazir_oran = takvim[yil_serisi.str.casefold() == etiket.casefold()]
+    if not hazir_oran.empty:
+        return (
+            {
+                ay: guvenli_sayi(hazir_oran.iloc[0].get(ay, 1.0))
+                for ay in aylar
+            },
+            etiket,
+            True
+        )
+
+    onceki = takvim[yil_serisi == str(kaynak_yil)]
+    hedef = takvim[yil_serisi == str(int(tahmin_yili))]
+    if not onceki.empty and not hedef.empty:
+        oranlar = {}
+        for ay in aylar:
+            onceki_gun = guvenli_sayi(onceki.iloc[0].get(ay, 0.0))
+            hedef_gun = guvenli_sayi(hedef.iloc[0].get(ay, 0.0))
+            oranlar[ay] = (
+                hedef_gun / onceki_gun if onceki_gun > 0 else 0.0
+            )
+        return oranlar, etiket, True
+    return varsayilan, etiket, False
+
+
+def desi_tahmin_buyume_haritasi(buyume_df):
+    """Bulut/oturum büyüme kartlarını müşteri ve ay bazlı haritaya çevirir."""
+    harita = {}
+    if buyume_df is not None and not buyume_df.empty:
+        for _, row in buyume_df.iterrows():
+            musteri_kodu = guvenli_metin_kodu(row.get("Müşteri Kodu"))
+            if not musteri_kodu:
+                continue
+            aylik_json = row.get(BUYUME_AYLIK_ORANLAR_DB, {})
+            if isinstance(aylik_json, str):
+                try:
+                    aylik_json = json.loads(aylik_json)
+                except Exception:
+                    aylik_json = {}
+            if not isinstance(aylik_json, dict):
+                aylik_json = {}
+            varsayilan = guvenli_sayi(row.get("KULLANICAK BÜYÜME", 0.0))
+            harita[musteri_kodu] = {
+                ay: guvenli_sayi(
+                    aylik_json.get(ay, row.get(ay, varsayilan))
+                )
+                for ay in aylar
+            }
+
+    for musteri_kodu, ayarlar in st.session_state.get(
+        "buyume_ayarlari", {}
+    ).items():
+        kod = guvenli_metin_kodu(musteri_kodu)
+        varsayilan = guvenli_sayi(ayarlar.get("KULLANICAK BÜYÜME", 0.0))
+        harita[kod] = {
+            ay: guvenli_sayi(ayarlar.get(ay, varsayilan))
+            for ay in aylar
+        }
+    return harita
+
+
+def desi_tahmin_detayini_hazirla(dataframe):
+    """Bulut veya hesaplama sonucunu Desi Tahminleme şemasına getirir."""
+    if dataframe is None or dataframe.empty:
+        return pd.DataFrame(columns=desi_tahmin_detay_sutunlari)
+    kaynak = sutun_adlarini_standartlastir(dataframe)
+    sonuc = kaynak.reindex(columns=desi_tahmin_detay_sutunlari).copy()
+    for col in ["Yıl", "Kaynak Yıl"]:
+        sonuc[col] = sonuc[col].apply(
+            lambda value: guvenli_tamsayi(value, nullable=True)
+        )
+    for col in (
+        ["Kaynak Yıl Toplam Desi", "Tahmini Yıl Toplam Desi"]
+        + yil_kapanis_detay_ay_sutunlari
+    ):
+        sonuc[col] = desi_kg_serisini_yuvarla(sonuc[col])
+    for col in [
+        "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
+        "Esk. Enf. Başlangıç Tarihi"
+    ]:
+        sonuc[col] = pd.to_datetime(
+            sonuc[col], errors="coerce", dayfirst=True
+        )
+    return sonuc.reset_index(drop=True)
+
+
+def desi_tahmin_detayini_hesapla(
+    kapanis_df, kaynak_yil, ortalama_df, calisma_gunu_oranlari,
+    buyume_haritasi
+):
+    """Kapanmış yıldan sonraki yılın 12 aylık Desi tahminini üretir."""
+    kapanis = yil_kapanis_detayini_hazirla(kapanis_df)
+    kapanis = kapanis[
+        pd.to_numeric(kapanis["Yıl"], errors="coerce") == int(kaynak_yil)
+    ].copy().reset_index(drop=True)
+    if kapanis.empty:
+        return pd.DataFrame(columns=desi_tahmin_detay_sutunlari), 0
+
+    tahmin_yili = int(kaynak_yil) + 1
+    oran_haritasi = ortalama_df.drop_duplicates(
+        "Müşteri Grubu", keep="last"
+    ).set_index("Müşteri Grubu")
+    satir_gruplari = kapanis["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
+    musteri_kodlari = kapanis["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    kaynak_toplam = kapanis[yil_kapanis_detay_ay_sutunlari].sum(
+        axis=1
+    ).astype(float)
+
+    sonuc = kapanis[yil_kapanis_detay_kimlik_sutunlari].copy()
+    sonuc["Kaynak Yıl"] = int(kaynak_yil)
+    sonuc["Kaynak Yıl Toplam Desi"] = desi_kg_serisini_yuvarla(
+        kaynak_toplam
+    )
+    sonuc["Yıl"] = tahmin_yili
+
+    uniq_parcalari = [
+        "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
+        "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+        "İlk Okutma Şubesi", "Müşteri Kodu"
+    ]
+    sonuc["Uniq ID"] = sonuc[uniq_parcalari].fillna("").astype(str).agg(
+        "".join, axis=1
+    )
+
+    for ay in aylar:
+        pay_haritasi = {
+            grup: guvenli_sayi(oran_haritasi.at[grup, f"{ay} (%)"])
+            for grup in oran_haritasi.index
+        }
+        aylik_pay = satir_gruplari.map(pay_haritasi).fillna(0.0).to_numpy(
+            dtype=float
+        ) / 100.0
+        aylik_buyume = musteri_kodlari.map(
+            lambda kod: guvenli_sayi(buyume_haritasi.get(kod, {}).get(ay, 0.0))
+        ).to_numpy(dtype=float) / 100.0
+        gun_katsayisi = guvenli_sayi(
+            calisma_gunu_oranlari.get(ay, 1.0)
+        )
+        sonuc[f"{ay} Desi"] = desi_kg_serisini_yuvarla(
+            kaynak_toplam * aylik_pay * gun_katsayisi * (1.0 + aylik_buyume)
+        )
+
+    sonuc["Tahmini Yıl Toplam Desi"] = sonuc[
+        yil_kapanis_detay_ay_sutunlari
+    ].sum(axis=1)
+    eslesmeyen = int((~musteri_kodlari.isin(set(buyume_haritasi))).sum())
+    return (
+        sonuc.reindex(columns=desi_tahmin_detay_sutunlari), eslesmeyen
+    )
+
+
+def desi_tahmin_manuel_baglami(
+    revizyon_id, kaynak_yil, referans_yillar
+):
+    return "|".join([
+        temiz_metin(revizyon_id, "yerel"), str(int(kaynak_yil)),
+        ",".join(map(str, sorted({int(y) for y in referans_yillar})))
+    ])
+
+
+def desi_tahmin_manuel_degerlerini_uygula(detay_df, baglam):
+    if detay_df is None or detay_df.empty:
+        return detay_df
+    sonuc = detay_df.copy()
+    ayarlar = st.session_state.desi_tahmin_detay_manuel_ayarlari.get(
+        baglam, {}
+    )
+    index_haritasi = {
+        temiz_metin(value): idx for idx, value in sonuc["Uniq ID"].items()
+    }
+    for uniq_id, degisiklikler in ayarlar.items():
+        idx = index_haritasi.get(temiz_metin(uniq_id))
+        if idx is None:
+            continue
+        for col, value in degisiklikler.items():
+            if col in yil_kapanis_detay_ay_sutunlari:
+                sonuc.at[idx, col] = desi_kg_tam_sayiya_yuvarla(value)
+    sonuc["Tahmini Yıl Toplam Desi"] = sonuc[
+        yil_kapanis_detay_ay_sutunlari
+    ].sum(axis=1)
+    return sonuc.reindex(columns=desi_tahmin_detay_sutunlari)
+
+
+def desi_tahmin_manuel_degisikliklerini_kaydet(
+    onceki_df, duzenlenen_df, baglam
+):
+    if (
+        onceki_df is None or onceki_df.empty
+        or duzenlenen_df is None or duzenlenen_df.empty
+    ):
+        return False
+    onceki = onceki_df.copy()
+    onceki["Uniq ID"] = onceki["Uniq ID"].apply(temiz_metin)
+    onceki = onceki.drop_duplicates("Uniq ID", keep="last").set_index(
+        "Uniq ID"
+    )
+    ayarlar = st.session_state.desi_tahmin_detay_manuel_ayarlari.setdefault(
+        baglam, {}
+    )
+    degisti = False
+    for _, row in duzenlenen_df.iterrows():
+        uniq_id = temiz_metin(row.get("Uniq ID"))
+        if not uniq_id or uniq_id not in onceki.index:
+            continue
+        satir_ayarlari = ayarlar.setdefault(uniq_id, {})
+        for col in yil_kapanis_detay_ay_sutunlari:
+            yeni = desi_kg_tam_sayiya_yuvarla(row.get(col))
+            eski = desi_kg_tam_sayiya_yuvarla(onceki.at[uniq_id, col])
+            if not np.isclose(yeni, eski):
+                satir_ayarlari[col] = yeni
+                degisti = True
+        if not satir_ayarlari:
+            ayarlar.pop(uniq_id, None)
+    return degisti
 
 
 def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
@@ -3202,6 +3492,8 @@ if sekme_acik_mi[1]:
                                 "baz_birim_fiyat_tablosu", "data_new_tablosu",
                                 "kg_musteri_tablosu", "yil_kapanis_tablosu",
                                 "yil_kapanis_detay_tablosu",
+                                "desi_tahmin_ortalama_tablosu",
+                                "desi_tahmin_detay_tablosu",
                                 "takvim_revizyon_tablosu",
                                 "enflasyon_revizyon_tablosu"
                             ]
@@ -3298,6 +3590,8 @@ if sekme_acik_mi[1]:
                     "baz_birim_fiyat_tablosu", "data_new_tablosu",
                     "kg_musteri_tablosu", "yil_kapanis_tablosu",
                     "yil_kapanis_detay_tablosu",
+                    "desi_tahmin_ortalama_tablosu",
+                    "desi_tahmin_detay_tablosu",
                     "takvim_revizyon_tablosu",
                     "enflasyon_revizyon_tablosu"
                 ]
@@ -3447,11 +3741,11 @@ if sekme_acik_mi[2]:
                 disabled=kilitli,
                 column_config={
                     **{
-                        col: st.column_config.NumberColumn(col, format="localized",     step=1)
+                        col: st.column_config.NumberColumn(col, format="%.0f")
                         for col in MUSTERI_AYLIK_KG_KOLONLARI
                     },
                     MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
-                        MUSTERI_TOPLAM_KOLONU, format="localized",     step=1
+                        MUSTERI_TOPLAM_KOLONU, format="%.0f"
                     ),
                     "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn(
                         "Yeni/Bütçelenen Müşteri",
@@ -4912,7 +5206,7 @@ if sekme_acik_mi[7]:
                     height=300,
                     column_config={
                         col: st.column_config.NumberColumn(
-                            col, format="localized",     step=1
+                            col, format="%.0f"
                         )
                         for col in tarihsel_gosterim_kolonlari_9
                         if col not in ["Müşteri Kodu", "Müşteri Grubu"]
@@ -5304,7 +5598,7 @@ if sekme_acik_mi[7]:
                         df_work_2026[col] = sayisal_seri
                         toplam_dict[col] = sayisal_seri.sum()
                     elif col in ["Müşteri Kodu", "Müşteri Adı"]:
-                        toplam_dict[col] = " GENEL TOPLAM"
+                        toplam_dict[col] = "🔥 GENEL TOPLAM"
                     else:
                         toplam_dict[col] = "-"
 
@@ -5346,7 +5640,7 @@ if sekme_acik_mi[7]:
                 )
 
                 # Genel toplam, kayan tablonun dışında ve hemen altında sabit görünür.
-                st.markdown("#####  GENEL TOPLAM")
+                st.markdown("##### 🔥 GENEL TOPLAM")
                 st.dataframe(
                     df_toplam_formatli,
                     use_container_width=True,
@@ -5601,10 +5895,10 @@ if sekme_acik_mi[7]:
                     disabled=kilitli_9,
                     column_config={
                         donem_24_adi_9: st.column_config.NumberColumn(
-                            donem_24_adi_9, format="localized",     step=1
+                            donem_24_adi_9, format="%.0f"
                         ),
                         donem_25_adi_9: st.column_config.NumberColumn(
-                            donem_25_adi_9, format="localized",     step=1
+                            donem_25_adi_9, format="%.0f"
                         ),
                         pay_25_adi_9: st.column_config.NumberColumn(
                             pay_25_adi_9, format="%.2f%%"
@@ -5903,16 +6197,11 @@ if sekme_acik_mi[7]:
                         )
 
 # ------------------------------------------------------------
-# 9 / 13. SAYFA: YIL KAPANIŞ VE AYNI HESABIN DESİ TAHMİNLEME GÖRÜNÜMÜ
+# 9. SAYFA: YIL KAPANIŞ
 # ------------------------------------------------------------
-if sekme_acik_mi[8] or sekme_acik_mi[12]:
+if sekme_acik_mi[8]:
     with sekmeler[8]:
-        desi_tahmin_modu = sekme_acik_mi[12]
-        st.title(
-            "🔮 Desi Tahminleme"
-            if desi_tahmin_modu else
-            "🏁 Yıl Kapanış ve Sezon Dağılımı"
-        )
+        st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
         st.caption(
             "Verisi bulunan iki yılı seçerek MP, HOROZ CÜZDAN ve DİĞER "
             "gruplarının aylık paylarını ve iki yılın aritmetik ortalamasını "
@@ -6598,7 +6887,7 @@ if sekme_acik_mi[8] or sekme_acik_mi[12]:
                     detay_column_config = {
                         **{
                             col: st.column_config.NumberColumn(
-                                col, format="localized",     step=1
+                                col, format="%.0f"
                             )
                             for col in (
                                 yil_kapanis_detay_ay_sutunlari
@@ -7695,7 +7984,7 @@ if sekme_acik_mi[11]:
                     },
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="localized",     step=1
+                            col, format="%.0f"
                         ) for col in desi_sutunlari
                     },
                     **{
@@ -8072,3 +8361,669 @@ if sekme_acik_mi[11]:
                             "Data_New buluta kaydedilemedi. Önce yeni Supabase "
                             f"SQL dosyasını çalıştırın. Ayrıntı: {ex}"
                         )
+
+
+# ------------------------------------------------------------
+# 13. SAYFA: DESİ TAHMİNLEME
+# ------------------------------------------------------------
+if sekme_acik_mi[12]:
+    with sekmeler[12]:
+        st.title("🔮 Desi Tahminleme")
+        st.caption(
+            "Yıl Kapanışında tamamlanan yılın satır toplamlarını; seçilen "
+            "referans yılların düzenlenebilir aylık dağılımı, müşterinin aylık "
+            "büyümesi ve YYtoYY çalışma günü katsayısıyla bir sonraki yıla taşır."
+        )
+
+        desi_rev_id = sayfa_aktif_revizyonunu_getir()
+
+        def desi_tahmin_bulut_verilerini_yukle(revizyon_id):
+            """Tahminin dört bulut kaynağını aynı revizyon için oturuma alır."""
+            yuklenenler = []
+            kapanis_kayitlari = supabase_revizyon_kayitlarini_getir(
+                YIL_KAPANIS_DETAY_DB_TABLOSU, revizyon_id
+            )
+            if kapanis_kayitlari:
+                kapanis_raw = pd.DataFrame(kapanis_kayitlari).drop(
+                    columns=["id", "revizyon_id", "created_at", "updated_at"],
+                    errors="ignore"
+                )
+                st.session_state.yil_kapanis_detay_bulut_df = (
+                    yil_kapanis_detayini_hazirla(kapanis_raw)
+                )
+                yuklenenler.append(
+                    f"Yıl Kapanış: {len(kapanis_kayitlari):,}"
+                )
+
+            kg_kayitlari = supabase_revizyon_kayitlarini_getir(
+                KG_MUSTERI_DB_TABLOSU, revizyon_id
+            )
+            if kg_kayitlari:
+                kg_raw = pd.DataFrame(kg_kayitlari).drop(
+                    columns=["id", "revizyon_id", "created_at", "updated_at"],
+                    errors="ignore"
+                )
+                st.session_state.yil_kapanis_kg_df = (
+                    kg_musteri_verisini_hazirla(kg_raw)
+                )
+                yuklenenler.append(f"Müşteri-Kg: {len(kg_kayitlari):,}")
+
+            buyume_kayitlari = supabase_revizyon_kayitlarini_getir(
+                "buyume_tablosu", revizyon_id
+            )
+            st.session_state.desi_tahmin_buyume_df = (
+                pd.DataFrame(buyume_kayitlari).drop(
+                    columns=["id", "revizyon_id", "created_at", "updated_at"],
+                    errors="ignore"
+                )
+                if buyume_kayitlari else pd.DataFrame()
+            )
+            if buyume_kayitlari:
+                yuklenenler.append(f"Büyüme: {len(buyume_kayitlari):,}")
+
+            try:
+                ortalama_kayitlari = supabase_revizyon_kayitlarini_getir(
+                    DESI_TAHMIN_ORTALAMA_DB_TABLOSU, revizyon_id
+                )
+            except Exception:
+                ortalama_kayitlari = []
+            if ortalama_kayitlari:
+                ortalama_raw = pd.DataFrame(ortalama_kayitlari)
+                ilk = ortalama_raw.iloc[0]
+                referanslar = ilk.get("Referans Yıllar", [])
+                if isinstance(referanslar, str):
+                    try:
+                        referanslar = json.loads(referanslar)
+                    except Exception:
+                        referanslar = []
+                st.session_state.desi_tahmin_bulut_ayarlari = {
+                    "kaynak_yil": guvenli_tamsayi(
+                        ilk.get("Kaynak Yıl"), nullable=True
+                    ),
+                    "tahmin_yili": guvenli_tamsayi(
+                        ilk.get("Tahmin Yılı"), nullable=True
+                    ),
+                    "referans_yillar": [
+                        int(yil) for yil in (referanslar or [])
+                    ]
+                }
+                st.session_state.desi_tahmin_bulut_ortalama_df = (
+                    ortalama_raw.drop(
+                        columns=[
+                            "id", "revizyon_id", "Referans Yıllar",
+                            "Kaynak Yıl", "Tahmin Yılı", "created_at",
+                            "updated_at"
+                        ],
+                        errors="ignore"
+                    ).reindex(columns=desi_tahmin_ortalama_sutunlari)
+                )
+                yuklenenler.append("Tahmin ortalaması: 3 grup")
+            else:
+                st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
+                st.session_state.desi_tahmin_bulut_ayarlari = {}
+
+            try:
+                detay_kayitlari = supabase_revizyon_kayitlarini_getir(
+                    DESI_TAHMIN_DETAY_DB_TABLOSU, revizyon_id
+                )
+            except Exception:
+                detay_kayitlari = []
+            if detay_kayitlari:
+                detay_raw = pd.DataFrame(detay_kayitlari)
+                st.session_state.desi_tahmin_bulut_detay_df = (
+                    desi_tahmin_detayini_hazirla(
+                        detay_raw.drop(
+                            columns=[
+                                "id", "revizyon_id", "created_at", "updated_at",
+                                "Manuel Desi Ayarları"
+                            ],
+                            errors="ignore"
+                        )
+                    )
+                )
+                ayarlar = st.session_state.desi_tahmin_bulut_ayarlari
+                if ayarlar.get("kaynak_yil") and ayarlar.get("referans_yillar"):
+                    baglam = desi_tahmin_manuel_baglami(
+                        revizyon_id, ayarlar["kaynak_yil"],
+                        ayarlar["referans_yillar"]
+                    )
+                    manuel_harita = {}
+                    for _, row in detay_raw.iterrows():
+                        ham = row.get("Manuel Desi Ayarları", {})
+                        if isinstance(ham, str):
+                            try:
+                                ham = json.loads(ham)
+                            except Exception:
+                                ham = {}
+                        if isinstance(ham, dict) and ham:
+                            manuel_harita[temiz_metin(row.get("Uniq ID"))] = {
+                                col: desi_kg_tam_sayiya_yuvarla(value)
+                                for col, value in ham.items()
+                                if col in yil_kapanis_detay_ay_sutunlari
+                            }
+                    st.session_state.desi_tahmin_detay_manuel_ayarlari[
+                        baglam
+                    ] = manuel_harita
+                yuklenenler.append(f"Tahmin detayı: {len(detay_kayitlari):,}")
+            else:
+                st.session_state.desi_tahmin_bulut_detay_df = pd.DataFrame()
+
+            st.session_state.desi_tahmin_bulut_revizyon = revizyon_id
+            st.session_state.desi_tahmin_editor_surumu += 1
+            return yuklenenler
+
+        otomatik_yukleme_hatasi = None
+        if (
+            client and desi_rev_id
+            and st.session_state.desi_tahmin_bulut_revizyon != desi_rev_id
+        ):
+            try:
+                desi_tahmin_bulut_verilerini_yukle(desi_rev_id)
+            except Exception as ex:
+                otomatik_yukleme_hatasi = ex
+                st.session_state.desi_tahmin_bulut_revizyon = desi_rev_id
+
+        dy1, dy2 = st.columns(2)
+        if dy1.button(
+            "🔄 Kapanış, Büyüme ve Tahmini Buluttan Getir",
+            use_container_width=True,
+            disabled=(not client or not desi_rev_id),
+            key="btn_desi_tahmin_cloud_load"
+        ):
+            try:
+                yuklenenler = desi_tahmin_bulut_verilerini_yukle(desi_rev_id)
+                st.success(
+                    "Buluttan getirildi: "
+                    + (" · ".join(yuklenenler) if yuklenenler else "kayıt yok")
+                )
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Desi tahmin kaynakları getirilemedi: {ex}")
+
+        if dy2.button(
+            "🧹 Desi Tahminleme Hafızasını Temizle",
+            use_container_width=True,
+            key="btn_desi_tahmin_clear"
+        ):
+            st.session_state.desi_tahmin_ortalama_manuel_ayarlari = {}
+            st.session_state.desi_tahmin_detay_manuel_ayarlari = {}
+            st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
+            st.session_state.desi_tahmin_bulut_detay_df = pd.DataFrame()
+            st.session_state.desi_tahmin_bulut_ayarlari = {}
+            st.session_state.desi_tahmin_editor_surumu += 1
+            st.rerun()
+
+        if otomatik_yukleme_hatasi is not None:
+            st.warning(
+                "Bazı tahmin kaynakları otomatik getirilemedi. Gerekirse "
+                "buluttan getir butonunu kullanın."
+            )
+
+        tarihsel_kg = kg_musteri_verisini_hazirla(
+            st.session_state.get("data_sayfası_df", pd.DataFrame())
+        )
+        guncel_kg = kg_musteri_verisini_hazirla(
+            st.session_state.get("df_2026_buyume_9", pd.DataFrame()),
+            varsayilan_yil=2026
+        )
+        tahmin_kg_kaynak = kg_musteri_kaynaklarini_birlestir(
+            tarihsel_kg, guncel_kg,
+            st.session_state.get("yil_kapanis_kg_df", pd.DataFrame())
+        )
+        kapanis_kaynak = st.session_state.get(
+            "yil_kapanis_detay_bulut_df", pd.DataFrame()
+        )
+
+        kapanis_yillari = sorted({
+            int(yil) for yil in pd.to_numeric(
+                kapanis_kaynak.get("Yıl", pd.Series(dtype=float)),
+                errors="coerce"
+            ).dropna().tolist()
+        })
+        referans_secenekleri = sorted({
+            int(yil) for yil in pd.to_numeric(
+                tahmin_kg_kaynak.get("Yıl", pd.Series(dtype=float)),
+                errors="coerce"
+            ).dropna().tolist()
+        })
+
+        if not kapanis_yillari:
+            st.warning(
+                "Önce Yıl Kapanış sonucunu buluta kaydedin. Tahminin kaynak "
+                "yılı yil_kapanis_detay_tablosu kayıtlarından alınır."
+            )
+        elif not referans_secenekleri:
+            st.warning(
+                "Aylık dağılım için Müşteri-Kg geçmişi bulunamadı. Yıl Kapanış "
+                "sayfasından kaynak yılları yükleyip buluta kaydedin."
+            )
+        else:
+            kayitli_desi_ayar = st.session_state.get(
+                "desi_tahmin_bulut_ayarlari", {}
+            )
+            varsayilan_kaynak = kayitli_desi_ayar.get("kaynak_yil")
+            if varsayilan_kaynak not in kapanis_yillari:
+                varsayilan_kaynak = kapanis_yillari[-1]
+
+            ds1, ds2, ds3 = st.columns([1, 2, 1])
+            kaynak_yil = ds1.selectbox(
+                "Kapanmış kaynak yıl",
+                kapanis_yillari,
+                index=kapanis_yillari.index(varsayilan_kaynak),
+                key="desi_tahmin_kaynak_yil"
+            )
+            tahmin_yili = int(kaynak_yil) + 1
+            ds3.metric("Tahmin yılı", tahmin_yili)
+
+            kayitli_referanslar = [
+                int(yil) for yil in kayitli_desi_ayar.get(
+                    "referans_yillar", []
+                ) if int(yil) in referans_secenekleri
+            ]
+            if not kayitli_referanslar:
+                onceki_yillar = [
+                    yil for yil in referans_secenekleri if yil < int(kaynak_yil)
+                ]
+                kayitli_referanslar = (
+                    onceki_yillar[-2:] if onceki_yillar
+                    else referans_secenekleri[-2:]
+                )
+            referans_yillar = ds2.multiselect(
+                "Aylık dağılım için referans yıllar",
+                referans_secenekleri,
+                default=kayitli_referanslar,
+                key="desi_tahmin_referans_yillari"
+            )
+
+            if not referans_yillar:
+                st.error("Ortalama hesabı için en az bir referans yıl seçin.")
+            else:
+                matrisler, tahmin_ortalama = desi_tahmin_ortalamasini_hesapla(
+                    tahmin_kg_kaynak, referans_yillar
+                )
+                with st.expander("📊 Referans yıl dağılımları", expanded=False):
+                    yuzde_config = {
+                        ay: st.column_config.NumberColumn(
+                            ay, format="%.2f%%"
+                        ) for ay in aylar
+                    }
+                    for yil, matris in matrisler.items():
+                        st.markdown(f"**{yil} aylık dağılımı**")
+                        st.dataframe(
+                            matris, use_container_width=True, hide_index=True,
+                            column_config=yuzde_config
+                        )
+
+                tahmin_baglam = desi_tahmin_manuel_baglami(
+                    desi_rev_id, kaynak_yil, referans_yillar
+                )
+                bulut_ayar_uygun = (
+                    guvenli_tamsayi(
+                        kayitli_desi_ayar.get("kaynak_yil")
+                    ) == int(kaynak_yil)
+                    and sorted(kayitli_referanslar)
+                    == sorted(int(yil) for yil in referans_yillar)
+                )
+                bulut_ortalama = st.session_state.get(
+                    "desi_tahmin_bulut_ortalama_df", pd.DataFrame()
+                )
+                if bulut_ayar_uygun and not bulut_ortalama.empty:
+                    bulut_harita = bulut_ortalama.drop_duplicates(
+                        "Müşteri Grubu", keep="last"
+                    ).set_index("Müşteri Grubu")
+                    for idx, row in tahmin_ortalama.iterrows():
+                        grup = row["Müşteri Grubu"]
+                        if grup not in bulut_harita.index:
+                            continue
+                        for ay in aylar:
+                            col = f"{ay} (%)"
+                            tahmin_ortalama.at[idx, col] = guvenli_sayi(
+                                bulut_harita.at[grup, col]
+                            )
+
+                oturum_ortalama = (
+                    st.session_state.desi_tahmin_ortalama_manuel_ayarlari.get(
+                        tahmin_baglam, {}
+                    )
+                )
+                for idx, row in tahmin_ortalama.iterrows():
+                    grup = row["Müşteri Grubu"]
+                    for col, value in oturum_ortalama.get(grup, {}).items():
+                        if col in [f"{ay} (%)" for ay in aylar]:
+                            tahmin_ortalama.at[idx, col] = guvenli_sayi(value)
+                tahmin_ortalama["Toplam (%)"] = tahmin_ortalama[
+                    [f"{ay} (%)" for ay in aylar]
+                ].sum(axis=1)
+
+                st.subheader("📌 Düzenlenebilir Aylık Dağılım Ortalaması")
+                ortalama_onceki = tahmin_ortalama.copy()
+                ortalama_editor_config = {
+                    **{
+                        f"{ay} (%)": st.column_config.NumberColumn(
+                            ay, format="%.2f%%"
+                        ) for ay in aylar
+                    },
+                    "Toplam (%)": st.column_config.NumberColumn(
+                        "Toplam (%)", format="%.2f%%"
+                    )
+                }
+                tahmin_ortalama_editor = st.data_editor(
+                    tahmin_ortalama,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    disabled=["Müşteri Grubu", "Toplam (%)"],
+                    column_config=ortalama_editor_config,
+                    key=(
+                        "desi_tahmin_ortalama_editor_v1_"
+                        f"{st.session_state.desi_tahmin_editor_surumu}_"
+                        + hashlib.sha1(tahmin_baglam.encode("utf-8")).hexdigest()[:12]
+                    )
+                )
+
+                manuel_ortalama = (
+                    st.session_state.desi_tahmin_ortalama_manuel_ayarlari
+                    .setdefault(tahmin_baglam, {})
+                )
+                onceki_ortalama_harita = ortalama_onceki.set_index(
+                    "Müşteri Grubu"
+                )
+                for _, row in tahmin_ortalama_editor.iterrows():
+                    grup = temiz_metin(row.get("Müşteri Grubu"))
+                    grup_ayarlari = manuel_ortalama.setdefault(grup, {})
+                    for ay in aylar:
+                        col = f"{ay} (%)"
+                        yeni = guvenli_sayi(row.get(col))
+                        eski = guvenli_sayi(
+                            onceki_ortalama_harita.at[grup, col]
+                        )
+                        if not np.isclose(yeni, eski):
+                            grup_ayarlari[col] = yeni
+                for col in [f"{ay} (%)" for ay in aylar]:
+                    tahmin_ortalama_editor[col] = pd.to_numeric(
+                        tahmin_ortalama_editor[col], errors="coerce"
+                    ).fillna(0.0)
+                tahmin_ortalama_editor["Toplam (%)"] = (
+                    tahmin_ortalama_editor[
+                        [f"{ay} (%)" for ay in aylar]
+                    ].sum(axis=1)
+                )
+                tahmin_ortalama = tahmin_ortalama_editor.reindex(
+                    columns=desi_tahmin_ortalama_sutunlari
+                )
+
+                gun_oranlari, gun_etiketi, gun_bulundu = (
+                    desi_tahmin_calisma_gunu_oranlari(
+                        st.session_state.get(
+                            "takvim_verisi_yillar", pd.DataFrame()
+                        ),
+                        tahmin_yili
+                    )
+                )
+                buyume_df = st.session_state.get(
+                    "desi_tahmin_buyume_df", pd.DataFrame()
+                )
+                buyume_haritasi = desi_tahmin_buyume_haritasi(buyume_df)
+                hesaplanan_detay, buyume_eslesmeyen = (
+                    desi_tahmin_detayini_hesapla(
+                        kapanis_kaynak, kaynak_yil, tahmin_ortalama,
+                        gun_oranlari, buyume_haritasi
+                    )
+                )
+                hesaplanan_detay = desi_tahmin_manuel_degerlerini_uygula(
+                    hesaplanan_detay, tahmin_baglam
+                )
+
+                st.subheader(f"🧮 {tahmin_yili} Desi Tahmini")
+                st.caption(
+                    f"Kaynak kapanış yılı: {kaynak_yil} · Referans yıllar: "
+                    f"{', '.join(map(str, sorted(referans_yillar)))} · "
+                    f"Çalışma günü katsayısı: {gun_etiketi} · "
+                    "Formül: kaynak yıl toplamı × aylık pay × çalışma günü "
+                    "katsayısı × (1 + aylık müşteri büyümesi)."
+                )
+                if not gun_bulundu:
+                    st.warning(
+                        f"{gun_etiketi} çalışma günü katsayısı bulunamadı; "
+                        "tüm aylar için 1 kullanıldı."
+                    )
+                if buyume_eslesmeyen:
+                    st.warning(
+                        f"{buyume_eslesmeyen:,} satırın müşteri kodu büyüme "
+                        "kartlarıyla eşleşmedi; bu satırlarda büyüme %0 kullanıldı."
+                    )
+
+                if hesaplanan_detay.empty:
+                    st.warning(
+                        f"Yıl Kapanış detayında {kaynak_yil} yılına ait satır yok."
+                    )
+                else:
+                    toplam_satiri = {
+                        col: "" for col in desi_tahmin_detay_sutunlari
+                    }
+                    toplam_satiri["Uniq ID"] = "🔥 GENEL TOPLAM"
+                    toplam_satiri["Müşteri Adı"] = "🔥 GENEL TOPLAM"
+                    toplam_satiri["Yıl"] = tahmin_yili
+                    toplam_satiri["Kaynak Yıl"] = kaynak_yil
+                    for col in (
+                        ["Kaynak Yıl Toplam Desi"]
+                        + yil_kapanis_detay_ay_sutunlari
+                        + ["Tahmini Yıl Toplam Desi"]
+                    ):
+                        toplam_satiri[col] = float(pd.to_numeric(
+                            hesaplanan_detay[col], errors="coerce"
+                        ).fillna(0.0).sum())
+
+                    toplam_tablo_yeri = st.empty()
+
+                    detay_onceki = hesaplanan_detay.copy()
+                    kilitli_sutunlar = [
+                        col for col in desi_tahmin_detay_sutunlari
+                        if col not in yil_kapanis_detay_ay_sutunlari
+                    ]
+                    detay_config = {
+                        **{
+                            col: st.column_config.NumberColumn(
+                                col, format="localized", step=1
+                            )
+                            for col in (
+                                ["Kaynak Yıl Toplam Desi"]
+                                + yil_kapanis_detay_ay_sutunlari
+                                + ["Tahmini Yıl Toplam Desi"]
+                            )
+                        },
+                        "Kayıt Tarihi": st.column_config.DateColumn(
+                            "Kayıt Tarihi", format="DD.MM.YYYY"
+                        ),
+                        "Esk. Yakıt Başlangıç Tarihi": (
+                            st.column_config.DateColumn(
+                                "Esk. Yakıt Başlangıç Tarihi",
+                                format="DD.MM.YYYY"
+                            )
+                        ),
+                        "Esk. Enf. Başlangıç Tarihi": (
+                            st.column_config.DateColumn(
+                                "Esk. Enf. Başlangıç Tarihi",
+                                format="DD.MM.YYYY"
+                            )
+                        )
+                    }
+                    detay_editor = st.data_editor(
+                        hesaplanan_detay,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=520,
+                        num_rows="fixed",
+                        disabled=kilitli_sutunlar,
+                        column_config=detay_config,
+                        key=(
+                            "desi_tahmin_detay_editor_v1_"
+                            f"{st.session_state.desi_tahmin_editor_surumu}_"
+                            + hashlib.sha1(
+                                tahmin_baglam.encode("utf-8")
+                            ).hexdigest()[:12]
+                        )
+                    )
+                    desi_tahmin_manuel_degisikliklerini_kaydet(
+                        detay_onceki, detay_editor, tahmin_baglam
+                    )
+                    for col in yil_kapanis_detay_ay_sutunlari:
+                        detay_editor[col] = desi_kg_serisini_yuvarla(
+                            detay_editor[col]
+                        )
+                    detay_editor["Tahmini Yıl Toplam Desi"] = detay_editor[
+                        yil_kapanis_detay_ay_sutunlari
+                    ].sum(axis=1)
+                    tahmin_detay_sonuc = detay_editor.reindex(
+                        columns=desi_tahmin_detay_sutunlari
+                    )
+
+                    for col in (
+                        ["Kaynak Yıl Toplam Desi"]
+                        + yil_kapanis_detay_ay_sutunlari
+                        + ["Tahmini Yıl Toplam Desi"]
+                    ):
+                        toplam_satiri[col] = float(pd.to_numeric(
+                            tahmin_detay_sonuc[col], errors="coerce"
+                        ).fillna(0.0).sum())
+                    toplam_tablo_yeri.dataframe(
+                        pd.DataFrame([toplam_satiri])[
+                            ["Uniq ID", "Kaynak Yıl Toplam Desi"]
+                            + yil_kapanis_detay_ay_sutunlari
+                            + ["Tahmini Yıl Toplam Desi"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        height=82,
+                        column_config={
+                            col: st.column_config.NumberColumn(
+                                col, format="localized", step=1
+                            )
+                            for col in (
+                                ["Kaynak Yıl Toplam Desi"]
+                                + yil_kapanis_detay_ay_sutunlari
+                                + ["Tahmini Yıl Toplam Desi"]
+                            )
+                        }
+                    )
+
+                    toplam_tahmin = tahmin_detay_sonuc[
+                        "Tahmini Yıl Toplam Desi"
+                    ].sum()
+                    st.metric(
+                        f"{tahmin_yili} Tahmini Toplam Desi",
+                        f"{toplam_tahmin:,.0f}".replace(",", ".")
+                    )
+
+                    excel_buffer = io.BytesIO()
+                    with pd.ExcelWriter(
+                        excel_buffer, engine="openpyxl"
+                    ) as writer:
+                        for yil, matris in matrisler.items():
+                            matris.to_excel(
+                                writer, index=False,
+                                sheet_name=f"Dağılım {yil}"[:31]
+                            )
+                        tahmin_ortalama.to_excel(
+                            writer, index=False, sheet_name="Ortalama"
+                        )
+                        tahmin_detay_sonuc.to_excel(
+                            writer, index=False,
+                            sheet_name=f"{tahmin_yili} Desi Tahmini"[:31]
+                        )
+
+                    da1, da2 = st.columns(2)
+                    da1.download_button(
+                        "📥 Desi Tahminini Excel İndir",
+                        data=excel_buffer.getvalue(),
+                        file_name=f"desi_tahmini_{tahmin_yili}.xlsx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        ),
+                        use_container_width=True,
+                        key="btn_desi_tahmin_excel"
+                    )
+
+                    if da2.button(
+                        "💾 Desi Tahminini Buluta Kaydet",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=(not client or not desi_rev_id),
+                        key="btn_desi_tahmin_cloud_save"
+                    ):
+                        try:
+                            ortalama_records = []
+                            for _, row in tahmin_ortalama.iterrows():
+                                rec = {
+                                    "revizyon_id": desi_rev_id,
+                                    "Referans Yıllar": [
+                                        int(yil) for yil in sorted(referans_yillar)
+                                    ],
+                                    "Kaynak Yıl": int(kaynak_yil),
+                                    "Tahmin Yılı": int(tahmin_yili),
+                                    **{
+                                        col: json_uyumlu_deger(row.get(col))
+                                        for col in desi_tahmin_ortalama_sutunlari
+                                    }
+                                }
+                                ortalama_records.append(rec)
+                            client.table(
+                                DESI_TAHMIN_ORTALAMA_DB_TABLOSU
+                            ).delete().eq(
+                                "revizyon_id", desi_rev_id
+                            ).execute()
+                            client.table(
+                                DESI_TAHMIN_ORTALAMA_DB_TABLOSU
+                            ).insert(ortalama_records).execute()
+
+                            client.table(
+                                DESI_TAHMIN_DETAY_DB_TABLOSU
+                            ).delete().eq(
+                                "revizyon_id", desi_rev_id
+                            ).execute()
+                            manuel_ayarlar = (
+                                st.session_state.desi_tahmin_detay_manuel_ayarlari
+                                .get(tahmin_baglam, {})
+                            )
+                            for i in range(0, len(tahmin_detay_sonuc), 500):
+                                records = []
+                                for _, row in tahmin_detay_sonuc.iloc[
+                                    i:i + 500
+                                ].iterrows():
+                                    uniq_id = temiz_metin(row.get("Uniq ID"))
+                                    rec = {
+                                        col: json_uyumlu_deger(row.get(col))
+                                        for col in desi_tahmin_detay_sutunlari
+                                    }
+                                    rec["revizyon_id"] = desi_rev_id
+                                    rec["Manuel Desi Ayarları"] = (
+                                        manuel_ayarlar.get(uniq_id, {})
+                                    )
+                                    records.append(rec)
+                                client.table(
+                                    DESI_TAHMIN_DETAY_DB_TABLOSU
+                                ).insert(records).execute()
+                            revizyonu_degistirildi_isaretle(desi_rev_id)
+                            st.session_state.desi_tahmin_bulut_ortalama_df = (
+                                tahmin_ortalama.copy()
+                            )
+                            st.session_state.desi_tahmin_bulut_detay_df = (
+                                tahmin_detay_sonuc.copy()
+                            )
+                            st.session_state.desi_tahmin_bulut_ayarlari = {
+                                "kaynak_yil": int(kaynak_yil),
+                                "tahmin_yili": int(tahmin_yili),
+                                "referans_yillar": [
+                                    int(yil) for yil in sorted(referans_yillar)
+                                ]
+                            }
+                            st.success(
+                                f"{tahmin_yili} Desi tahmini seçili revizyona "
+                                "kaydedildi."
+                            )
+                        except Exception as ex:
+                            st.error(
+                                "Desi tahmini buluta kaydedilemedi. Önce Desi "
+                                f"Tahminleme Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
+                            )
