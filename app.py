@@ -406,8 +406,16 @@ data_new_2026_desi_sutunlari = [f"2026 {ay} Desi" for ay in aylar]
 data_new_2026_tutar_sutunlari = [f"2026 {ay} Tutar" for ay in aylar]
 data_new_2026_fiyat_sutunlari = [f"2026 {ay} Fiyat" for ay in aylar]
 DATA_NEW_MANUEL_BUYUME_DB = "Manuel Büyüme Ayarları"
+DATA_NEW_KAYNAK_YIL_DB = "Kaynak Yıl"
+DATA_NEW_TAHMIN_YILI_DB = "Tahmin Yılı"
+DATA_NEW_TAHMIN_KAYNAGI_DB = "Desi Tahmin Kaynağı"
 data_new_tum_sutunlar = (
     data_new_kimlik_sutunlari
+    + [
+        DATA_NEW_KAYNAK_YIL_DB,
+        DATA_NEW_TAHMIN_YILI_DB,
+        DATA_NEW_TAHMIN_KAYNAGI_DB,
+    ]
     + data_new_parametre_sutunlari
     + data_new_2025_desi_sutunlari
     + data_new_2025_tutar_sutunlari
@@ -453,7 +461,7 @@ yil_kapanis_detay_sutunlari = (
 )
 desi_tahmin_detay_sutunlari = (
     yil_kapanis_detay_kimlik_sutunlari
-    + ["Kaynak Yıl", "Kaynak Yıl Toplam Desi"]
+    + ["Kaynak Uniq ID", "Kaynak Yıl", "Kaynak Yıl Toplam Desi"]
     + yil_kapanis_detay_ay_sutunlari
     + ["Tahmini Yıl Toplam Desi"]
 )
@@ -1085,25 +1093,40 @@ def data_new_girdisini_hazirla(df_raw):
         df[col] = df[col].apply(nullable_sayi).astype(float)
 
     for ay in aylar:
-        desi_kaynagi = next(
-            (
-                c for c in [f"{ay} Desi", f"{ay} Kg", f"2025 {ay} Desi", f"2025 {ay} Kg"]
-                if c in df.columns
-            ),
-            None
-        )
-        tutar_kaynagi = next(
-            (c for c in [f"{ay} Tutar", f"2025 {ay} Tutar"] if c in df.columns),
-            None
-        )
-        df[f"2025 {ay} Desi"] = (
-            desi_kg_serisini_yuvarla(df[desi_kaynagi])
-            if desi_kaynagi else 0.0
-        )
-        df[f"2025 {ay} Tutar"] = (
-            df[tutar_kaynagi].apply(guvenli_sayi).astype(float)
-            if tutar_kaynagi else 0.0
-        )
+        desi_hedef = pd.Series(0.0, index=df.index, dtype=float)
+        tutar_hedef = pd.Series(0.0, index=df.index, dtype=float)
+        for kaynak_yil in sorted(df["Yıl"].dropna().astype(int).unique()):
+            yil_maskesi = df["Yıl"].astype(int) == int(kaynak_yil)
+            desi_kaynagi = next(
+                (
+                    c for c in [
+                        f"{kaynak_yil} {ay} Desi",
+                        f"{kaynak_yil} {ay} Kg",
+                        f"{ay} Desi", f"{ay} Kg",
+                        f"2025 {ay} Desi", f"2025 {ay} Kg"
+                    ] if c in df.columns
+                ),
+                None
+            )
+            tutar_kaynagi = next(
+                (
+                    c for c in [
+                        f"{kaynak_yil} {ay} Tutar", f"{ay} Tutar",
+                        f"2025 {ay} Tutar"
+                    ] if c in df.columns
+                ),
+                None
+            )
+            if desi_kaynagi:
+                desi_hedef.loc[yil_maskesi] = df.loc[
+                    yil_maskesi, desi_kaynagi
+                ].apply(guvenli_sayi).astype(float)
+            if tutar_kaynagi:
+                tutar_hedef.loc[yil_maskesi] = df.loc[
+                    yil_maskesi, tutar_kaynagi
+                ].apply(guvenli_sayi).astype(float)
+        df[f"2025 {ay} Desi"] = desi_kg_serisini_yuvarla(desi_hedef)
+        df[f"2025 {ay} Tutar"] = tutar_hedef
 
     uniq_parcalari = [
         "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
@@ -1115,9 +1138,21 @@ def data_new_girdisini_hazirla(df_raw):
     for col in uniq_parcalari[1:]:
         uniq_df[col] = uniq_df[col].apply(temiz_metin)
     df["Uniq ID"] = uniq_df.astype(str).agg("".join, axis=1)
+    df[DATA_NEW_KAYNAK_YIL_DB] = df["Yıl"].apply(
+        lambda value: guvenli_tamsayi(value, nullable=False)
+    )
+    df[DATA_NEW_TAHMIN_YILI_DB] = (
+        df[DATA_NEW_KAYNAK_YIL_DB].astype(int) + 1
+    )
+    df[DATA_NEW_TAHMIN_KAYNAGI_DB] = ""
     df = df[df["Müşteri Kodu"] != ""].reset_index(drop=True)
     baslangic_sutunlari = (
         data_new_kimlik_sutunlari
+        + [
+            DATA_NEW_KAYNAK_YIL_DB,
+            DATA_NEW_TAHMIN_YILI_DB,
+            DATA_NEW_TAHMIN_KAYNAGI_DB,
+        ]
         + data_new_parametre_sutunlari
         + data_new_2025_desi_sutunlari
         + data_new_2025_tutar_sutunlari
@@ -1202,6 +1237,10 @@ def data_new_buyume_kaynaklarini_uygula(
             df[f"2026 {ay} Büyüme"] = 0.0
 
     if hesaplari_yenile:
+        tahminden_gelen = df.get(
+            DATA_NEW_TAHMIN_KAYNAGI_DB,
+            pd.Series("", index=df.index)
+        ).astype(str).eq("Desi Tahminleme")
         for ay in aylar:
             desi_25 = pd.to_numeric(
                 df.get(f"2025 {ay} Desi", 0.0), errors="coerce"
@@ -1212,11 +1251,16 @@ def data_new_buyume_kaynaklarini_uygula(
             desi_26 = desi_kg_serisini_yuvarla(
                 desi_25 * (1.0 + buyume_26 / 100.0)
             )
-            df[f"2026 {ay} Desi"] = desi_26
+            mevcut_desi = pd.to_numeric(
+                df.get(f"2026 {ay} Desi", 0.0), errors="coerce"
+            ).fillna(0.0)
+            df[f"2026 {ay} Desi"] = mevcut_desi.where(
+                tahminden_gelen, desi_26
+            )
             fiyat_26 = pd.to_numeric(
                 df.get(f"2026 {ay} Fiyat", np.nan), errors="coerce"
             )
-            df[f"2026 {ay} Tutar"] = desi_26 * fiyat_26
+            df[f"2026 {ay} Tutar"] = df[f"2026 {ay} Desi"] * fiyat_26
     return df, eslesme
 
 
@@ -1422,6 +1466,43 @@ def kg_musteri_kaynaklarini_birlestir(*kaynaklar):
     return sonuc.reindex(columns=kg_musteri_sutunlari).reset_index(drop=True)
 
 
+def yil_kapanis_detayindan_kg_musteri(detay_df):
+    """Kesinleşmiş kapanış detayını referans dağılım havuzuna dönüştürür."""
+    detay = yil_kapanis_detayini_hazirla(detay_df)
+    if detay.empty:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+
+    detay["Yıl"] = detay["Yıl"].apply(
+        lambda value: guvenli_tamsayi(value, nullable=True)
+    )
+    detay["Müşteri Kodu"] = detay["Müşteri Kodu"].apply(
+        guvenli_metin_kodu
+    )
+    detay["Müşteri Grubu"] = detay["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    detay = detay[
+        detay["Yıl"].notna() & (detay["Müşteri Kodu"] != "")
+    ].copy()
+    if detay.empty:
+        return pd.DataFrame(columns=kg_musteri_sutunlari)
+
+    aylik_desi = [f"{ay} Desi" for ay in aylar]
+    for col in aylik_desi:
+        detay[col] = pd.to_numeric(detay[col], errors="coerce").fillna(0.0)
+    sonuc = detay.groupby(
+        ["Yıl", "Müşteri Kodu", "Müşteri Grubu"], as_index=False
+    )[aylik_desi].sum()
+    sonuc = sonuc.rename(
+        columns={f"{ay} Desi": f"{ay} Kg" for ay in aylar}
+    )
+    for ay in aylar:
+        sonuc[f"{ay} Kg"] = desi_kg_serisini_yuvarla(
+            sonuc[f"{ay} Kg"]
+        )
+    return sonuc.reindex(columns=kg_musteri_sutunlari).reset_index(drop=True)
+
+
 def yil_kapanis_yuzde_matrisi(kg_musteri_df, yil):
     """Seçilen yılda her grubun aylık Kg paylarını yüzde puanı olarak üretir."""
     grup_sirasi = ["MP", "HOROZ CÜZDAN", "DİĞER"]
@@ -1532,8 +1613,26 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
 
     for ay in aylar:
         hedef = pd.Series(0.0, index=sonuc.index, dtype=float)
+        # Data_New, geriye dönük uyumluluk için fiziksel 2025/2026 yuvaları
+        # kullanır. Kaynak Yıl alanı varsa kapanışta daima kaynak yuvası
+        # (2025 ...) okunur; böylece hedef tahmin yeniden kapanış girdisi olmaz.
+        data_new_kaynak_maskesi = pd.Series(False, index=sonuc.index)
+        data_new_kaynak_col = f"2025 {ay} Desi"
+        if (
+            DATA_NEW_KAYNAK_YIL_DB in kaynak.columns
+            and data_new_kaynak_col in kaynak.columns
+        ):
+            kaynak_yil_serisi = pd.to_numeric(
+                kaynak[DATA_NEW_KAYNAK_YIL_DB], errors="coerce"
+            )
+            data_new_kaynak_maskesi = (
+                kaynak_yil_serisi == sonuc["Yıl"]
+            ).fillna(False)
+            hedef.loc[data_new_kaynak_maskesi] = kaynak.loc[
+                data_new_kaynak_maskesi, data_new_kaynak_col
+            ].apply(guvenli_sayi).astype(float)
         for yil in sonuc["Yıl"].dropna().astype(int).unique():
-            yil_maskesi = sonuc["Yıl"] == yil
+            yil_maskesi = (sonuc["Yıl"] == yil) & (~data_new_kaynak_maskesi)
             adaylar = [
                 f"{yil} {ay} Desi", f"{yil} {ay} Kg",
                 f"{ay} Desi", f"{ay} Kg", ay
@@ -1969,6 +2068,29 @@ def desi_tahmin_detayini_hazirla(dataframe):
         return pd.DataFrame(columns=desi_tahmin_detay_sutunlari)
     kaynak = sutun_adlarini_standartlastir(dataframe)
     sonuc = kaynak.reindex(columns=desi_tahmin_detay_sutunlari).copy()
+    # İlk sürüm kayıtlarında Kaynak Uniq ID yoktu. Tahmin Uniq ID'sinin
+    # başındaki tahmin yılını kaynak yılıyla değiştirerek geriye dönük üret.
+    kaynak_uniq_bos = sonuc["Kaynak Uniq ID"].isna() | (
+        sonuc["Kaynak Uniq ID"].astype(str).str.strip() == ""
+    )
+    if kaynak_uniq_bos.any():
+        def eski_kaynaktan_uniq_uret(row):
+            tahmin_uniq = temiz_metin(row.get("Uniq ID"))
+            tahmin_yili = guvenli_tamsayi(row.get("Yıl"), nullable=True)
+            kaynak_yili = guvenli_tamsayi(
+                row.get("Kaynak Yıl"), nullable=True
+            )
+            if (
+                tahmin_uniq and tahmin_yili is not None
+                and kaynak_yili is not None
+                and tahmin_uniq.startswith(str(tahmin_yili))
+            ):
+                return str(kaynak_yili) + tahmin_uniq[len(str(tahmin_yili)):]
+            return ""
+
+        sonuc.loc[kaynak_uniq_bos, "Kaynak Uniq ID"] = sonuc.loc[
+            kaynak_uniq_bos
+        ].apply(eski_kaynaktan_uniq_uret, axis=1)
     for col in ["Yıl", "Kaynak Yıl"]:
         sonuc[col] = sonuc[col].apply(
             lambda value: guvenli_tamsayi(value, nullable=True)
@@ -2011,6 +2133,7 @@ def desi_tahmin_detayini_hesapla(
     ).astype(float)
 
     sonuc = kapanis[yil_kapanis_detay_kimlik_sutunlari].copy()
+    sonuc["Kaynak Uniq ID"] = kapanis["Uniq ID"].apply(temiz_metin)
     sonuc["Kaynak Yıl"] = int(kaynak_yil)
     sonuc["Kaynak Yıl Toplam Desi"] = desi_kg_serisini_yuvarla(
         kaynak_toplam
@@ -2118,10 +2241,110 @@ def desi_tahmin_manuel_degisikliklerini_kaydet(
     return degisti
 
 
-def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
+def data_new_desi_tahminini_uygula(dataframe, desi_tahmin_df):
+    """Kaydedilmiş tahmini rota bazında Data_New hedef Desi alanlarına taşır."""
+    sonuc = dataframe.copy()
+    eslesme = pd.Series(False, index=sonuc.index)
+    if sonuc.empty or desi_tahmin_df is None or desi_tahmin_df.empty:
+        return sonuc, eslesme
+
+    tahmin = desi_tahmin_detayini_hazirla(desi_tahmin_df)
+    tahmin = tahmin[
+        tahmin["Kaynak Uniq ID"].apply(temiz_metin) != ""
+    ].copy()
+    if tahmin.empty:
+        return sonuc, eslesme
+
+    tahmin["Kaynak Uniq ID"] = tahmin["Kaynak Uniq ID"].apply(temiz_metin)
+    tahmin["Kaynak Yıl"] = tahmin["Kaynak Yıl"].apply(
+        lambda value: guvenli_tamsayi(value, nullable=True)
+    )
+    tahmin = tahmin.drop_duplicates(
+        ["Kaynak Uniq ID", "Kaynak Yıl"], keep="last"
+    )
+    tahmin_haritasi = tahmin.set_index(
+        ["Kaynak Uniq ID", "Kaynak Yıl"]
+    )
+
+    kaynak_yillar = pd.to_numeric(
+        sonuc.get(DATA_NEW_KAYNAK_YIL_DB, sonuc.get("Yıl")),
+        errors="coerce"
+    )
+    satir_anahtarlari = [
+        (temiz_metin(uniq_id), guvenli_tamsayi(yil, nullable=True))
+        for uniq_id, yil in zip(sonuc["Uniq ID"], kaynak_yillar)
+    ]
+    eslesme = pd.Series(
+        [anahtar in tahmin_haritasi.index for anahtar in satir_anahtarlari],
+        index=sonuc.index
+    )
+    if not eslesme.any():
+        return sonuc, eslesme
+
+    hedef_yil_haritasi = tahmin_haritasi["Yıl"].to_dict()
+    sonuc.loc[eslesme, DATA_NEW_TAHMIN_YILI_DB] = [
+        hedef_yil_haritasi[anahtar]
+        for anahtar, bulundu in zip(satir_anahtarlari, eslesme)
+        if bulundu
+    ]
+    sonuc.loc[eslesme, DATA_NEW_TAHMIN_KAYNAGI_DB] = "Desi Tahminleme"
+    for ay in aylar:
+        ay_haritasi = tahmin_haritasi[f"{ay} Desi"].to_dict()
+        sonuc[f"2026 {ay} Desi"] = pd.to_numeric(
+            sonuc.get(f"2026 {ay} Desi", 0.0), errors="coerce"
+        ).fillna(0.0).astype(float)
+        sonuc.loc[eslesme, f"2026 {ay} Desi"] = [
+            desi_kg_tam_sayiya_yuvarla(ay_haritasi[anahtar])
+            for anahtar, bulundu in zip(satir_anahtarlari, eslesme)
+            if bulundu
+        ]
+    return sonuc, eslesme
+
+
+def data_new_yil_etiket_haritasi(dataframe):
+    """Sabit teknik sütunları ekranda gerçek kaynak/hedef yılıyla adlandırır."""
+    kaynak_yil, tahmin_yili = 2025, 2026
+    if dataframe is not None and not dataframe.empty:
+        kaynaklar = pd.to_numeric(
+            dataframe.get(DATA_NEW_KAYNAK_YIL_DB), errors="coerce"
+        ).dropna()
+        tahminler = pd.to_numeric(
+            dataframe.get(DATA_NEW_TAHMIN_YILI_DB), errors="coerce"
+        ).dropna()
+        if not kaynaklar.empty:
+            kaynak_yil = int(kaynaklar.mode().iloc[0])
+        if not tahminler.empty:
+            tahmin_yili = int(tahminler.mode().iloc[0])
+        else:
+            tahmin_yili = kaynak_yil + 1
+    harita = {}
+    for col in data_new_tum_sutunlar:
+        if col.startswith("2025 "):
+            harita[col] = f"{kaynak_yil} {col[5:]}"
+        elif col.startswith("2026 "):
+            harita[col] = f"{tahmin_yili} {col[5:]}"
+        else:
+            harita[col] = col
+    return harita, kaynak_yil, tahmin_yili
+
+
+def data_new_tablosunu_hesapla(
+    girdi_df, master_df, buyume_df, baz_birim_df, desi_tahmin_df=None
+):
     """Data_New'un bütün 2025/2026 alanlarını toplu olarak hesaplar."""
     sonuc = girdi_df.copy().reset_index(drop=True)
     sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    if DATA_NEW_KAYNAK_YIL_DB not in sonuc.columns:
+        sonuc[DATA_NEW_KAYNAK_YIL_DB] = sonuc["Yıl"]
+    sonuc[DATA_NEW_KAYNAK_YIL_DB] = sonuc[DATA_NEW_KAYNAK_YIL_DB].apply(
+        lambda value: guvenli_tamsayi(value, nullable=False)
+    )
+    if DATA_NEW_TAHMIN_YILI_DB not in sonuc.columns:
+        sonuc[DATA_NEW_TAHMIN_YILI_DB] = (
+            sonuc[DATA_NEW_KAYNAK_YIL_DB].astype(int) + 1
+        )
+    if DATA_NEW_TAHMIN_KAYNAGI_DB not in sonuc.columns:
+        sonuc[DATA_NEW_TAHMIN_KAYNAGI_DB] = ""
 
     master = sutun_adlarini_standartlastir(master_df) if master_df is not None else pd.DataFrame()
     master_parametre_eslesmesi = pd.Series(False, index=sonuc.index)
@@ -2172,6 +2395,9 @@ def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
     sonuc, buyume_eslesmesi = data_new_buyume_kaynaklarini_uygula(
         sonuc, buyume_df, hesaplari_yenile=False
     )
+    sonuc, desi_tahmin_eslesmesi = data_new_desi_tahminini_uygula(
+        sonuc, desi_tahmin_df
+    )
 
     baz = baz_birim_fiyat_tablosunu_hazirla(baz_birim_df) if baz_birim_df is not None else pd.DataFrame()
     if not baz.empty:
@@ -2198,13 +2424,22 @@ def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
         buyume_col = f"2026 {ay} Büyüme"
         esk_col = f"2026 {ay} Esk."
         desi_25 = pd.to_numeric(sonuc[f"2025 {ay} Desi"], errors="coerce").fillna(0.0)
-        sonuc[f"2026 {ay} Desi"] = desi_kg_serisini_yuvarla(
+        hesaplanan_desi = desi_kg_serisini_yuvarla(
             desi_25 * (
                 1.0
                 + pd.to_numeric(
                     sonuc[buyume_col], errors="coerce"
                 ).fillna(0.0) / 100.0
             )
+        )
+        tahminden_gelen = sonuc[DATA_NEW_TAHMIN_KAYNAGI_DB].eq(
+            "Desi Tahminleme"
+        )
+        mevcut_tahmin = desi_kg_serisini_yuvarla(
+            sonuc[f"2026 {ay} Desi"]
+        )
+        sonuc[f"2026 {ay} Desi"] = mevcut_tahmin.where(
+            tahminden_gelen, hesaplanan_desi
         )
         yeni_fiyat = onceki_fiyat * (
             1.0 + pd.to_numeric(sonuc[esk_col], errors="coerce").fillna(0.0) / 100.0
@@ -2225,6 +2460,9 @@ def data_new_tablosunu_hesapla(girdi_df, master_df, buyume_df, baz_birim_df):
         "tekrarlanan_uniq": int(sonuc["Uniq ID"].duplicated(keep=False).sum()),
         "master_eslesmeyen": int((~master_parametre_eslesmesi).sum()),
         "buyume_eslesmeyen": int((~buyume_eslesmesi).sum()),
+        "desi_tahmin_eslesen": int(desi_tahmin_eslesmesi.sum()),
+        "desi_tahmin_eslesmeyen": int((~desi_tahmin_eslesmesi).sum())
+        if desi_tahmin_df is not None and not desi_tahmin_df.empty else 0,
         "baz_fiyat_eslesmeyen": int((~baz_eslesmesi).sum())
     }
     return sonuc.reindex(columns=data_new_tum_sutunlar), kontrol
@@ -2245,10 +2483,27 @@ def data_new_manuel_buyumeleri_uygula(dataframe, manuel_ayarlar):
                 continue
             ay = buyume_col.removeprefix("2026 ").removesuffix(" Büyüme")
             buyume = guvenli_sayi(value)
-            desi_25 = guvenli_sayi(df.at[idx, f"2025 {ay} Desi"])
+            tahmin_kaynagi = temiz_metin(
+                df.at[idx, DATA_NEW_TAHMIN_KAYNAGI_DB]
+                if DATA_NEW_TAHMIN_KAYNAGI_DB in df.columns else ""
+            )
+            if tahmin_kaynagi == "Desi Tahminleme":
+                kaynak_buyume = guvenli_sayi(
+                    df.at[idx, f"2026 {ay} Büyüme"]
+                )
+                kaynak_tahmin = guvenli_sayi(
+                    df.at[idx, f"2026 {ay} Desi"]
+                )
+                payda = 1.0 + kaynak_buyume / 100.0
+                desi_bazi = (
+                    kaynak_tahmin / payda
+                    if not np.isclose(payda, 0.0) else kaynak_tahmin
+                )
+            else:
+                desi_bazi = guvenli_sayi(df.at[idx, f"2025 {ay} Desi"])
             fiyat_26 = nullable_sayi(df.at[idx, f"2026 {ay} Fiyat"])
             desi_26 = desi_kg_tam_sayiya_yuvarla(
-                desi_25 * (1.0 + buyume / 100.0)
+                desi_bazi * (1.0 + buyume / 100.0)
             )
             df.at[idx, buyume_col] = buyume
             df.at[idx, f"2026 {ay} Desi"] = desi_26
@@ -7719,10 +7974,10 @@ if sekme_acik_mi[11]:
     with sekmeler[11]:
         st.title("🆕 Data_New Hesaplama Havuzu")
         st.caption(
-            "Nihai hesaplama tablosudur. 2025 Desi/Tutar dosyası burada; "
-            "2024–2025 tarihsel havuz ve büyüme oranları Müşteri Büyüme "
-            "sayfasında yönetilir. Master Data eskalasyonu ve Baz Birim "
-            "Fiyatlar seçilen revizyon üzerinden birleştirilerek 2026 hesaplanır."
+            "Nihai hesaplama tablosudur. Kaynak yıl Desi/Tutar dosyası; Master "
+            "Data eskalasyonu, Baz Birim Fiyatlar ve aynı revizyondaki Desi "
+            "Tahminleme sonucu birleştirilir. Tahmin Desisi bulunan satırda "
+            "büyüme ikinci kez uygulanmaz."
         )
 
         data_new_rev_id = None
@@ -7735,7 +7990,7 @@ if sekme_acik_mi[11]:
             )
 
         data_new_upload = st.file_uploader(
-            "2025 Desi ve Tutar Dosyasını Yükleyin",
+            "Kaynak Yıl Desi ve Tutar Dosyasını Yükleyin",
             type=["xlsx", "xls", "csv"],
             key="data_new_upload"
         )
@@ -7832,6 +8087,15 @@ if sekme_acik_mi[11]:
                         if col not in gelen.columns:
                             gelen[col] = np.nan
                     gelen = gelen[data_new_tum_sutunlar]
+                    gelen[DATA_NEW_KAYNAK_YIL_DB] = pd.to_numeric(
+                        gelen[DATA_NEW_KAYNAK_YIL_DB], errors="coerce"
+                    ).fillna(pd.to_numeric(gelen["Yıl"], errors="coerce"))
+                    gelen[DATA_NEW_TAHMIN_YILI_DB] = pd.to_numeric(
+                        gelen[DATA_NEW_TAHMIN_YILI_DB], errors="coerce"
+                    ).fillna(gelen[DATA_NEW_KAYNAK_YIL_DB] + 1)
+                    gelen[DATA_NEW_TAHMIN_KAYNAGI_DB] = gelen[
+                        DATA_NEW_TAHMIN_KAYNAGI_DB
+                    ].fillna("")
 
                     buyume_kaynak = pd.DataFrame(
                         supabase_revizyon_kayitlarini_getir(
@@ -7881,6 +8145,7 @@ if sekme_acik_mi[11]:
                     master_kaynak = pd.DataFrame()
                     buyume_kaynak = pd.DataFrame()
                     baz_birim_kaynak = pd.DataFrame()
+                    desi_tahmin_kaynak = pd.DataFrame()
 
                     if client and data_new_rev_id:
                         master_kaynak = pd.DataFrame(
@@ -7898,6 +8163,15 @@ if sekme_acik_mi[11]:
                                 "baz_birim_fiyat_tablosu", data_new_rev_id
                             )
                         )
+                        try:
+                            desi_tahmin_kaynak = pd.DataFrame(
+                                supabase_revizyon_kayitlarini_getir(
+                                    DESI_TAHMIN_DETAY_DB_TABLOSU,
+                                    data_new_rev_id
+                                )
+                            )
+                        except Exception:
+                            desi_tahmin_kaynak = pd.DataFrame()
 
                     if master_kaynak.empty:
                         master_kaynak = st.session_state.get(
@@ -7911,12 +8185,17 @@ if sekme_acik_mi[11]:
                         baz_birim_kaynak = st.session_state.get(
                             "baz_birim_fiyat_df", pd.DataFrame()
                         ).copy()
+                    if desi_tahmin_kaynak.empty:
+                        desi_tahmin_kaynak = st.session_state.get(
+                            "desi_tahmin_bulut_detay_df", pd.DataFrame()
+                        ).copy()
 
                     hesaplanan, kontrol = data_new_tablosunu_hesapla(
                         st.session_state.data_new_girdi_df,
                         master_kaynak,
                         buyume_kaynak,
-                        baz_birim_kaynak
+                        baz_birim_kaynak,
+                        desi_tahmin_kaynak
                     )
                     st.session_state.data_new_kaynak_df = hesaplanan.copy()
                     hesaplanan = data_new_manuel_buyumeleri_uygula(
@@ -7936,6 +8215,18 @@ if sekme_acik_mi[11]:
             k2.metric("Master Eşleşmeyen", f"{kontrol.get('master_eslesmeyen', 0):,}")
             k3.metric("Büyüme Eşleşmeyen", f"{kontrol.get('buyume_eslesmeyen', 0):,}")
             k4.metric("Baz Fiyat Eşleşmeyen", f"{kontrol.get('baz_fiyat_eslesmeyen', 0):,}")
+            if kontrol.get("desi_tahmin_eslesen", 0):
+                st.success(
+                    f"Desi Tahminleme'den {kontrol['desi_tahmin_eslesen']:,} "
+                    "rota satırı aktarıldı; bu satırlara büyüme ikinci kez "
+                    "uygulanmadı."
+                )
+            elif kontrol.get("desi_tahmin_eslesmeyen", 0):
+                st.warning(
+                    "Kaydedilmiş Desi Tahminleme sonucu bulundu ancak rota "
+                    "anahtarları Data_New girişiyle eşleşmedi. Kaynak yıl ve "
+                    "Uniq ID alanlarını kontrol edin."
+                )
             if kontrol.get("tekrarlanan_uniq", 0):
                 st.error(
                     "Beklenmeyen tekrarlı Uniq ID bulundu: "
@@ -7949,6 +8240,11 @@ if sekme_acik_mi[11]:
 
         data_new_sonuc = st.session_state.data_new_sonuc_df.copy()
         if not data_new_sonuc.empty:
+            (
+                data_new_etiket_haritasi,
+                data_new_kaynak_yil,
+                data_new_tahmin_yili,
+            ) = data_new_yil_etiket_haritasi(data_new_sonuc)
             yuzde_sutunlari = (
                 [
                     "Yakıt Değişim Yüzdesi (%)",
@@ -7974,22 +8270,22 @@ if sekme_acik_mi[11]:
             data_new_column_config = {
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="%.2f%%"
+                            data_new_etiket_haritasi[col], format="%.2f%%"
                         ) for col in yuzde_sutunlari
                     },
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="₺%.4f"
+                            data_new_etiket_haritasi[col], format="₺%.4f"
                         ) for col in fiyat_sutunlari
                     },
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="%.0f"
+                            data_new_etiket_haritasi[col], format="%.0f"
                         ) for col in desi_sutunlari
                     },
                     **{
                         col: st.column_config.NumberColumn(
-                            col, format="localized"
+                            data_new_etiket_haritasi[col], format="localized"
                         ) for col in tutar_sutunlari
                     },
                     "Kayıt Tarihi": st.column_config.DateColumn(
@@ -8106,7 +8402,8 @@ if sekme_acik_mi[11]:
                     "Başlıkların altındaki kutular yazdıkça filtreler. "
                     "Açılır liste filtresinde sütun seçip arama yapabilir, "
                     "Tümünü Seç ile yeniden bütün kayıtları gösterebilirsiniz. "
-                    "Yalnızca 2026 büyüme hücreleri düzenlenebilir."
+                    f"Yalnızca {data_new_tahmin_yili} büyüme hücreleri "
+                    "düzenlenebilir."
                 )
 
                 with st.expander("☑️ Açılır Liste Sütun Filtreleri", expanded=False):
@@ -8114,6 +8411,9 @@ if sekme_acik_mi[11]:
                     filtre_col = f1.selectbox(
                         "Filtrelenecek sütun",
                         data_new_tum_sutunlar,
+                        format_func=lambda col: data_new_etiket_haritasi.get(
+                            col, col
+                        ),
                         key=f"dn_filter_col_{nonce}"
                     )
                     ham_degerler = tum_df[filtre_col].where(
@@ -8208,6 +8508,7 @@ if sekme_acik_mi[11]:
                     )
                     for col in data_new_tum_sutunlar:
                         col_ayari = {
+                            "headerName": data_new_etiket_haritasi.get(col, col),
                             "editable": col in data_new_2026_buyume_sutunlari,
                             "filter": (
                                 "agNumberColumnFilter"
@@ -8306,7 +8607,9 @@ if sekme_acik_mi[11]:
 
             data_new_excel = io.BytesIO()
             with pd.ExcelWriter(data_new_excel, engine="openpyxl") as writer:
-                st.session_state.data_new_sonuc_df.to_excel(
+                st.session_state.data_new_sonuc_df.rename(
+                    columns=data_new_etiket_haritasi
+                ).to_excel(
                     writer, index=False, sheet_name="Data_New"
                 )
             dn1, dn2 = st.columns(2)
@@ -8336,6 +8639,13 @@ if sekme_acik_mi[11]:
                                 col: json_uyumlu_deger(row.get(col))
                                 for col in data_new_tum_sutunlar
                             }
+                            for yil_col in [
+                                "Yıl", DATA_NEW_KAYNAK_YIL_DB,
+                                DATA_NEW_TAHMIN_YILI_DB
+                            ]:
+                                rec[yil_col] = guvenli_tamsayi(
+                                    row.get(yil_col), nullable=True
+                                )
                             rec["revizyon_id"] = data_new_rev_id
                             rec[DATA_NEW_MANUEL_BUYUME_DB] = {
                                 col: guvenli_sayi(value)
@@ -8566,12 +8876,18 @@ if sekme_acik_mi[12]:
             st.session_state.get("df_2026_buyume_9", pd.DataFrame()),
             varsayilan_yil=2026
         )
-        tahmin_kg_kaynak = kg_musteri_kaynaklarini_birlestir(
-            tarihsel_kg, guncel_kg,
-            st.session_state.get("yil_kapanis_kg_df", pd.DataFrame())
-        )
         kapanis_kaynak = st.session_state.get(
             "yil_kapanis_detay_bulut_df", pd.DataFrame()
+        )
+        kapanis_referans_kg = yil_kapanis_detayindan_kg_musteri(
+            kapanis_kaynak
+        )
+        # Kesinleşmiş kapanış en sona alınır; aynı müşteri-yılın kısmi
+        # gerçekleşen kaydının üzerine yazılır.
+        tahmin_kg_kaynak = kg_musteri_kaynaklarini_birlestir(
+            tarihsel_kg, guncel_kg,
+            st.session_state.get("yil_kapanis_kg_df", pd.DataFrame()),
+            kapanis_referans_kg
         )
 
         kapanis_yillari = sorted({
@@ -8615,25 +8931,42 @@ if sekme_acik_mi[12]:
             tahmin_yili = int(kaynak_yil) + 1
             ds3.metric("Tahmin yılı", tahmin_yili)
 
+            uygun_referans_secenekleri = [
+                yil for yil in referans_secenekleri
+                if int(yil) <= int(kaynak_yil)
+            ]
+            kapanis_referans_yillari = {
+                int(yil) for yil in pd.to_numeric(
+                    kapanis_referans_kg.get(
+                        "Yıl", pd.Series(dtype=float)
+                    ), errors="coerce"
+                ).dropna().tolist()
+            }
+
             kayitli_referanslar = [
                 int(yil) for yil in kayitli_desi_ayar.get(
                     "referans_yillar", []
-                ) if int(yil) in referans_secenekleri
+                ) if int(yil) in uygun_referans_secenekleri
             ]
             if not kayitli_referanslar:
-                onceki_yillar = [
-                    yil for yil in referans_secenekleri if yil < int(kaynak_yil)
-                ]
-                kayitli_referanslar = (
-                    onceki_yillar[-2:] if onceki_yillar
-                    else referans_secenekleri[-2:]
-                )
+                kayitli_referanslar = uygun_referans_secenekleri[-2:]
             referans_yillar = ds2.multiselect(
                 "Aylık dağılım için referans yıllar",
-                referans_secenekleri,
+                uygun_referans_secenekleri,
                 default=kayitli_referanslar,
+                format_func=lambda yil: (
+                    f"{yil} (Yıl Kapanış)"
+                    if int(yil) in kapanis_referans_yillari
+                    else f"{yil} (Gerçekleşen)"
+                ),
                 key="desi_tahmin_referans_yillari"
             )
+            if kapanis_referans_yillari:
+                st.caption(
+                    "Yıl Kapanış etiketi taşıyan yıllarda kesinleşmiş kapanış "
+                    "verisi, kısmi gerçekleşen kaydının önüne geçer. Hedef yıl "
+                    "referans seçilemez."
+                )
 
             if not referans_yillar:
                 st.error("Ortalama hesabı için en az bir referans yıl seçin.")
