@@ -8651,12 +8651,15 @@ if sekme_acik_mi[11]:
                                 col: json_uyumlu_deger(row.get(col))
                                 for col in data_new_tum_sutunlar
                             }
-                            for yil_col in [
-                                "Yıl", DATA_NEW_KAYNAK_YIL_DB,
-                                DATA_NEW_TAHMIN_YILI_DB
+                            for tamsayi_col in [
+                                "Yıl",
+                                DATA_NEW_KAYNAK_YIL_DB,
+                                DATA_NEW_TAHMIN_YILI_DB,
+                                "Yakıt Değişim Periyodu (Ay)",
+                                "Enf. Değişim Periyodu (Ay)"
                             ]:
-                                rec[yil_col] = guvenli_tamsayi(
-                                    row.get(yil_col), nullable=True
+                                rec[tamsayi_col] = guvenli_tamsayi(
+                                    row.get(tamsayi_col), nullable=True
                                 )
                             rec["revizyon_id"] = data_new_rev_id
                             rec[DATA_NEW_MANUEL_BUYUME_DB] = {
