@@ -1365,8 +1365,78 @@ def master_bulut_kaydini_oturuma_yukle(revizyon_id, zorla=False):
 
 
 def yil_kapanis_grup_adi(value):
-    grup = temiz_metin(value, "DİĞER").upper()
-    return grup if grup in {"MP", "HOROZ CÜZDAN"} else "DİĞER"
+    """Müşteri grubunu sabit bir listeye sıkıştırmadan standartlaştırır."""
+    grup = re.sub(r"\s+", " ", temiz_metin(value, "DİĞER")).strip()
+    # Python'un varsayılan upper() dönüşümünde küçük i, I olur. Türkçe grup
+    # adlarında KLİMA / MOBİLYA gibi değerlerin tekilleşmesi için önce çevir.
+    grup = grup.translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
+    return grup or "DİĞER"
+
+
+def guncel_musteri_grup_haritasi():
+    """Yeni-Bütçe Müşteri ekranındaki en güncel grup bilgisini döndürür."""
+    kaynak = st.session_state.get("musteri_ekran_df", pd.DataFrame())
+    if (
+        kaynak is None or kaynak.empty
+        or "Müşteri Kodu" not in kaynak.columns
+        or "Müşteri Grubu" not in kaynak.columns
+    ):
+        return {}
+    work = kaynak[["Müşteri Kodu", "Müşteri Grubu"]].copy()
+    work["Müşteri Kodu"] = work["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    work = work[work["Müşteri Kodu"] != ""].drop_duplicates(
+        "Müşteri Kodu", keep="last"
+    )
+    return work.set_index("Müşteri Kodu")["Müşteri Grubu"].to_dict()
+
+
+def guncel_musteri_gruplarini_uygula(dataframe):
+    """Tahmin hesaplarında güncel müşteri kartındaki grubu önceliklendirir."""
+    if dataframe is None or dataframe.empty:
+        return dataframe.copy() if isinstance(dataframe, pd.DataFrame) else dataframe
+    sonuc = dataframe.copy()
+    if "Müşteri Grubu" not in sonuc.columns:
+        sonuc["Müşteri Grubu"] = "DİĞER"
+    sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    if "Müşteri Kodu" not in sonuc.columns:
+        return sonuc
+    grup_haritasi = guncel_musteri_grup_haritasi()
+    if not grup_haritasi:
+        return sonuc
+    kodlar = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    guncel_gruplar = kodlar.map(grup_haritasi)
+    sonuc["Müşteri Grubu"] = guncel_gruplar.where(
+        guncel_gruplar.notna() & (guncel_gruplar != ""),
+        sonuc["Müşteri Grubu"]
+    )
+    return sonuc
+
+
+def dinamik_musteri_gruplari(*dataframeler):
+    """Verilerdeki ve güncel müşteri kartlarındaki bütün grupları sıralar."""
+    gruplar = {"DİĞER"}
+    for dataframe in dataframeler:
+        if (
+            isinstance(dataframe, pd.DataFrame)
+            and not dataframe.empty
+            and "Müşteri Grubu" in dataframe.columns
+        ):
+            gruplar.update(
+                dataframe["Müşteri Grubu"].apply(
+                    yil_kapanis_grup_adi
+                ).tolist()
+            )
+    gruplar.update(guncel_musteri_grup_haritasi().values())
+    oncelik = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+    return (
+        [grup for grup in oncelik if grup in gruplar]
+        + sorted(gruplar.difference(oncelik))
+    )
 
 
 def kg_musteri_verisini_hazirla(dataframe, varsayilan_yil=None):
@@ -1382,7 +1452,7 @@ def kg_musteri_verisini_hazirla(dataframe, varsayilan_yil=None):
         return pd.DataFrame(columns=kg_musteri_sutunlari)
     if "Müşteri Grubu" not in df.columns:
         df["Müşteri Grubu"] = "DİĞER"
-    df["Müşteri Grubu"] = df["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
+    df = guncel_musteri_gruplarini_uygula(df)
 
     yillik_kolon_yillari = sorted({
         int(eslesme.group(1))
@@ -1460,6 +1530,7 @@ def kg_musteri_kaynaklarini_birlestir(*kaynaklar):
         lambda value: guvenli_tamsayi(value, nullable=False)
     )
     sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    sonuc = guncel_musteri_gruplarini_uygula(sonuc)
     sonuc = sonuc.drop_duplicates(
         ["Yıl", "Müşteri Kodu"], keep="last"
     )
@@ -1503,18 +1574,16 @@ def yil_kapanis_detayindan_kg_musteri(detay_df):
     return sonuc.reindex(columns=kg_musteri_sutunlari).reset_index(drop=True)
 
 
-def yil_kapanis_yuzde_matrisi(kg_musteri_df, yil):
+def yil_kapanis_yuzde_matrisi(kg_musteri_df, yil, grup_sirasi=None):
     """Seçilen yılda her grubun aylık Kg paylarını yüzde puanı olarak üretir."""
-    grup_sirasi = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+    grup_sirasi = grup_sirasi or dinamik_musteri_gruplari(kg_musteri_df)
     kaynak = kg_musteri_df[
         pd.to_numeric(kg_musteri_df["Yıl"], errors="coerce") == int(yil)
     ].copy()
+    kaynak = guncel_musteri_gruplarini_uygula(kaynak)
     ayliklar = [f"{ay} Kg" for ay in aylar]
     for col in ayliklar:
         kaynak[col] = pd.to_numeric(kaynak[col], errors="coerce").fillna(0.0)
-    kaynak["Müşteri Grubu"] = kaynak["Müşteri Grubu"].apply(
-        yil_kapanis_grup_adi
-    )
     grup_toplamlari = (
         kaynak.groupby("Müşteri Grubu")[ayliklar].sum()
         .reindex(grup_sirasi, fill_value=0.0)
@@ -1538,19 +1607,41 @@ def yil_kapanis_ortalamasini_hesapla(
     kg_musteri_df, yil_1, yil_2, son_gerceklesen_ay
 ):
     """İki yılın grup/ay yüzdelerinin aritmetik ortalamasını hesaplar."""
-    matris_1 = yil_kapanis_yuzde_matrisi(kg_musteri_df, yil_1)
-    matris_2 = yil_kapanis_yuzde_matrisi(kg_musteri_df, yil_2)
+    grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df)
+    matris_1 = yil_kapanis_yuzde_matrisi(
+        kg_musteri_df, yil_1, grup_sirasi
+    )
+    matris_2 = yil_kapanis_yuzde_matrisi(
+        kg_musteri_df, yil_2, grup_sirasi
+    )
     harita_1 = matris_1.set_index("Müşteri Grubu")
     harita_2 = matris_2.set_index("Müşteri Grubu")
     son_ay_index = aylar.index(son_gerceklesen_ay)
     sonuc = []
-    for grup in ["DİĞER", "HOROZ CÜZDAN", "MP"]:
+    diger_satirlari = [
+        harita.loc["DİĞER", aylar].to_numpy(dtype=float)
+        for harita in [harita_1, harita_2]
+        if "DİĞER" in harita.index
+        and float(harita.loc["DİĞER", aylar].sum()) > 0
+    ]
+    diger_fallback = (
+        np.mean(diger_satirlari, axis=0)
+        if diger_satirlari else np.full(len(aylar), 100.0 / len(aylar))
+    )
+    for grup in grup_sirasi:
+        mevcut_satirlar = [
+            harita.loc[grup, aylar].to_numpy(dtype=float)
+            for harita in [harita_1, harita_2]
+            if grup in harita.index
+            and float(harita.loc[grup, aylar].sum()) > 0
+        ]
+        ortalama_degerler = (
+            np.mean(mevcut_satirlar, axis=0)
+            if mevcut_satirlar else diger_fallback.copy()
+        )
         aylik_ortalamalar = {
-            ay: (
-                guvenli_sayi(harita_1.at[grup, ay])
-                + guvenli_sayi(harita_2.at[grup, ay])
-            ) / 2.0
-            for ay in aylar
+            ay: float(ortalama_degerler[index])
+            for index, ay in enumerate(aylar)
         }
         sonuc.append({
             "Müşteri Grubu": grup,
@@ -1594,9 +1685,7 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
         guvenli_metin_kodu
     )
     sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
-    sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
-        yil_kapanis_grup_adi
-    )
+    sonuc = guncel_musteri_gruplarini_uygula(sonuc)
     for col in [
         "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
         "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi",
@@ -1965,26 +2054,46 @@ def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
 def desi_tahmin_ortalamasini_hesapla(kg_musteri_df, referans_yillar):
     """Seçilen tüm yılların grup/ay dağılımlarının aritmetik ortalaması."""
     yillar = sorted({int(yil) for yil in referans_yillar})
+    grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df)
     matrisler = {
-        yil: yil_kapanis_yuzde_matrisi(kg_musteri_df, yil)
+        yil: yil_kapanis_yuzde_matrisi(
+            kg_musteri_df, yil, grup_sirasi
+        )
         for yil in yillar
     }
+    diger_satirlari = []
+    for matris in matrisler.values():
+        diger = matris[matris["Müşteri Grubu"] == "DİĞER"]
+        if not diger.empty:
+            degerler = diger.iloc[0][aylar].to_numpy(dtype=float)
+            if float(degerler.sum()) > 0:
+                diger_satirlari.append(degerler)
+    diger_fallback = (
+        np.mean(diger_satirlari, axis=0)
+        if diger_satirlari else np.full(len(aylar), 100.0 / len(aylar))
+    )
     satirlar = []
-    for grup in ["DİĞER", "HOROZ CÜZDAN", "MP"]:
-        ayliklar = {}
-        for ay in aylar:
-            degerler = []
-            for matris in matrisler.values():
-                grup_satiri = matris[matris["Müşteri Grubu"] == grup]
-                if not grup_satiri.empty:
-                    degerler.append(guvenli_sayi(grup_satiri.iloc[0][ay]))
-            ayliklar[f"{ay} (%)"] = (
-                float(np.mean(degerler)) if degerler else 0.0
-            )
+    for grup in grup_sirasi:
+        mevcut_satirlar = []
+        for matris in matrisler.values():
+            grup_satiri = matris[matris["Müşteri Grubu"] == grup]
+            if grup_satiri.empty:
+                continue
+            degerler = grup_satiri.iloc[0][aylar].to_numpy(dtype=float)
+            if float(degerler.sum()) > 0:
+                mevcut_satirlar.append(degerler)
+        ortalama_degerler = (
+            np.mean(mevcut_satirlar, axis=0)
+            if mevcut_satirlar else diger_fallback.copy()
+        )
+        aylik_oranlar = {
+            f"{ay} (%)": float(ortalama_degerler[index])
+            for index, ay in enumerate(aylar)
+        }
         satirlar.append({
             "Müşteri Grubu": grup,
-            **ayliklar,
-            "Toplam (%)": sum(ayliklar.values())
+            **aylik_oranlar,
+            "Toplam (%)": sum(aylik_oranlar.values())
         })
     return matrisler, pd.DataFrame(
         satirlar, columns=desi_tahmin_ortalama_sutunlari
@@ -3953,6 +4062,9 @@ if sekme_acik_mi[2]:
 
             sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
             sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
+            sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
+                yil_kapanis_grup_adi
+            )
 
             # Aynı müşteri kodu dosyada birden fazla kez geçse bile ekranda tek satır göster.
             sonuc = sonuc.drop_duplicates(subset=["Müşteri Kodu"], keep="first").reset_index(drop=True)
@@ -5102,7 +5214,9 @@ if sekme_acik_mi[7]:
                 df[c] = df[c].apply(lambda v: temiz_metin_9(v, varsayilan))
 
             df["Müşteri Kodu"] = df["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            df["Müşteri Grubu"] = df["Müşteri Grubu"].str.upper()
+            df["Müşteri Grubu"] = df["Müşteri Grubu"].apply(
+                yil_kapanis_grup_adi
+            )
             df["Durum"] = df["Durum"].replace("", "GEÇERLİ")
             df["Yıl"] = 2026
 
@@ -5125,7 +5239,7 @@ if sekme_acik_mi[7]:
                 if c not in work.columns:
                     work[c] = "DİĞER" if c == "Müşteri Grubu" else ""
             work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
-                lambda v: temiz_metin_9(v, "DİĞER").upper()
+                yil_kapanis_grup_adi
             )
 
             ay_esleme = {}
@@ -5159,11 +5273,8 @@ if sekme_acik_mi[7]:
                         return value
             return varsayilan
 
-        HEDEF_GRUPLAR_9 = ["MP", "HOROZ CÜZDAN", "DİĞER"]
-
         def grup_adi_standartlastir_9(value):
-            grup = temiz_metin_9(value, "DİĞER").upper()
-            return grup if grup in {"MP", "HOROZ CÜZDAN"} else "DİĞER"
+            return yil_kapanis_grup_adi(value)
 
         def tarihsel_havuzu_sikistir_9(dataframe):
             """Eski veya yeni tarihsel kaydı müşteri başına tek satıra indirir."""
@@ -5199,6 +5310,7 @@ if sekme_acik_mi[7]:
                 sonuc["Müşteri Kodu"].map(grup_haritasi)
                 .apply(grup_adi_standartlastir_9)
             )
+            sonuc = guncel_musteri_gruplarini_uygula(sonuc)
             for yil in ["2024", "2025"]:
                 yil_kolonlari = [f"{yil} {ay} Kg" for ay in aylar]
                 sonuc[f"{yil} Toplam Kg"] = sonuc[yil_kolonlari].sum(axis=1)
@@ -5622,15 +5734,16 @@ if sekme_acik_mi[7]:
 
         def tarihsel_grup_dagilimlarini_hazirla_9():
             """2024 ve 2025'in grup bazlı aylık dağılım ortalamasını üretir."""
+            hedef_gruplar = dinamik_musteri_gruplari(hist_24_9, hist_25_9)
             yil_dagilimlari = {}
             for yil, kaynak in [("2024", hist_24_9), ("2025", hist_25_9)]:
                 aylik_kolonlar = [f"{yil} {ay} Kg" for ay in aylar]
                 if kaynak is None or kaynak.empty:
                     grup_toplamlari = pd.DataFrame(
-                        0.0, index=HEDEF_GRUPLAR_9, columns=aylik_kolonlar
+                        0.0, index=hedef_gruplar, columns=aylik_kolonlar
                     )
                 else:
-                    work = kaynak.copy()
+                    work = guncel_musteri_gruplarini_uygula(kaynak)
                     work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
                         grup_adi_standartlastir_9
                     )
@@ -5641,11 +5754,11 @@ if sekme_acik_mi[7]:
                     grup_toplamlari = (
                         work.groupby("Müşteri Grubu")[aylik_kolonlar]
                         .sum()
-                        .reindex(HEDEF_GRUPLAR_9, fill_value=0.0)
+                        .reindex(hedef_gruplar, fill_value=0.0)
                     )
 
                 dagilimlar = {}
-                for grup in HEDEF_GRUPLAR_9:
+                for grup in hedef_gruplar:
                     degerler = grup_toplamlari.loc[grup].to_numpy(dtype=float)
                     toplam = float(degerler.sum())
                     dagilimlar[grup] = (
@@ -5653,13 +5766,28 @@ if sekme_acik_mi[7]:
                     )
                 yil_dagilimlari[yil] = dagilimlar
 
-            return {
-                grup: (
-                    yil_dagilimlari["2024"][grup]
-                    + yil_dagilimlari["2025"][grup]
-                ) / 2.0
-                for grup in HEDEF_GRUPLAR_9
-            }
+            diger_mevcut = [
+                yil_dagilimlari[yil]["DİĞER"]
+                for yil in ["2024", "2025"]
+                if float(yil_dagilimlari[yil]["DİĞER"].sum()) > 0
+            ]
+            diger_fallback = (
+                np.mean(diger_mevcut, axis=0)
+                if diger_mevcut
+                else np.full(len(aylar), 1.0 / len(aylar))
+            )
+            sonuc = {}
+            for grup in hedef_gruplar:
+                mevcut = [
+                    yil_dagilimlari[yil][grup]
+                    for yil in ["2024", "2025"]
+                    if float(yil_dagilimlari[yil][grup].sum()) > 0
+                ]
+                sonuc[grup] = (
+                    np.mean(mevcut, axis=0)
+                    if mevcut else diger_fallback.copy()
+                )
+            return sonuc
 
         def calisma_gunu_25to26_oranlari_9():
             takvim = st.session_state.get("takvim_verisi_yillar", pd.DataFrame())
@@ -5699,7 +5827,7 @@ if sekme_acik_mi[7]:
             )
             grup_paydalari = {
                 grup: float(grup_dagilimlari[grup][:son_ay_index + 1].sum())
-                for grup in HEDEF_GRUPLAR_9
+                for grup in grup_dagilimlari
             }
             payda = satir_gruplari.map(grup_paydalari).fillna(0.0).to_numpy(float)
             yillik_baz = np.divide(
@@ -5721,7 +5849,7 @@ if sekme_acik_mi[7]:
                 )
                 hedef_grup_payi = satir_gruplari.map({
                     grup: float(grup_dagilimlari[grup][hedef_index])
-                    for grup in HEDEF_GRUPLAR_9
+                    for grup in grup_dagilimlari
                 }).fillna(0.0).to_numpy(float)
                 calisma_gunu_orani = float(gun_oranlari.get(hedef_ay, 1.0))
 
@@ -5806,7 +5934,7 @@ if sekme_acik_mi[7]:
             if not df_2026_gercek_9.empty:
                 dagilim_imzasi_9 = tuple(
                     round(float(deger), 12)
-                    for grup in HEDEF_GRUPLAR_9
+                    for grup in sorted(ortalama_grup_dagilimlari_9)
                     for deger in ortalama_grup_dagilimlari_9[grup]
                 )
                 gun_imzasi_9 = tuple(
@@ -6198,12 +6326,10 @@ if sekme_acik_mi[7]:
 
             grup_calc_9 = df_calc_9.copy()
             grup_calc_9["Müşteri Grubu"] = grup_calc_9["Müşteri Grubu"].apply(
-                lambda v: temiz_metin_9(v, "DİĞER").upper()
+                yil_kapanis_grup_adi
             )
-            grup_calc_9["Müşteri Grubu"] = grup_calc_9["Müşteri Grubu"].where(
-                grup_calc_9["Müşteri Grubu"].isin(["MP", "HOROZ CÜZDAN"]), "DİĞER"
-            )
-            hedef_gruplar_9 = ["MP", "HOROZ CÜZDAN", "DİĞER"]
+            grup_calc_9 = guncel_musteri_gruplarini_uygula(grup_calc_9)
+            hedef_gruplar_9 = dinamik_musteri_gruplari(grup_calc_9)
 
             grup_totals_9 = {}
             for y in ["2024", "2025", "2026"]:
@@ -6470,8 +6596,8 @@ if sekme_acik_mi[8]:
     with sekmeler[8]:
         st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
         st.caption(
-            "Verisi bulunan iki yılı seçerek MP, HOROZ CÜZDAN ve DİĞER "
-            "gruplarının aylık paylarını ve iki yılın aritmetik ortalamasını "
+            "Verisi bulunan iki yılı seçerek müşteri gruplarının aylık "
+            "paylarını ve iki yılın aritmetik ortalamasını "
             "hesaplayabilirsiniz. Gerçekleşen dönem toplamı seçilen son ayın "
             "kendi sütununda gösterilir."
         )
@@ -8782,7 +8908,9 @@ if sekme_acik_mi[12]:
                         errors="ignore"
                     ).reindex(columns=desi_tahmin_ortalama_sutunlari)
                 )
-                yuklenenler.append("Tahmin ortalaması: 3 grup")
+                yuklenenler.append(
+                    f"Tahmin ortalaması: {len(ortalama_raw)} grup"
+                )
             else:
                 st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
                 st.session_state.desi_tahmin_bulut_ayarlari = {}
