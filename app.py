@@ -3660,7 +3660,13 @@ if sekme_acik_mi[0]:
                 
                     if abs(eski - yeni) > 0.0001:
                         degisim_var = True
-                        st.session_state.takvim_verisi_yillar = just_real_years
+                        # Toplam ekranda aylardan türetilen bir alandır; bulut
+                        # şemasına ve oturumdaki kaynak takvime taşınmamalıdır.
+                        st.session_state.takvim_verisi_yillar = (
+                            just_real_years[["YIL"] + aylar]
+                            .copy()
+                            .reset_index(drop=True)
+                        )
                         st.session_state.takvim_verisi_yillar.at[i, m] = yeni
                     
             if degisim_var:
@@ -3693,7 +3699,22 @@ if sekme_acik_mi[0]:
                         key="btn_tk_cloud_save",
                         disabled=not aktif_takvim_rev_id
                     ):
-                        clean_save_df = st.session_state.takvim_verisi_yillar.copy()
+                        # Toplam sütunu yalnızca görünüm içindir. Oturumda eski
+                        # bir çalışmadan kalmış olsa bile Supabase'e gönderme.
+                        clean_save_df = (
+                            st.session_state.takvim_verisi_yillar
+                            .reindex(columns=["YIL"] + aylar)
+                            .copy()
+                        )
+                        clean_save_df["YIL"] = (
+                            clean_save_df["YIL"].astype(str).str.strip()
+                        )
+                        for ay in aylar:
+                            clean_save_df[ay] = (
+                                clean_save_df[ay]
+                                .apply(guvenli_sayi)
+                                .astype(float)
+                            )
                         tk_records = [
                             {
                                 **{
