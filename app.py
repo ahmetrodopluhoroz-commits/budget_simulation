@@ -4161,6 +4161,55 @@ if sekme_acik_mi[2]:
                 edited_m.reindex(columns=MUSTERI_DETAY_KOLONLARI).copy()
             )
 
+            # Ekrandaki en güncel manuel düzenlemeleri aynı kolon sırasıyla
+            # Excel'e aktar. Sayısal alanlar Excel'de gerçek sayı olarak kalır.
+            musteri_excel_df = musteri_detay_gorunumunu_hazirla(
+                st.session_state.musteri_ekran_df
+            )
+            musteri_excel_cikti = io.BytesIO()
+            with pd.ExcelWriter(
+                musteri_excel_cikti, engine="openpyxl"
+            ) as writer:
+                sayfa_adi = "Yeni-Bütçe Müşteri"
+                musteri_excel_df.to_excel(
+                    writer, index=False, sheet_name=sayfa_adi
+                )
+                calisma_sayfasi = writer.sheets[sayfa_adi]
+                calisma_sayfasi.freeze_panes = "A2"
+                calisma_sayfasi.auto_filter.ref = calisma_sayfasi.dimensions
+
+                sayisal_kolonlar = (
+                    MUSTERI_AYLIK_KG_KOLONLARI + [MUSTERI_TOPLAM_KOLONU]
+                )
+                for kolon in sayisal_kolonlar:
+                    kolon_no = musteri_excel_df.columns.get_loc(kolon) + 1
+                    for satir_no in range(2, len(musteri_excel_df) + 2):
+                        calisma_sayfasi.cell(
+                            row=satir_no, column=kolon_no
+                        ).number_format = "#,##0"
+
+                for hucreler in calisma_sayfasi.columns:
+                    en_uzun = max(
+                        len(str(hucre.value)) if hucre.value is not None else 0
+                        for hucre in hucreler
+                    )
+                    kolon_harfi = hucreler[0].column_letter
+                    calisma_sayfasi.column_dimensions[kolon_harfi].width = min(
+                        max(en_uzun + 2, 12), 45
+                    )
+
+            st.download_button(
+                "📥 Yeni-Bütçe Müşteri Detayını Excel İndir",
+                data=musteri_excel_cikti.getvalue(),
+                file_name="yeni_butce_musteri_detay.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+                key="btn_musteri_detay_excel_indir"
+            )
+
         st.markdown("---")
         c_m1, c_m2, c_m3 = st.columns(3)
         if not st.session_state.musteri_ekran_df.empty and c_m1.button("💾 Değişiklikleri Hafızaya İşle", type="primary", use_container_width=True, key="btn_m_hfz"):
