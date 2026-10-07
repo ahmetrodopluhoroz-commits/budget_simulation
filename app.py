@@ -434,6 +434,34 @@ buyume_ekran_sutunlari = [
     "25 kullanılan büyüme", "KULLANICAK BÜYÜME", "Gelen Özet Bilgi", "Müşteriden Gelen Büyüme"
 ]
 BUYUME_AYLIK_ORANLAR_DB = "Aylık Büyüme Oranları"
+MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU = "musteri_grup_eslestirme_tablosu"
+MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU = "musteri_kaynak_secimleri_tablosu"
+MUSTERI_KAYNAK_HAM = "HAM"
+MUSTERI_KAYNAK_REVIZE = "REVIZE"
+MUSTERI_KAYNAK_ETIKETLERI = {
+    MUSTERI_KAYNAK_REVIZE: "Revize edilmiş müşteri tablosunu kullan",
+    MUSTERI_KAYNAK_HAM: "Ham müşteri tablosunu kullan",
+}
+MUSTERI_GERCEKLESEN_AYLAR = aylar[:10]
+MUSTERI_AYLIK_KG_KOLONLARI = [
+    f"{ay} Kg" for ay in MUSTERI_GERCEKLESEN_AYLAR
+]
+MUSTERI_TOPLAM_KOLONU = "Gerçekleşen Aylar Toplam Desi"
+MUSTERI_DETAY_KOLONLARI = [
+    "Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
+    "Durum", "Kayıt Tarihi", "Müşteri Grubu"
+] + MUSTERI_AYLIK_KG_KOLONLARI + [
+    MUSTERI_TOPLAM_KOLONU,
+    "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not",
+    "Değişim kontrol"
+]
+MUSTERI_DUZENLENEBILIR_KOLONLAR = [
+    "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not"
+]
+MUSTERI_GRUP_ESLESTIRME_KOLONLARI = [
+    "Müşteri Kodu", "Sap Kodu", "Müşteri Adı",
+    "Müşteri Temsilcisi", "Müşteri Grubu"
+]
 KG_MUSTERI_DB_TABLOSU = "kg_musteri_tablosu"
 YIL_KAPANIS_DB_TABLOSU = "yil_kapanis_tablosu"
 YIL_KAPANIS_DETAY_DB_TABLOSU = "yil_kapanis_detay_tablosu"
@@ -535,7 +563,36 @@ if st.session_state.get("master_mazot_izleme_surumu") != 2:
 if st.session_state.get("master_enflasyon_izleme_surumu") != 1:
     st.session_state.master_enflasyon_ayarlari = {}
     st.session_state.master_enflasyon_izleme_surumu = 1
-if "musteri_ekran_df" not in st.session_state: st.session_state.musteri_ekran_df = pd.DataFrame()
+if "musteri_ekran_df" not in st.session_state:
+    st.session_state.musteri_ekran_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+if "musteri_ham_df" not in st.session_state:
+    st.session_state.musteri_ham_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+if "musteri_revize_df" not in st.session_state:
+    st.session_state.musteri_revize_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+if "musteri_grup_eslestirme_df" not in st.session_state:
+    st.session_state.musteri_grup_eslestirme_df = pd.DataFrame(
+        columns=MUSTERI_GRUP_ESLESTIRME_KOLONLARI
+    )
+if "musteri_kaynak_secimleri" not in st.session_state:
+    st.session_state.musteri_kaynak_secimleri = {}
+if "musteri_kaynak_secimleri_bulut_revizyon" not in st.session_state:
+    st.session_state.musteri_kaynak_secimleri_bulut_revizyon = None
+if "musteri_bulut_yuklenen_revizyon" not in st.session_state:
+    st.session_state.musteri_bulut_yuklenen_revizyon = None
+if "musteri_veri_yili" not in st.session_state:
+    st.session_state.musteri_veri_yili = 2025
+if "musteri_ham_upload_imzasi" not in st.session_state:
+    st.session_state.musteri_ham_upload_imzasi = None
+if "musteri_eslestirme_upload_imzasi" not in st.session_state:
+    st.session_state.musteri_eslestirme_upload_imzasi = None
+if "musteri_eslestirme_editor_nonce" not in st.session_state:
+    st.session_state.musteri_eslestirme_editor_nonce = 0
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
 if "buyume_ekran_df" not in st.session_state: st.session_state.buyume_ekran_df = pd.DataFrame()
 if "buyume_tarihsel_upload_imzalari" not in st.session_state:
@@ -770,7 +827,25 @@ def revizyon_oturumunu_temizle():
     )
     st.session_state.ana_veri = pd.DataFrame(columns=tum_kolonlar)
     st.session_state.musteri_ayarlari = {}
-    st.session_state.musteri_ekran_df = pd.DataFrame()
+    st.session_state.musteri_ekran_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+    st.session_state.musteri_ham_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+    st.session_state.musteri_revize_df = pd.DataFrame(
+        columns=MUSTERI_DETAY_KOLONLARI
+    )
+    st.session_state.musteri_grup_eslestirme_df = pd.DataFrame(
+        columns=MUSTERI_GRUP_ESLESTIRME_KOLONLARI
+    )
+    st.session_state.musteri_kaynak_secimleri = {}
+    st.session_state.musteri_kaynak_secimleri_bulut_revizyon = None
+    st.session_state.musteri_bulut_yuklenen_revizyon = None
+    st.session_state.musteri_veri_yili = 2025
+    st.session_state.musteri_ham_upload_imzasi = None
+    st.session_state.musteri_eslestirme_upload_imzasi = None
+    st.session_state.musteri_eslestirme_editor_nonce += 1
     st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
     st.session_state.parametre_upload_imzasi = None
     st.session_state.parametre_editor_nonce += 1
@@ -837,6 +912,7 @@ def revizyon_oturumunu_temizle():
     }])
     st.session_state.pop("takvim_verisi_yillar", None)
     st.session_state.pop("takvim_yuklenen_revizyon", None)
+    st.session_state.pop("aktif_musteri_kaynak_ekrani", None)
 
 # ============================================================
 # VERİ TEMİZLEME MOTORU
@@ -1373,9 +1449,380 @@ def yil_kapanis_grup_adi(value):
     return grup or "DİĞER"
 
 
+def musteri_ilk_dolu_deger(seri, varsayilan=""):
+    """Bir müşteri grubundaki ilk anlamlı kimlik değerini korur."""
+    for value in seri:
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        if str(value).strip() not in {"", "nan", "NaT", "None"}:
+            return value
+    return varsayilan
+
+
+def musteri_gerceklesen_aylarini_hazirla(hedef_df):
+    """Ocak-Ekim Kg alanlarını temizler; eski toplamı yedek olarak korur."""
+    sonuc = sutun_adlarini_standartlastir(hedef_df)
+    if "Müşteri Kodu" not in sonuc.columns:
+        sonuc["Müşteri Kodu"] = ""
+    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(
+        guvenli_metin_kodu
+    )
+
+    eski_toplam = pd.Series(0.0, index=sonuc.index, dtype=float)
+    for eski_kolon in [
+        MUSTERI_TOPLAM_KOLONU, "10 Ay Toplam Desi", "9 Ay Toplam Desi"
+    ]:
+        if eski_kolon in sonuc.columns:
+            aday = desi_kg_serisini_yuvarla(sonuc[eski_kolon])
+            eski_toplam = eski_toplam.where(eski_toplam != 0.0, aday)
+
+    for ay in MUSTERI_GERCEKLESEN_AYLAR:
+        hedef = f"{ay} Kg"
+        if hedef not in sonuc.columns:
+            aday = next((
+                c for c in [
+                    f"2026 {ay} Kg", f"2025 {ay} Kg", f"{ay} Desi",
+                    f"2026 {ay} Desi", f"2025 {ay} Desi"
+                ] if c in sonuc.columns
+            ), None)
+            sonuc[hedef] = sonuc[aday] if aday else 0.0
+        sonuc[hedef] = desi_kg_serisini_yuvarla(sonuc[hedef])
+
+    sonuc["__Eski Gerçekleşen Toplam"] = eski_toplam
+    sonuc[MUSTERI_TOPLAM_KOLONU] = sonuc[
+        MUSTERI_AYLIK_KG_KOLONLARI
+    ].sum(axis=1)
+    return sonuc
+
+
+def musteri_detay_gorunumunu_hazirla(dataframe):
+    """Operasyon satırlarını müşteri kodu bazında tek ve toplu karta indirir."""
+    if dataframe is None or dataframe.empty:
+        return pd.DataFrame(columns=MUSTERI_DETAY_KOLONLARI)
+    sonuc = sutun_adlarini_standartlastir(dataframe)
+    if "Sap Kodu" not in sonuc.columns and "Sap No" in sonuc.columns:
+        sonuc = sonuc.rename(columns={"Sap No": "Sap Kodu"})
+    sonuc = musteri_gerceklesen_aylarini_hazirla(sonuc)
+
+    varsayilanlar = {
+        "Müşteri Kodu": "", "Sap Kodu": "", "Müşteri Adı": "",
+        "Müşteri Temsilcisi": "", "Durum": "GEÇERLİ",
+        "Kayıt Tarihi": "", "Müşteri Grubu": "DİĞER",
+        "Yeni/Bütçelenen Müşteri": "03.Bütçelenen", "Durum_2": None,
+        "Durum_3": "", "Serbest Not": ""
+    }
+    for col, varsayilan in varsayilanlar.items():
+        if col not in sonuc.columns:
+            sonuc[col] = varsayilan
+
+    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(
+        guvenli_metin_kodu
+    )
+    sonuc["Sap Kodu"] = sonuc["Sap Kodu"].apply(guvenli_metin_kodu)
+    sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
+    if sonuc.empty:
+        return pd.DataFrame(columns=MUSTERI_DETAY_KOLONLARI)
+    sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+
+    kimlik_varsayilanlari = {
+        "Sap Kodu": "", "Müşteri Adı": "", "Müşteri Temsilcisi": "",
+        "Durum": "GEÇERLİ", "Kayıt Tarihi": "",
+        "Müşteri Grubu": "DİĞER",
+        "Yeni/Bütçelenen Müşteri": "03.Bütçelenen", "Durum_2": None,
+        "Durum_3": "", "Serbest Not": ""
+    }
+    toplama_kolonlari = MUSTERI_AYLIK_KG_KOLONLARI + [
+        "__Eski Gerçekleşen Toplam"
+    ]
+    agg = {
+        col: (
+            lambda seri, varsayilan=varsayilan:
+            musteri_ilk_dolu_deger(seri, varsayilan)
+        )
+        for col, varsayilan in kimlik_varsayilanlari.items()
+    }
+    agg.update({col: "sum" for col in toplama_kolonlari})
+    sonuc = sonuc.groupby(
+        "Müşteri Kodu", as_index=False, sort=False
+    ).agg(agg)
+
+    for col in MUSTERI_AYLIK_KG_KOLONLARI:
+        sonuc[col] = desi_kg_serisini_yuvarla(sonuc[col])
+    sonuc[MUSTERI_TOPLAM_KOLONU] = sonuc[
+        MUSTERI_AYLIK_KG_KOLONLARI
+    ].sum(axis=1)
+    aylik_toplam_sifir = np.isclose(
+        sonuc[MUSTERI_TOPLAM_KOLONU], 0.0
+    )
+    sonuc.loc[
+        aylik_toplam_sifir
+        & (sonuc["__Eski Gerçekleşen Toplam"] != 0.0),
+        MUSTERI_TOPLAM_KOLONU
+    ] = sonuc.loc[
+        aylik_toplam_sifir
+        & (sonuc["__Eski Gerçekleşen Toplam"] != 0.0),
+        "__Eski Gerçekleşen Toplam"
+    ]
+    sonuc["Değişim kontrol"] = sonuc.apply(
+        lambda row: "DOĞRU"
+        if temiz_metin(row.get("Durum")).upper()
+        == temiz_metin(row.get("Durum_2")).upper()
+        else "YANLIŞ",
+        axis=1
+    )
+    return sonuc.reindex(columns=MUSTERI_DETAY_KOLONLARI)
+
+
+def musteri_grup_eslestirme_cakismalari(dataframe):
+    """Aynı müşteri koduna birden fazla farklı grup atanmasını bulur."""
+    if dataframe is None or dataframe.empty:
+        return []
+    work = sutun_adlarini_standartlastir(dataframe)
+    if "Müşteri Grup" in work.columns and "Müşteri Grubu" not in work.columns:
+        work = work.rename(columns={"Müşteri Grup": "Müşteri Grubu"})
+    if not {"Müşteri Kodu", "Müşteri Grubu"}.issubset(work.columns):
+        return []
+    work["Müşteri Kodu"] = work["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    work["Müşteri Grubu"] = work["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    work = work[work["Müşteri Kodu"] != ""]
+    sayilar = work.groupby("Müşteri Kodu")["Müşteri Grubu"].nunique()
+    return sayilar[sayilar > 1].index.astype(str).tolist()
+
+
+def musteri_grup_eslestirmesini_hazirla(dataframe, ham_df=None):
+    """Eşleştirme dosyasını tek müşteri kodu ve dinamik grup yapısına getirir."""
+    if dataframe is None or dataframe.empty:
+        return pd.DataFrame(columns=MUSTERI_GRUP_ESLESTIRME_KOLONLARI)
+    sonuc = sutun_adlarini_standartlastir(dataframe)
+    aliaslar = {
+        "Müşteri Grup": "Müşteri Grubu",
+        "Sap No": "Sap Kodu",
+        "Ünvan": "Müşteri Adı",
+        "Müşteri Temsilcisi 1": "Müşteri Temsilcisi",
+    }
+    for eski, yeni in aliaslar.items():
+        if eski in sonuc.columns and yeni not in sonuc.columns:
+            sonuc = sonuc.rename(columns={eski: yeni})
+    for col in MUSTERI_GRUP_ESLESTIRME_KOLONLARI:
+        if col not in sonuc.columns:
+            sonuc[col] = "DİĞER" if col == "Müşteri Grubu" else ""
+    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(
+        guvenli_metin_kodu
+    )
+    sonuc["Sap Kodu"] = sonuc["Sap Kodu"].apply(guvenli_metin_kodu)
+    sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
+        yil_kapanis_grup_adi
+    )
+    sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
+    sonuc = sonuc.drop_duplicates("Müşteri Kodu", keep="last")
+
+    if isinstance(ham_df, pd.DataFrame) and not ham_df.empty:
+        ham = musteri_detay_gorunumunu_hazirla(ham_df).drop_duplicates(
+            "Müşteri Kodu", keep="last"
+        ).set_index("Müşteri Kodu")
+        for col in ["Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi"]:
+            harita = ham[col].to_dict() if col in ham.columns else {}
+            eksik = sonuc[col].apply(lambda value: temiz_metin(value) == "")
+            sonuc.loc[eksik, col] = sonuc.loc[
+                eksik, "Müşteri Kodu"
+            ].map(harita).fillna("")
+    return sonuc.reindex(
+        columns=MUSTERI_GRUP_ESLESTIRME_KOLONLARI
+    ).reset_index(drop=True)
+
+
+def musteri_veri_katmanlarini_yenile():
+    """Ham kartları korur ve müşteri koduyla revize grup görünümü üretir."""
+    ham = st.session_state.get("musteri_ham_df", pd.DataFrame()).copy()
+    if ham.empty:
+        eski = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
+        if not eski.empty:
+            ham = eski
+    ham = musteri_detay_gorunumunu_hazirla(ham)
+    eslestirme = musteri_grup_eslestirmesini_hazirla(
+        st.session_state.get("musteri_grup_eslestirme_df", pd.DataFrame()),
+        ham
+    )
+    revize = ham.copy()
+    if not revize.empty and not eslestirme.empty:
+        grup_haritasi = eslestirme.set_index(
+            "Müşteri Kodu"
+        )["Müşteri Grubu"].to_dict()
+        kodlar = revize["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        yeni_grup = kodlar.map(grup_haritasi)
+        revize["Müşteri Grubu"] = yeni_grup.where(
+            yeni_grup.notna() & (yeni_grup.astype(str).str.strip() != ""),
+            revize["Müşteri Grubu"]
+        ).apply(yil_kapanis_grup_adi)
+
+    st.session_state.musteri_ham_df = ham
+    st.session_state.musteri_grup_eslestirme_df = eslestirme
+    st.session_state.musteri_revize_df = revize
+    # Eski hesapların geriye dönük uyumu için varsayılan ekran kaynağı revizedir.
+    st.session_state.musteri_ekran_df = revize.copy()
+    return ham, revize
+
+
+def musteri_kaynak_secimlerini_buluttan_yukle(revizyon_id):
+    if (
+        not client or not revizyon_id
+        or st.session_state.get("musteri_kaynak_secimleri_bulut_revizyon")
+        == revizyon_id
+    ):
+        return
+    try:
+        kayitlar = supabase_revizyon_kayitlarini_getir(
+            MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU, revizyon_id
+        )
+        for kayit in kayitlar:
+            ekran = temiz_metin(kayit.get("ekran_anahtari"))
+            kaynak = temiz_metin(kayit.get("kaynak_tipi")).upper()
+            if ekran and kaynak in MUSTERI_KAYNAK_ETIKETLERI:
+                st.session_state.musteri_kaynak_secimleri[ekran] = kaynak
+    except Exception:
+        # SQL henüz çalıştırılmadıysa bütün ekranlar güvenli varsayılanı kullanır.
+        pass
+    st.session_state.musteri_kaynak_secimleri_bulut_revizyon = revizyon_id
+
+
+def musteri_kaynaklarini_buluttan_yukle(revizyon_id, zorla=False):
+    """Ham müşteri ve grup eşleştirme kayıtlarını aynı revizyondan yükler."""
+    if not client or not revizyon_id:
+        return 0
+    if (
+        not zorla
+        and st.session_state.get("musteri_bulut_yuklenen_revizyon")
+        == revizyon_id
+    ):
+        return len(st.session_state.get("musteri_ham_df", pd.DataFrame()))
+
+    ham_kayitlar = supabase_revizyon_kayitlarini_getir(
+        "musteri_detay_tablosu", revizyon_id
+    )
+    eslestirme_kayitlari = []
+    try:
+        eslestirme_kayitlari = supabase_revizyon_kayitlarini_getir(
+            MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU, revizyon_id
+        )
+    except Exception:
+        eslestirme_kayitlari = []
+
+    if ham_kayitlar:
+        ham_raw = pd.DataFrame(ham_kayitlar)
+        yil_adayi = pd.to_numeric(
+            ham_raw.get("Kaynak Yıl", pd.Series(dtype=float)),
+            errors="coerce"
+        ).dropna()
+        if not yil_adayi.empty:
+            st.session_state.musteri_veri_yili = int(yil_adayi.mode().iloc[0])
+        ham_raw = ham_raw.drop(
+            columns=[
+                "id", "revizyon_id", "created_at", "updated_at", "Kaynak Yıl"
+            ],
+            errors="ignore"
+        )
+        st.session_state.musteri_ham_df = musteri_detay_gorunumunu_hazirla(
+            ham_raw
+        )
+    else:
+        st.session_state.musteri_ham_df = pd.DataFrame(
+            columns=MUSTERI_DETAY_KOLONLARI
+        )
+
+    eslestirme_raw = pd.DataFrame(eslestirme_kayitlari).drop(
+        columns=[
+            "id", "revizyon_id", "created_at", "updated_at", "updated_by"
+        ],
+        errors="ignore"
+    )
+    st.session_state.musteri_grup_eslestirme_df = (
+        musteri_grup_eslestirmesini_hazirla(
+            eslestirme_raw, st.session_state.musteri_ham_df
+        )
+    )
+    musteri_veri_katmanlarini_yenile()
+    st.session_state.musteri_bulut_yuklenen_revizyon = revizyon_id
+    musteri_kaynak_secimlerini_buluttan_yukle(revizyon_id)
+    return len(st.session_state.musteri_ham_df)
+
+
+def musteri_kaynagini_getir(ekran_anahtari=None, kaynak_tipi=None):
+    """Ekranın seçimine göre ham veya revize müşteri kartlarını döndürür."""
+    musteri_veri_katmanlarini_yenile()
+    ekran_anahtari = ekran_anahtari or st.session_state.get(
+        "aktif_musteri_kaynak_ekrani"
+    )
+    secim = kaynak_tipi or st.session_state.musteri_kaynak_secimleri.get(
+        ekran_anahtari, MUSTERI_KAYNAK_REVIZE
+    )
+    if secim == MUSTERI_KAYNAK_HAM:
+        return st.session_state.musteri_ham_df.copy()
+    return st.session_state.musteri_revize_df.copy()
+
+
+def musteri_kaynak_secicisi(ekran_anahtari):
+    """İlgili rapor ekranında revizyon bazlı müşteri kaynağını seçtirir."""
+    revizyon_id = aktif_revizyon_id_getir()
+    if revizyon_id:
+        musteri_kaynak_secimlerini_buluttan_yukle(revizyon_id)
+        if (
+            st.session_state.get("musteri_bulut_yuklenen_revizyon")
+            != revizyon_id
+            and st.session_state.get("musteri_ham_df", pd.DataFrame()).empty
+        ):
+            try:
+                musteri_kaynaklarini_buluttan_yukle(revizyon_id)
+            except Exception:
+                pass
+
+    mevcut = st.session_state.musteri_kaynak_secimleri.get(
+        ekran_anahtari, MUSTERI_KAYNAK_REVIZE
+    )
+    secim = st.radio(
+        "Kullanılacak müşteri kaynağı",
+        [MUSTERI_KAYNAK_REVIZE, MUSTERI_KAYNAK_HAM],
+        index=0 if mevcut == MUSTERI_KAYNAK_REVIZE else 1,
+        format_func=lambda value: MUSTERI_KAYNAK_ETIKETLERI[value],
+        horizontal=True,
+        key=f"musteri_kaynak_{ekran_anahtari}_{revizyon_id or 'yerel'}"
+    )
+    st.session_state.aktif_musteri_kaynak_ekrani = ekran_anahtari
+    if secim != mevcut:
+        st.session_state.musteri_kaynak_secimleri[ekran_anahtari] = secim
+        if client and revizyon_id:
+            try:
+                client.table(MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU).upsert({
+                    "revizyon_id": revizyon_id,
+                    "ekran_anahtari": ekran_anahtari,
+                    "kaynak_tipi": secim,
+                    "updated_by": AKTIF_KULLANICI,
+                    "updated_at": datetime.now().astimezone().isoformat()
+                }, on_conflict="revizyon_id,ekran_anahtari").execute()
+                revizyonu_degistirildi_isaretle(revizyon_id)
+            except Exception as ex:
+                st.warning(
+                    "Kaynak seçimi yalnızca bu oturumda uygulandı. "
+                    f"Buluta kaydetmek için müşteri grubu SQL'ini çalıştırın: {ex}"
+                )
+    kaynak_etiketi = MUSTERI_KAYNAK_ETIKETLERI[secim].replace(
+        " kullan", ""
+    )
+    st.caption(f"Aktif müşteri kaynağı: {kaynak_etiketi}")
+    return secim
+
+
 def guncel_musteri_grup_haritasi():
-    """Yeni-Bütçe Müşteri ekranındaki en güncel grup bilgisini döndürür."""
-    kaynak = st.session_state.get("musteri_ekran_df", pd.DataFrame())
+    """Aktif sayfanın ham/revize seçimine göre müşteri grubunu döndürür."""
+    kaynak = musteri_kaynagini_getir()
     if (
         kaynak is None or kaynak.empty
         or "Müşteri Kodu" not in kaynak.columns
@@ -2576,6 +3023,11 @@ def data_new_tablosunu_hesapla(
     for col in ["Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi", "Esk. Enf. Başlangıç Tarihi"]:
         sonuc[col] = pd.to_datetime(sonuc[col], errors="coerce", dayfirst=True).dt.date
 
+    # Data_New, seçilen müşteri kaynağındaki ham veya revize grup bilgisini
+    # son aşamada uygular. Böylece buluttan gelen eski Master/Büyüme kayıtları
+    # seçimi geri çeviremez.
+    sonuc = guncel_musteri_gruplarini_uygula(sonuc)
+
     kontrol = {
         "satir_sayisi": int(len(sonuc)),
         "tekrarlanan_uniq": int(sonuc["Uniq ID"].duplicated(keep=False).sum()),
@@ -3272,7 +3724,7 @@ def supabase_verisini_hazirla(dataframe):
 
 def otomatik_baz_yakit_tablosu_olustur():
     """Yeni-Bütçe kimlikleri ile değ.anah. KDV/fiyatlarını müşteri kodunda birleştirir."""
-    musteri_df = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
+    musteri_df = musteri_kaynagini_getir("baz_yakit")
     if musteri_df.empty or "Müşteri Kodu" not in musteri_df.columns:
         return pd.DataFrame(columns=baz_yakit_sutunlari)
 
@@ -3884,6 +4336,8 @@ if sekme_acik_mi[1]:
                             kopyalanacak_tablolar = [
                                 "butce_tablosu", "data_tablosu",
                                 "musteri_detay_tablosu", "deg_anah_tablosu",
+                                MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU,
+                                MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU,
                                 "baz_yakit_tablosu", "master_data_tablosu",
                                 "mazot_tablosu", "buyume_tablosu",
                                 "baz_birim_fiyat_tablosu", "data_new_tablosu",
@@ -3983,6 +4437,8 @@ if sekme_acik_mi[1]:
                     "butce_tablosu", "data_tablosu",
                     "deg_anah_tablosu", "baz_yakit_tablosu",
                     "musteri_detay_tablosu", "master_data_tablosu",
+                    MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU,
+                    MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU,
                     "mazot_tablosu", "buyume_tablosu",
                     "baz_birim_fiyat_tablosu", "data_new_tablosu",
                     "kg_musteri_tablosu", "yil_kapanis_tablosu",
@@ -4018,241 +4474,475 @@ if sekme_acik_mi[1]:
 if sekme_acik_mi[2]:
     with sekmeler[2]:
         st.title("👤 Yeni-Bütçe Müşteri Detay Yönetimi")
+        st.caption(
+            "Operasyon detayları müşteri kodu bazında aylık toplanır. Ham grup "
+            "korunur; eşleştirme tablosu yalnızca revize müşteri grubunu değiştirir."
+        )
 
-        MUSTERI_GERCEKLESEN_AYLAR = aylar[:10]
-        MUSTERI_AYLIK_KG_KOLONLARI = [f"{ay} Kg" for ay in MUSTERI_GERCEKLESEN_AYLAR]
-        MUSTERI_TOPLAM_KOLONU = "Gerçekleşen Aylar Toplam Desi"
-        MUSTERI_DETAY_KOLONLARI = [
-            "Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi",
-            "Durum", "Kayıt Tarihi", "Müşteri Grubu"
-        ] + MUSTERI_AYLIK_KG_KOLONLARI + [
-            MUSTERI_TOPLAM_KOLONU,
-            "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not",
-            "Değişim kontrol"
-        ]
-        MUSTERI_DUZENLENEBILIR_KOLONLAR = [
-            "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not"
-        ]
-
-        def musteri_gerceklesen_aylarini_hazirla(hedef_df):
-            """Ocak-Ekim Kg değerlerini temizler ve dinamik dönem toplamını hesaplar."""
-            sonuc = sutun_adlarini_standartlastir(hedef_df)
-            if "Müşteri Kodu" not in sonuc.columns:
-                sonuc["Müşteri Kodu"] = ""
-            sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            for ay in MUSTERI_GERCEKLESEN_AYLAR:
-                hedef = f"{ay} Kg"
-                if hedef not in sonuc.columns:
-                    aday = next((
-                        c for c in [f"2025 {ay} Kg", f"{ay} Desi", f"2025 {ay} Desi"]
-                        if c in sonuc.columns
-                    ), None)
-                    sonuc[hedef] = sonuc[aday] if aday else 0.0
-                sonuc[hedef] = desi_kg_serisini_yuvarla(sonuc[hedef])
-
-            sonuc[MUSTERI_TOPLAM_KOLONU] = sonuc[MUSTERI_AYLIK_KG_KOLONLARI].sum(axis=1)
-
-            # Eski bulut kayıtlarında aylık detay yoksa eski toplamı kaybetme.
-            eski_toplam_kolonlari = ["10 Ay Toplam Desi", "9 Ay Toplam Desi"]
-            aylik_toplam_sifir = np.isclose(sonuc[MUSTERI_TOPLAM_KOLONU], 0.0)
-            for eski_kolon in eski_toplam_kolonlari:
-                if eski_kolon in sonuc.columns:
-                    eski_deger = desi_kg_serisini_yuvarla(
-                        sonuc[eski_kolon]
-                    )
-                    sonuc.loc[aylik_toplam_sifir & (eski_deger != 0.0), MUSTERI_TOPLAM_KOLONU] = eski_deger
-            return sonuc
-
-        def musteri_detay_gorunumunu_hazirla(df):
-            """Tabloyu yalnızca istenen 13 kolona ve sabit sıraya getirir."""
-            sonuc = sutun_adlarini_standartlastir(df)
-            if "Sap Kodu" not in sonuc.columns and "Sap No" in sonuc.columns:
-                sonuc = sonuc.rename(columns={"Sap No": "Sap Kodu"})
-            sonuc = musteri_gerceklesen_aylarini_hazirla(sonuc)
-
-            varsayilanlar = {
-                "Müşteri Kodu": "", "Sap Kodu": "", "Müşteri Adı": "",
-                "Müşteri Temsilcisi": "", "Durum": "GEÇERLİ", "Kayıt Tarihi": "",
-                "Müşteri Grubu": "DİĞER", MUSTERI_TOPLAM_KOLONU: 0.0,
-                "Yeni/Bütçelenen Müşteri": "03.Bütçelenen", "Durum_2": None,
-                "Durum_3": "", "Serbest Not": ""
-            }
-            for col, varsayilan in varsayilanlar.items():
-                if col not in sonuc.columns:
-                    sonuc[col] = varsayilan
-
-            sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
-            sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
-            sonuc["Müşteri Grubu"] = sonuc["Müşteri Grubu"].apply(
-                yil_kapanis_grup_adi
-            )
-
-            # Aynı müşteri kodu dosyada birden fazla kez geçse bile ekranda tek satır göster.
-            sonuc = sonuc.drop_duplicates(subset=["Müşteri Kodu"], keep="first").reset_index(drop=True)
-            sonuc["Değişim kontrol"] = sonuc.apply(
-                lambda row: "DOĞRU"
-                if str(row.get("Durum", "")).strip().upper()
-                == str(row.get("Durum_2", "")).strip().upper()
-                else "YANLIŞ",
-                axis=1
-            )
-            return sonuc.reindex(columns=MUSTERI_DETAY_KOLONLARI)
-
-        yuklenen_musteri = st.file_uploader("Müşteri Listenizi Yükleyin", type=["xlsx", "xls", "csv"], key="m_sablon_up")
-
-        if yuklenen_musteri:
-            df_hedef = pd.read_csv(yuklenen_musteri) if yuklenen_musteri.name.lower().endswith(".csv") else pd.read_excel(yuklenen_musteri)
-            df_hedef = sutun_adlarini_standartlastir(df_hedef)
-            if "Sap Kodu" not in df_hedef.columns and "Sap No" in df_hedef.columns:
-                df_hedef = df_hedef.rename(columns={"Sap No": "Sap Kodu"})
-            if "Müşteri Kodu" in df_hedef.columns:
-                df_hedef["Müşteri Kodu"] = df_hedef["Müşteri Kodu"].apply(guvenli_metin_kodu)
-
-                for idx, row in df_hedef.iterrows():
-                    m_kod = str(row["Müşteri Kodu"])
-                    if m_kod not in st.session_state.musteri_ayarlari:
-                        v_durum = row.get("Durum", "GEÇERLİ")
-                        st.session_state.musteri_ayarlari[m_kod] = {
-                            "Yeni/Bütçelenen Müşteri": "03.Bütçelenen",
-                            "Durum_2": v_durum if v_durum in ["GEÇERLİ", "GEÇERSİZ"] else None,
-                            "Durum_3": "2026 yılında çalışmaya devam edecektir" if v_durum == "GEÇERLİ" else "",
-                            "Serbest Not": ""
-                        }
-                df_hedef["Yeni/Bütçelenen Müşteri"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Yeni/Bütçelenen Müşteri", "03.Bütçelenen"))
-                df_hedef["Durum_2"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_2", None))
-                df_hedef["Durum_3"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Durum_3", ""))
-                df_hedef["Serbest Not"] = df_hedef["Müşteri Kodu"].apply(lambda k: st.session_state.musteri_ayarlari.get(str(k), {}).get("Serbest Not", ""))
-                st.session_state.musteri_ekran_df = musteri_detay_gorunumunu_hazirla(df_hedef)
-                # Diğer kaynak daha önce yüklendiyse Baz Yakıt tablosunu beklemeden yenile.
-                st.session_state.baz_yakit_veri = otomatik_baz_yakit_tablosu_olustur()
-
-        if not st.session_state.musteri_ekran_df.empty:
-            df_gosterim = musteri_detay_gorunumunu_hazirla(
-                st.session_state.musteri_ekran_df
-            )
-            kilitli = [
-                col for col in MUSTERI_DETAY_KOLONLARI
-                if col not in MUSTERI_DUZENLENEBILIR_KOLONLAR
-            ]
-            edited_m = st.data_editor(
-                df_gosterim,
-                use_container_width=True,
-                height=400,
-                disabled=kilitli,
-                column_config={
-                    **{
-                        col: st.column_config.NumberColumn(col, format="%.0f")
-                        for col in MUSTERI_AYLIK_KG_KOLONLARI
-                    },
-                    MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
-                        MUSTERI_TOPLAM_KOLONU, format="%.0f"
-                    ),
-                    "Yeni/Bütçelenen Müşteri": st.column_config.SelectboxColumn(
-                        "Yeni/Bütçelenen Müşteri",
-                        options=["01.Yeni Müşteri", "02.DOP Bütçe Dışı", "03.Bütçelenen"]
-                    ),
-                    "Durum_2": st.column_config.SelectboxColumn(
-                        "Durum_2", options=["GEÇERLİ", "GEÇERSİZ", None]
-                    )
-                },
-                key="ed_m_t4_exact_v3"
-            )
-            st.session_state.musteri_ekran_df = (
-                edited_m.reindex(columns=MUSTERI_DETAY_KOLONLARI).copy()
-            )
-
-            # Ekrandaki en güncel manuel düzenlemeleri aynı kolon sırasıyla
-            # Excel'e aktar. Sayısal alanlar Excel'de gerçek sayı olarak kalır.
-            musteri_excel_df = musteri_detay_gorunumunu_hazirla(
-                st.session_state.musteri_ekran_df
-            )
-            musteri_excel_cikti = io.BytesIO()
-            with pd.ExcelWriter(
-                musteri_excel_cikti, engine="openpyxl"
-            ) as writer:
-                sayfa_adi = "Yeni-Bütçe Müşteri"
-                musteri_excel_df.to_excel(
-                    writer, index=False, sheet_name=sayfa_adi
-                )
-                calisma_sayfasi = writer.sheets[sayfa_adi]
-                calisma_sayfasi.freeze_panes = "A2"
-                calisma_sayfasi.auto_filter.ref = calisma_sayfasi.dimensions
-
-                sayisal_kolonlar = (
-                    MUSTERI_AYLIK_KG_KOLONLARI + [MUSTERI_TOPLAM_KOLONU]
-                )
-                for kolon in sayisal_kolonlar:
-                    kolon_no = musteri_excel_df.columns.get_loc(kolon) + 1
-                    for satir_no in range(2, len(musteri_excel_df) + 2):
-                        calisma_sayfasi.cell(
-                            row=satir_no, column=kolon_no
-                        ).number_format = "#,##0"
-
-                for hucreler in calisma_sayfasi.columns:
+        def musteri_excel_verisi_olustur(
+            dataframe, sayfa_adi, sayisal_kolonlar=None
+        ):
+            excel_cikti = io.BytesIO()
+            with pd.ExcelWriter(excel_cikti, engine="openpyxl") as writer:
+                dataframe.to_excel(writer, index=False, sheet_name=sayfa_adi)
+                ws = writer.sheets[sayfa_adi]
+                ws.freeze_panes = "A2"
+                ws.auto_filter.ref = ws.dimensions
+                for kolon in sayisal_kolonlar or []:
+                    if kolon not in dataframe.columns:
+                        continue
+                    kolon_no = dataframe.columns.get_loc(kolon) + 1
+                    for satir_no in range(2, len(dataframe) + 2):
+                        ws.cell(row=satir_no, column=kolon_no).number_format = (
+                            "#,##0"
+                        )
+                for hucreler in ws.columns:
                     en_uzun = max(
                         len(str(hucre.value)) if hucre.value is not None else 0
                         for hucre in hucreler
                     )
-                    kolon_harfi = hucreler[0].column_letter
-                    calisma_sayfasi.column_dimensions[kolon_harfi].width = min(
+                    ws.column_dimensions[hucreler[0].column_letter].width = min(
                         max(en_uzun + 2, 12), 45
                     )
+            return excel_cikti.getvalue()
 
-            st.download_button(
-                "📥 Yeni-Bütçe Müşteri Detayını Excel İndir",
-                data=musteri_excel_cikti.getvalue(),
-                file_name="yeni_butce_musteri_detay.xlsx",
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
-                use_container_width=True,
-                key="btn_musteri_detay_excel_indir"
+        st.subheader("1. Ham operasyon müşteri verisi")
+        yuklenen_musteri = st.file_uploader(
+            "Operasyon müşteri dosyasını yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="m_sablon_up_v2"
+        )
+        if yuklenen_musteri:
+            dosya_bytes = yuklenen_musteri.getvalue()
+            dosya_imzasi = hashlib.sha256(dosya_bytes).hexdigest()
+            if dosya_imzasi != st.session_state.musteri_ham_upload_imzasi:
+                try:
+                    if yuklenen_musteri.name.lower().endswith(".csv"):
+                        df_hedef = pd.read_csv(
+                            io.BytesIO(dosya_bytes), sep=None, engine="python"
+                        )
+                    else:
+                        df_hedef = pd.read_excel(io.BytesIO(dosya_bytes))
+                    df_hedef = sutun_adlarini_standartlastir(df_hedef)
+                    if "Müşteri Kodu" not in df_hedef.columns:
+                        raise ValueError("Müşteri Kodu sütunu bulunamadı.")
+
+                    yil_serisi = pd.to_numeric(
+                        df_hedef.get("Yıl", pd.Series(dtype=float)),
+                        errors="coerce"
+                    ).dropna()
+                    if not yil_serisi.empty:
+                        st.session_state.musteri_veri_yili = int(
+                            yil_serisi.mode().iloc[0]
+                        )
+
+                    ham_df = musteri_detay_gorunumunu_hazirla(df_hedef)
+                    for idx, row in ham_df.iterrows():
+                        m_kod = guvenli_metin_kodu(row["Müşteri Kodu"])
+                        v_durum = temiz_metin(row.get("Durum"), "GEÇERLİ")
+                        ayar = st.session_state.musteri_ayarlari.setdefault(
+                            m_kod,
+                            {
+                                "Yeni/Bütçelenen Müşteri": "03.Bütçelenen",
+                                "Durum_2": v_durum
+                                if v_durum in ["GEÇERLİ", "GEÇERSİZ"] else None,
+                                "Durum_3": (
+                                    f"{st.session_state.musteri_veri_yili} yılında "
+                                    "çalışmaya devam edecektir"
+                                    if v_durum == "GEÇERLİ" else ""
+                                ),
+                                "Serbest Not": ""
+                            }
+                        )
+                        for col in MUSTERI_DUZENLENEBILIR_KOLONLAR:
+                            ham_df.at[idx, col] = ayar.get(col, ham_df.at[idx, col])
+                    st.session_state.musteri_ham_df = ham_df
+                    st.session_state.musteri_ham_upload_imzasi = dosya_imzasi
+                    st.session_state.musteri_bulut_yuklenen_revizyon = None
+                    musteri_veri_katmanlarini_yenile()
+                    st.session_state.baz_yakit_veri = (
+                        otomatik_baz_yakit_tablosu_olustur()
+                    )
+                    st.success(
+                        f"{len(df_hedef):,} operasyon satırı "
+                        f"{len(ham_df):,} müşteri kartına toplandı."
+                    )
+                except Exception as ex:
+                    st.error(f"Müşteri dosyası işlenemedi: {ex}")
+
+        ham_df, revize_df = musteri_veri_katmanlarini_yenile()
+        if not ham_df.empty:
+            st.caption(
+                f"Kaynak yıl: {st.session_state.musteri_veri_yili} | "
+                f"Ham müşteri: {len(ham_df):,} | "
+                f"Toplam desi: {ham_df[MUSTERI_TOPLAM_KOLONU].sum():,.0f}"
             )
 
         st.markdown("---")
-        c_m1, c_m2, c_m3 = st.columns(3)
-        if not st.session_state.musteri_ekran_df.empty and c_m1.button("💾 Değişiklikleri Hafızaya İşle", type="primary", use_container_width=True, key="btn_m_hfz"):
-            for idx, row in st.session_state.musteri_ekran_df.iterrows():
-                m_kod = str(row["Müşteri Kodu"])
-                st.session_state.musteri_ayarlari[m_kod] = {
-                    "Yeni/Bütçelenen Müşteri": row["Yeni/Bütçelenen Müşteri"],
-                    "Durum_2": row["Durum_2"] if not pd.isna(row["Durum_2"]) else None,
-                    "Durum_3": row["Durum_3"], "Serbest Not": row["Serbest Not"]
-                }
-            st.success("Hafızaya kilitlendi!")
-            st.rerun()
-
-        if rev_secenekleri:
-            r_id_m = sayfa_aktif_revizyonunu_getir(c_m2)
-            if not st.session_state.musteri_ekran_df.empty and c_m2.button("💾 Müşteri Kartlarını Buluta Kaydet", use_container_width=True, key="btn_m_cloud_sv"):
-                izin_verilen_db_sutunlari = (
-                    ["Müşteri Kodu", "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi", "Durum", "Kayıt Tarihi", "Müşteri Grubu"]
-                    + MUSTERI_AYLIK_KG_KOLONLARI
-                    + [MUSTERI_TOPLAM_KOLONU, "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not", "Değişim kontrol"]
-                )
-                m_records = [{col: json_uyumlu_deger(row[col]) for col in izin_verilen_db_sutunlari if col in row} for _, row in st.session_state.musteri_ekran_df.iterrows()]
-                for r in m_records: r["revizyon_id"] = r_id_m
-                client.table("musteri_detay_tablosu").delete().eq("revizyon_id", r_id_m).execute()
-                for i in range(0, len(m_records), 500): client.table("musteri_detay_tablosu").insert(m_records[i:i+500]).execute()
-                revizyonu_degistirildi_isaretle(r_id_m)
-                st.success("Buluta kilitlendi!")
-
-            if c_m3.button("🔄 Dosya Yüklemeden Buluttan Müşteri Kartlarını Çek", use_container_width=True, key="btn_m_cloud_ld"):
-                m_res = client.table("musteri_detay_tablosu").select("*").eq("revizyon_id", r_id_m).execute()
-                if m_res.data:
-                    gelen_df = sutun_adlarini_standartlastir(pd.DataFrame(m_res.data))
-                    gelen_df = gelen_df.drop(
-                        columns=[c for c in ["id", "revizyon_id"] if c in gelen_df.columns]
+        st.subheader("2. Müşteri Grubu Eşleştirme")
+        st.caption(
+            "Müşteri Kodu ve Müşteri Grubu zorunludur. Müşteri Grup başlığı da "
+            "otomatik olarak Müşteri Grubu şeklinde kabul edilir."
+        )
+        yuklenen_eslestirme = st.file_uploader(
+            "Müşteri grubu eşleştirme dosyasını yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="musteri_grup_eslestirme_upload"
+        )
+        if yuklenen_eslestirme:
+            eslestirme_bytes = yuklenen_eslestirme.getvalue()
+            eslestirme_imzasi = hashlib.sha256(eslestirme_bytes).hexdigest()
+            if (
+                eslestirme_imzasi
+                != st.session_state.musteri_eslestirme_upload_imzasi
+            ):
+                try:
+                    if yuklenen_eslestirme.name.lower().endswith(".csv"):
+                        eslestirme_raw = pd.read_csv(
+                            io.BytesIO(eslestirme_bytes),
+                            sep=None,
+                            engine="python"
+                        )
+                    else:
+                        eslestirme_raw = pd.read_excel(
+                            io.BytesIO(eslestirme_bytes)
+                        )
+                    standart = sutun_adlarini_standartlastir(eslestirme_raw)
+                    if (
+                        "Müşteri Grup" in standart.columns
+                        and "Müşteri Grubu" not in standart.columns
+                    ):
+                        standart = standart.rename(
+                            columns={"Müşteri Grup": "Müşteri Grubu"}
+                        )
+                    eksikler = [
+                        col for col in ["Müşteri Kodu", "Müşteri Grubu"]
+                        if col not in standart.columns
+                    ]
+                    if eksikler:
+                        raise ValueError(
+                            "Zorunlu sütunlar eksik: " + ", ".join(eksikler)
+                        )
+                    cakismalar = musteri_grup_eslestirme_cakismalari(standart)
+                    if cakismalar:
+                        raise ValueError(
+                            "Aynı müşteri koduna farklı gruplar atanmış: "
+                            + ", ".join(cakismalar[:10])
+                        )
+                    st.session_state.musteri_grup_eslestirme_df = (
+                        musteri_grup_eslestirmesini_hazirla(standart, ham_df)
                     )
-                    gelen_df = musteri_detay_gorunumunu_hazirla(gelen_df)
-                    st.session_state.musteri_ekran_df = gelen_df.copy()
-                    for _, row in gelen_df.iterrows():
-                        k = str(row["Müşteri Kodu"])
-                        st.session_state.musteri_ayarlari[k] = {"Yeni/Bütçelenen Müşteri": row.get("Yeni/Bütçelenen Müşteri"), "Durum_2": row.get("Durum_2"), "Durum_3": row.get("Durum_3"), "Serbest Not": row.get("Serbest Not")}
-                    st.session_state.baz_yakit_veri = otomatik_baz_yakit_tablosu_olustur()
-                    st.success("Buluttan çekildi!")
-                    st.rerun()
+                    st.session_state.musteri_eslestirme_upload_imzasi = (
+                        eslestirme_imzasi
+                    )
+                    st.session_state.musteri_eslestirme_editor_nonce += 1
+                    ham_df, revize_df = musteri_veri_katmanlarini_yenile()
+                    st.success(
+                        f"{len(st.session_state.musteri_grup_eslestirme_df):,} "
+                        "müşteri grubu eşleştirmesi yüklendi."
+                    )
+                except Exception as ex:
+                    st.error(f"Eşleştirme dosyası işlenemedi: {ex}")
+
+        eslestirme_gosterim = musteri_grup_eslestirmesini_hazirla(
+            st.session_state.musteri_grup_eslestirme_df, ham_df
+        )
+        edited_eslestirme = st.data_editor(
+            eslestirme_gosterim,
+            use_container_width=True,
+            height=min(420, max(180, 38 * (len(eslestirme_gosterim) + 1))),
+            num_rows="dynamic",
+            disabled=[
+                "Sap Kodu", "Müşteri Adı", "Müşteri Temsilcisi"
+            ],
+            column_config={
+                "Müşteri Kodu": st.column_config.TextColumn(required=True),
+                "Müşteri Grubu": st.column_config.TextColumn(required=True)
+            },
+            key=(
+                "musteri_grup_eslestirme_editor_"
+                f"{st.session_state.musteri_eslestirme_editor_nonce}"
+            )
+        )
+        editor_cakismalari = musteri_grup_eslestirme_cakismalari(
+            edited_eslestirme
+        )
+        if editor_cakismalari:
+            st.error(
+                "Aynı müşteri koduna birden fazla farklı grup atanamaz: "
+                + ", ".join(editor_cakismalari[:10])
+            )
+        else:
+            st.session_state.musteri_grup_eslestirme_df = (
+                musteri_grup_eslestirmesini_hazirla(
+                    edited_eslestirme, ham_df
+                )
+            )
+            ham_df, revize_df = musteri_veri_katmanlarini_yenile()
+
+        ham_kodlari = set(ham_df.get("Müşteri Kodu", pd.Series(dtype=str)))
+        eslesen_kodlar = set(
+            st.session_state.musteri_grup_eslestirme_df.get(
+                "Müşteri Kodu", pd.Series(dtype=str)
+            )
+        )
+        eslesen_sayisi = len(ham_kodlari & eslesen_kodlar)
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Ham müşteri", f"{len(ham_kodlari):,}")
+        e2.metric("Eşleşen", f"{eslesen_sayisi:,}")
+        e3.metric("Eşleşmeyen", f"{len(ham_kodlari - eslesen_kodlar):,}")
+
+        eslestirme_excel = musteri_excel_verisi_olustur(
+            st.session_state.musteri_grup_eslestirme_df,
+            "Müşteri Grubu Eşleştirme"
+        )
+        st.download_button(
+            "📥 Müşteri Grubu Eşleştirmesini Excel İndir",
+            data=eslestirme_excel,
+            file_name="musteri_grubu_eslestirme.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+            key="btn_musteri_grup_eslestirme_excel"
+        )
+
+        st.markdown("---")
+        st.subheader("3. Ham ve Revize Yeni-Bütçe Müşteri Tabloları")
+        ham_tab, revize_tab = st.tabs([
+            "Ham müşteri tablosu", "Revize edilmiş müşteri tablosu"
+        ])
+        with ham_tab:
+            if ham_df.empty:
+                st.info("Önce operasyon müşteri dosyasını yükleyin.")
+            else:
+                st.dataframe(
+                    ham_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400,
+                    column_config={
+                        **{
+                            col: st.column_config.NumberColumn(
+                                col, format="%.0f"
+                            ) for col in MUSTERI_AYLIK_KG_KOLONLARI
+                        },
+                        MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
+                            MUSTERI_TOPLAM_KOLONU, format="%.0f"
+                        )
+                    }
+                )
+                st.download_button(
+                    "📥 Ham Müşteri Tablosunu Excel İndir",
+                    data=musteri_excel_verisi_olustur(
+                        ham_df,
+                        "Ham Müşteri",
+                        MUSTERI_AYLIK_KG_KOLONLARI + [MUSTERI_TOPLAM_KOLONU]
+                    ),
+                    file_name="yeni_butce_musteri_ham.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                    key="btn_musteri_ham_excel"
+                )
+
+        with revize_tab:
+            if revize_df.empty:
+                st.info("Önce operasyon müşteri dosyasını yükleyin.")
+            else:
+                kilitli = [
+                    col for col in MUSTERI_DETAY_KOLONLARI
+                    if col not in MUSTERI_DUZENLENEBILIR_KOLONLAR
+                ]
+                edited_m = st.data_editor(
+                    revize_df,
+                    use_container_width=True,
+                    height=400,
+                    disabled=kilitli,
+                    column_config={
+                        **{
+                            col: st.column_config.NumberColumn(
+                                col, format="%.0f"
+                            ) for col in MUSTERI_AYLIK_KG_KOLONLARI
+                        },
+                        MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
+                            MUSTERI_TOPLAM_KOLONU, format="%.0f"
+                        ),
+                        "Yeni/Bütçelenen Müşteri": (
+                            st.column_config.SelectboxColumn(
+                                "Yeni/Bütçelenen Müşteri",
+                                options=[
+                                    "01.Yeni Müşteri", "02.DOP Bütçe Dışı",
+                                    "03.Bütçelenen"
+                                ]
+                            )
+                        ),
+                        "Durum_2": st.column_config.SelectboxColumn(
+                            "Durum_2",
+                            options=["GEÇERLİ", "GEÇERSİZ", None]
+                        )
+                    },
+                    key=(
+                        "ed_m_t4_exact_v4_"
+                        f"{st.session_state.musteri_eslestirme_editor_nonce}"
+                    )
+                )
+
+                ham_guncel = ham_df.set_index("Müşteri Kodu")
+                for _, row in edited_m.iterrows():
+                    m_kod = guvenli_metin_kodu(row.get("Müşteri Kodu"))
+                    if m_kod not in ham_guncel.index:
+                        continue
+                    for col in MUSTERI_DUZENLENEBILIR_KOLONLAR:
+                        ham_guncel.at[m_kod, col] = row.get(col)
+                    st.session_state.musteri_ayarlari[m_kod] = {
+                        "Yeni/Bütçelenen Müşteri": row.get(
+                            "Yeni/Bütçelenen Müşteri"
+                        ),
+                        "Durum_2": None
+                        if pd.isna(row.get("Durum_2")) else row.get("Durum_2"),
+                        "Durum_3": row.get("Durum_3", ""),
+                        "Serbest Not": row.get("Serbest Not", "")
+                    }
+                st.session_state.musteri_ham_df = ham_guncel.reset_index()
+                ham_df, revize_df = musteri_veri_katmanlarini_yenile()
+
+                st.download_button(
+                    "📥 Revize Yeni-Bütçe Müşteri Tablosunu Excel İndir",
+                    data=musteri_excel_verisi_olustur(
+                        revize_df,
+                        "Revize Yeni-Bütçe Müşteri",
+                        MUSTERI_AYLIK_KG_KOLONLARI + [MUSTERI_TOPLAM_KOLONU]
+                    ),
+                    file_name="yeni_butce_musteri_revize.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                    key="btn_musteri_revize_excel"
+                )
+
+        st.markdown("---")
+        c_m1, c_m2, c_m3 = st.columns(3)
+        if c_m1.button(
+            "💾 Değişiklikleri Hafızaya İşle",
+            type="primary",
+            use_container_width=True,
+            disabled=ham_df.empty,
+            key="btn_m_hfz_v2"
+        ):
+            musteri_veri_katmanlarini_yenile()
+            st.success("Ham ve revize müşteri tabloları hafızaya işlendi.")
+
+        r_id_m = sayfa_aktif_revizyonunu_getir(c_m2)
+        if c_m2.button(
+            "💾 Müşteri Verilerini Buluta Kaydet",
+            use_container_width=True,
+            disabled=(not client or not r_id_m or ham_df.empty),
+            key="btn_m_cloud_sv_v2"
+        ):
+            try:
+                cakismalar = musteri_grup_eslestirme_cakismalari(
+                    st.session_state.musteri_grup_eslestirme_df
+                )
+                if cakismalar:
+                    raise ValueError(
+                        "Çakışan müşteri kodları: " + ", ".join(cakismalar[:10])
+                    )
+                izin_verilen_db_sutunlari = MUSTERI_DETAY_KOLONLARI
+                m_records = []
+                for _, row in st.session_state.musteri_ham_df.iterrows():
+                    rec = {
+                        col: json_uyumlu_deger(row.get(col))
+                        for col in izin_verilen_db_sutunlari
+                    }
+                    rec["revizyon_id"] = r_id_m
+                    rec["Kaynak Yıl"] = int(
+                        st.session_state.musteri_veri_yili
+                    )
+                    m_records.append(rec)
+                client.table("musteri_detay_tablosu").delete().eq(
+                    "revizyon_id", r_id_m
+                ).execute()
+                for i in range(0, len(m_records), 500):
+                    client.table("musteri_detay_tablosu").insert(
+                        m_records[i:i + 500]
+                    ).execute()
+
+                eslestirme_records = []
+                for _, row in (
+                    st.session_state.musteri_grup_eslestirme_df.iterrows()
+                ):
+                    rec = {
+                        col: json_uyumlu_deger(row.get(col))
+                        for col in MUSTERI_GRUP_ESLESTIRME_KOLONLARI
+                    }
+                    rec.update({
+                        "revizyon_id": r_id_m,
+                        "updated_by": AKTIF_KULLANICI,
+                        "updated_at": datetime.now().astimezone().isoformat()
+                    })
+                    eslestirme_records.append(rec)
+                client.table(MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU).delete().eq(
+                    "revizyon_id", r_id_m
+                ).execute()
+                for i in range(0, len(eslestirme_records), 500):
+                    client.table(MUSTERI_GRUP_ESLESTIRME_DB_TABLOSU).insert(
+                        eslestirme_records[i:i + 500]
+                    ).execute()
+
+                for ekran, kaynak in (
+                    st.session_state.musteri_kaynak_secimleri.items()
+                ):
+                    client.table(
+                        MUSTERI_KAYNAK_SECIMLERI_DB_TABLOSU
+                    ).upsert({
+                        "revizyon_id": r_id_m,
+                        "ekran_anahtari": ekran,
+                        "kaynak_tipi": kaynak,
+                        "updated_by": AKTIF_KULLANICI,
+                        "updated_at": datetime.now().astimezone().isoformat()
+                    }, on_conflict="revizyon_id,ekran_anahtari").execute()
+                st.session_state.musteri_bulut_yuklenen_revizyon = r_id_m
+                revizyonu_degistirildi_isaretle(r_id_m)
+                st.success(
+                    "Ham müşteri, grup eşleştirme ve kaynak seçimleri buluta "
+                    "kaydedildi."
+                )
+            except Exception as ex:
+                st.error(
+                    "Müşteri verileri buluta kaydedilemedi. Önce yeni "
+                    f"Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
+                )
+
+        if c_m3.button(
+            "🔄 Müşteri Verilerini Buluttan Getir",
+            use_container_width=True,
+            disabled=(not client or not r_id_m),
+            key="btn_m_cloud_ld_v2"
+        ):
+            try:
+                yuklenen_sayi = musteri_kaynaklarini_buluttan_yukle(
+                    r_id_m, zorla=True
+                )
+                for _, row in st.session_state.musteri_ham_df.iterrows():
+                    m_kod = guvenli_metin_kodu(row.get("Müşteri Kodu"))
+                    st.session_state.musteri_ayarlari[m_kod] = {
+                        col: row.get(col)
+                        for col in MUSTERI_DUZENLENEBILIR_KOLONLAR
+                    }
+                st.session_state.musteri_eslestirme_editor_nonce += 1
+                st.session_state.baz_yakit_veri = (
+                    otomatik_baz_yakit_tablosu_olustur()
+                )
+                st.success(f"Buluttan {yuklenen_sayi:,} müşteri getirildi.")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Müşteri verileri buluttan getirilemedi: {ex}")
 
 # ------------------------------------------------------------
 # 4. SEKME: değ.anah.-yakıt-kdv PARAMETRE YÖNETİMİ
@@ -4349,14 +5039,13 @@ if sekme_acik_mi[3]:
 if sekme_acik_mi[4]:
     with sekmeler[4]:
         st.title("⛽ Baz Yakıt Fiyatları KDV Dağılım Yönetimi")
+        musteri_kaynak_secicisi("baz_yakit")
         st.caption(
             "Müşteri bilgileri Yeni-Bütçe Müşteri sayfasından; KDV Durumu ve "
             "Baz Yakıt Fiyatı değ.anah.-yakıt-kdv sayfasından otomatik alınır."
         )
 
-        kaynak_musteri_sayisi = len(
-            st.session_state.get("musteri_ekran_df", pd.DataFrame())
-        )
+        kaynak_musteri_sayisi = len(musteri_kaynagini_getir("baz_yakit"))
         kaynak_parametre_sayisi = len(
             st.session_state.get("deg_anah_veri", pd.DataFrame())
         )
@@ -4379,18 +5068,12 @@ if sekme_acik_mi[4]:
                 key="btn_baz_kaynak_getir"
             ):
                 try:
-                    musteri_kayitlari = supabase_revizyon_kayitlarini_getir(
-                        "musteri_detay_tablosu", kaynak_rev_id
+                    musteri_kaynaklarini_buluttan_yukle(
+                        kaynak_rev_id, zorla=True
                     )
                     parametre_kayitlari = supabase_revizyon_kayitlarini_getir(
                         "deg_anah_tablosu", kaynak_rev_id
                     )
-
-                    if musteri_kayitlari:
-                        gelen_musteriler = sutun_adlarini_standartlastir(
-                            pd.DataFrame(musteri_kayitlari)
-                        ).drop(columns=["id", "revizyon_id"], errors="ignore")
-                        st.session_state.musteri_ekran_df = gelen_musteriler
                     if parametre_kayitlari:
                         gelen_parametreler = sutun_adlarini_standartlastir(
                             pd.DataFrame(parametre_kayitlari)
@@ -4414,7 +5097,7 @@ if sekme_acik_mi[4]:
                     st.error(f"Kaynaklar buluttan getirilemedi: {ex}")
 
         def baz_yakit_tablosunu_olustur():
-            musteri_df = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
+            musteri_df = musteri_kaynagini_getir("baz_yakit")
             if musteri_df.empty or "Müşteri Kodu" not in musteri_df.columns:
                 return pd.DataFrame(columns=baz_yakit_sutunlari)
 
@@ -4546,6 +5229,7 @@ if sekme_acik_mi[4]:
 if sekme_acik_mi[5]:
     with sekmeler[5]:
         st.title("🧾 Eskalasyon ve Master Data Yönetimi")
+        musteri_kaynak_secicisi("master_data")
         st.caption(
             "Müşteri kimlikleri ve Durum (Durum_2) Yeni-Bütçe sayfasından; "
             "Değişim Anahtarı/KDV/Baz fiyat kaynak sayfalardan gelir. Durum GEÇERSİZ "
@@ -4586,7 +5270,7 @@ if sekme_acik_mi[5]:
             master_enflasyon_kaynak_hatasi = str(ex)
 
         def master_data_tablosunu_olustur():
-            musteri_df = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
+            musteri_df = musteri_kaynagini_getir("master_data")
             if musteri_df.empty or "Müşteri Kodu" not in musteri_df.columns:
                 musteri_df = st.session_state.get(
                     "master_bulut_kaynak_df", pd.DataFrame()
@@ -5231,6 +5915,7 @@ if sekme_acik_mi[6]:
 if sekme_acik_mi[7]:
     with sekmeler[7]:
         st.title("📈 Müşteri Büyüme Oranları ve Kg Simülasyonu")
+        musteri_kaynak_secicisi("buyume")
         st.caption(
             "2024–2025 tarihsel Kg havuzu, 2026 güncel Kg yüklemesi, tahmin "
             "ve müşteri büyüme oranları artık bu sayfada birlikte yönetilir."
@@ -6135,7 +6820,7 @@ if sekme_acik_mi[7]:
         # MÜŞTERİ EVRENİ VE KİMLİKLERİ: YENİ-BÜTÇE MÜŞTERİ SAYFASINDAN
         # 2024/2025/2026 AYLIK DEĞERLER: İLGİLİ DATA KAYNAKLARINDAN
         # ------------------------------------------------------------
-        musteri_kartlari_9 = st.session_state.get("musteri_ekran_df", pd.DataFrame()).copy()
+        musteri_kartlari_9 = musteri_kaynagini_getir("buyume")
         if not musteri_kartlari_9.empty and "Müşteri Kodu" in musteri_kartlari_9.columns:
             musteri_kartlari_9.columns = [str(c).strip() for c in musteri_kartlari_9.columns]
             musteri_kartlari_9["Müşteri Kodu"] = (
@@ -6180,6 +6865,29 @@ if sekme_acik_mi[7]:
                 if c not in df_calc_9.columns:
                     df_calc_9[c] = 0.0
                 df_calc_9[c] = df_calc_9[c].fillna(0.0).apply(guvenli_sayi)
+
+            # Yeni-Bütçe yüklemesindeki aylık gerçekleşenler, dosyanın gerçek
+            # yılına yazılır. Eski akıştaki sabit 2025 ataması kaldırılmıştır.
+            musteri_kaynak_yili_9 = guvenli_tamsayi(
+                st.session_state.get("musteri_veri_yili", 2025),
+                nullable=False
+            )
+            if musteri_kaynak_yili_9 in [2024, 2025, 2026]:
+                kart_index_9 = musteri_kartlari_9.set_index("Müşteri Kodu")
+                for ay_9 in MUSTERI_GERCEKLESEN_AYLAR:
+                    kaynak_col_9 = f"{ay_9} Kg"
+                    hedef_col_9 = f"{musteri_kaynak_yili_9} {ay_9} Kg"
+                    if kaynak_col_9 not in kart_index_9.columns:
+                        continue
+                    harita_9 = kart_index_9[kaynak_col_9].apply(
+                        guvenli_sayi
+                    ).to_dict()
+                    kart_degerleri_9 = df_calc_9["Müşteri Kodu"].map(
+                        harita_9
+                    )
+                    df_calc_9[hedef_col_9] = kart_degerleri_9.where(
+                        kart_degerleri_9.notna(), df_calc_9[hedef_col_9]
+                    )
         else:
             df_calc_9 = pd.DataFrame()
 
@@ -6213,24 +6921,6 @@ if sekme_acik_mi[7]:
 
             df_calc_9[donem_24_adi_9] = df_calc_9[[f"2024 {m} Kg" for m in secili_aylar_9]].sum(axis=1)
             df_calc_9[donem_25_adi_9] = df_calc_9[[f"2025 {m} Kg" for m in secili_aylar_9]].sum(axis=1)
-
-            # 2025 ilk 9 ay desi, Yeni-Bütçe sayfasındaki Ocak-Eylül Kg toplamıdır.
-            kart_9_ay_kolonlari_9 = [
-                f"{ay} Kg" for ay in ilk_9_ay if f"{ay} Kg" in musteri_kartlari_9.columns
-            ]
-            if kart_9_ay_kolonlari_9:
-                kart_9_ay_df_9 = musteri_kartlari_9[["Müşteri Kodu"] + kart_9_ay_kolonlari_9].copy()
-                for col in kart_9_ay_kolonlari_9:
-                    kart_9_ay_df_9[col] = kart_9_ay_df_9[col].apply(guvenli_sayi).astype(float)
-                kart_toplamlari_9 = (
-                    kart_9_ay_df_9.set_index("Müşteri Kodu")[kart_9_ay_kolonlari_9]
-                    .sum(axis=1)
-                )
-                kart_degerleri_9 = df_calc_9["Müşteri Kodu"].map(kart_toplamlari_9)
-                df_calc_9[donem_25_adi_9] = kart_degerleri_9.where(
-                    kart_degerleri_9.notna() & (kart_degerleri_9 != 0.0),
-                    df_calc_9[donem_25_adi_9]
-                )
 
             toplam_25_9 = df_calc_9[donem_25_adi_9].sum()
             df_calc_9[pay_25_adi_9] = (
@@ -6665,6 +7355,7 @@ if sekme_acik_mi[7]:
 if sekme_acik_mi[8]:
     with sekmeler[8]:
         st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
+        musteri_kaynak_secicisi("yil_kapanis")
         st.caption(
             "Verisi bulunan iki yılı seçerek müşteri gruplarının aylık "
             "paylarını ve iki yılın aritmetik ortalamasını "
@@ -8181,6 +8872,15 @@ if sekme_acik_mi[10]:
 if sekme_acik_mi[11]:
     with sekmeler[11]:
         st.title("🆕 Data_New Hesaplama Havuzu")
+        musteri_kaynak_secicisi("data_new")
+        for data_new_state_key in ["data_new_kaynak_df", "data_new_sonuc_df"]:
+            mevcut_data_new = st.session_state.get(
+                data_new_state_key, pd.DataFrame()
+            )
+            if not mevcut_data_new.empty:
+                st.session_state[data_new_state_key] = (
+                    guncel_musteri_gruplarini_uygula(mevcut_data_new)
+                )
         st.caption(
             "Nihai hesaplama tablosudur. Kaynak yıl Desi/Tutar dosyası; Master "
             "Data eskalasyonu, Baz Birim Fiyatlar ve aynı revizyondaki Desi "
@@ -8890,6 +9590,7 @@ if sekme_acik_mi[11]:
 if sekme_acik_mi[12]:
     with sekmeler[12]:
         st.title("🔮 Desi Tahminleme")
+        musteri_kaynak_secicisi("desi_tahmin")
         st.caption(
             "Yıl Kapanışında tamamlanan yılın satır toplamlarını; seçilen "
             "referans yılların düzenlenebilir aylık dağılımı, müşterinin aylık "
