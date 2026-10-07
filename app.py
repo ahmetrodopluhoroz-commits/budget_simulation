@@ -4680,17 +4680,112 @@ if sekme_acik_mi[2]:
             )
             ham_df, revize_df = musteri_veri_katmanlarini_yenile()
 
-        ham_kodlari = set(ham_df.get("Müşteri Kodu", pd.Series(dtype=str)))
-        eslesen_kodlar = set(
-            st.session_state.musteri_grup_eslestirme_df.get(
-                "Müşteri Kodu", pd.Series(dtype=str)
-            )
-        )
+        ham_kod_serisi = ham_df.get(
+            "Müşteri Kodu", pd.Series(dtype=str)
+        ).apply(guvenli_metin_kodu)
+        eslestirme_df = st.session_state.musteri_grup_eslestirme_df
+        eslestirme_kod_serisi = eslestirme_df.get(
+            "Müşteri Kodu", pd.Series(dtype=str)
+        ).apply(guvenli_metin_kodu)
+        ham_kodlari = {kod for kod in ham_kod_serisi if kod}
+        eslesen_kodlar = {kod for kod in eslestirme_kod_serisi if kod}
         eslesen_sayisi = len(ham_kodlari & eslesen_kodlar)
-        e1, e2, e3 = st.columns(3)
+        eslesmeyen_kodlar = ham_kodlari - eslesen_kodlar
+        hamda_olmayan_eslestirme_kodlari = eslesen_kodlar - ham_kodlari
+
+        e1, e2, e3, e4 = st.columns(4)
         e1.metric("Ham müşteri", f"{len(ham_kodlari):,}")
         e2.metric("Eşleşen", f"{eslesen_sayisi:,}")
-        e3.metric("Eşleşmeyen", f"{len(ham_kodlari - eslesen_kodlar):,}")
+        e3.metric("Eşleştirme bulunamayan", f"{len(eslesmeyen_kodlar):,}")
+        e4.metric(
+            "Ham veride bulunmayan",
+            f"{len(hamda_olmayan_eslestirme_kodlari):,}"
+        )
+
+        if eslesmeyen_kodlar:
+            eslesmeyen_df = ham_df.loc[
+                ham_kod_serisi.isin(eslesmeyen_kodlar),
+                [
+                    col for col in [
+                        "Müşteri Kodu", "Sap Kodu", "Müşteri Adı",
+                        "Müşteri Temsilcisi", "Müşteri Grubu",
+                        MUSTERI_TOPLAM_KOLONU
+                    ] if col in ham_df.columns
+                ]
+            ].copy()
+            eslesmeyen_df = eslesmeyen_df.drop_duplicates(
+                "Müşteri Kodu", keep="last"
+            ).rename(columns={"Müşteri Grubu": "Ham Müşteri Grubu"})
+            eslesmeyen_df = eslesmeyen_df.sort_values(
+                ["Müşteri Adı", "Müşteri Kodu"], na_position="last"
+            ).reset_index(drop=True)
+
+            with st.expander(
+                f"⚠️ Eşleştirme bulunamayan müşteriler "
+                f"({len(eslesmeyen_df):,})",
+                expanded=True
+            ):
+                st.caption(
+                    "Bu müşteriler ham müşteri tablosunda bulunuyor ancak "
+                    "yüklenen eşleştirme dosyasında aynı Müşteri Kodu yok. "
+                    "Revize tabloda mevcut ham müşteri grupları korunur."
+                )
+                st.dataframe(
+                    eslesmeyen_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(400, max(150, 38 * (len(eslesmeyen_df) + 1))),
+                    column_config={
+                        MUSTERI_TOPLAM_KOLONU: st.column_config.NumberColumn(
+                            MUSTERI_TOPLAM_KOLONU, format="%.0f"
+                        )
+                    }
+                )
+                eslesmeyen_excel = musteri_excel_verisi_olustur(
+                    eslesmeyen_df,
+                    "Eşleşmeyen Müşteriler",
+                    [MUSTERI_TOPLAM_KOLONU]
+                )
+                st.download_button(
+                    "📥 Eşleşmeyen Müşterileri Excel İndir",
+                    data=eslesmeyen_excel,
+                    file_name="eslesmeyen_musteriler.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                    key="btn_eslesmeyen_musteriler_excel"
+                )
+        elif ham_kodlari:
+            st.success(
+                "Ham müşteri tablosundaki tüm müşteriler için grup "
+                "eşleştirmesi bulundu."
+            )
+
+        if hamda_olmayan_eslestirme_kodlari:
+            hamda_olmayan_df = eslestirme_df.loc[
+                eslestirme_kod_serisi.isin(
+                    hamda_olmayan_eslestirme_kodlari
+                )
+            ].copy().reset_index(drop=True)
+            with st.expander(
+                "ℹ️ Eşleştirme dosyasında olup ham veride bulunmayan "
+                f"müşteriler ({len(hamda_olmayan_df):,})",
+                expanded=False
+            ):
+                st.caption(
+                    "Bu kayıtlar eşleştirme dosyasında bulunuyor ancak mevcut "
+                    "ham müşteri verisinde aynı Müşteri Kodu yer almıyor."
+                )
+                st.dataframe(
+                    hamda_olmayan_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(
+                        400, max(150, 38 * (len(hamda_olmayan_df) + 1))
+                    )
+                )
 
         eslestirme_excel = musteri_excel_verisi_olustur(
             st.session_state.musteri_grup_eslestirme_df,
