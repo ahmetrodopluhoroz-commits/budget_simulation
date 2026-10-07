@@ -10,6 +10,7 @@ import re
 import urllib.error
 import urllib.request
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 # ============================================================
 # 💾 YEREL ÖNBELLEK (CACHE) DOSYA YOLLARI (F5 KORUMASI)
@@ -479,6 +480,8 @@ yil_kapanis_sonuc_sutunlari = [
 yil_kapanis_manuel_matris_sutunlari = [
     "Yıl", "Müşteri Grubu"
 ] + [f"{ay} (%)" for ay in aylar]
+YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 15
+YIL_KAPANIS_YUZDE_QUANTIZER = Decimal("0.000000000000001")
 yil_kapanis_detay_kimlik_sutunlari = [
     "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
     "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
@@ -988,6 +991,85 @@ def guvenli_sayi(value):
         val = float(value)
         return val if np.isfinite(val) else 0.0
     except: return 0.0
+
+
+def yil_kapanis_hassas_yuzde(value):
+    """Yıl kapanış yüzdesini 15 ondalık basamakla güvenli biçimde okur."""
+    if value is None:
+        return 0.0
+    try:
+        if pd.isna(value):
+            return 0.0
+    except (TypeError, ValueError):
+        pass
+
+    metin = (
+        str(value).strip()
+        .replace("%", "")
+        .replace("\xa0", "")
+        .replace(" ", "")
+    )
+    if metin.lower() in {"", "-", "nan", "none", "null", "nat"}:
+        return 0.0
+
+    # Yüzde hücresinde son ayraç ondalık kabul edilir. Böylece hem
+    # 7,123456789012345 hem de 7.123456789012345 kayıpsız okunur.
+    if "," in metin and "." in metin:
+        if metin.rfind(",") > metin.rfind("."):
+            metin = metin.replace(".", "").replace(",", ".")
+        else:
+            metin = metin.replace(",", "")
+    elif "," in metin:
+        parcalar = metin.split(",")
+        metin = "".join(parcalar[:-1]) + "." + parcalar[-1]
+    elif metin.count(".") > 1:
+        parcalar = metin.split(".")
+        metin = "".join(parcalar[:-1]) + "." + parcalar[-1]
+
+    try:
+        sayi = Decimal(metin)
+        if not sayi.is_finite():
+            return 0.0
+        return float(sayi.quantize(
+            YIL_KAPANIS_YUZDE_QUANTIZER,
+            rounding=ROUND_HALF_UP
+        ))
+    except (InvalidOperation, ValueError):
+        return 0.0
+
+
+def yil_kapanis_yuzdesini_goster(value):
+    """Hassas yüzdeyi değiştirmeden kullanıcıya iki ondalıkla gösterir."""
+    sayi = Decimal(str(yil_kapanis_hassas_yuzde(value))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return f"{sayi:.2f}%".replace(".", ",")
+
+
+def yil_kapanis_eski_hassasiyeti_koru(yeni_df, eski_df):
+    """Yalnızca iki ondalık gösterilen değişmemiş hücrelerin ham değerini korur."""
+    if yeni_df is None or yeni_df.empty or eski_df is None or eski_df.empty:
+        return yeni_df
+    sonuc = yeni_df.copy()
+    eski = eski_df.drop_duplicates(
+        ["Yıl", "Müşteri Grubu"], keep="last"
+    ).set_index(["Yıl", "Müşteri Grubu"])
+    for idx, row in sonuc.iterrows():
+        anahtar = (
+            guvenli_tamsayi(row.get("Yıl"), nullable=False),
+            yil_kapanis_grup_adi(row.get("Müşteri Grubu"))
+        )
+        if anahtar not in eski.index:
+            continue
+        for col in [f"{ay} (%)" for ay in aylar]:
+            eski_hassas = yil_kapanis_hassas_yuzde(eski.at[anahtar, col])
+            ekranda_gorunen = yil_kapanis_hassas_yuzde(
+                yil_kapanis_yuzdesini_goster(eski_hassas)
+            )
+            yeni_deger = yil_kapanis_hassas_yuzde(row.get(col))
+            if yeni_deger == ekranda_gorunen:
+                sonuc.at[idx, col] = eski_hassas
+    return sonuc
 
 def guvenli_tamsayi(value, nullable=True):
     val = guvenli_sayi(value)
@@ -2074,7 +2156,9 @@ def yil_kapanis_manuel_matrisini_hazirla(dataframe, varsayilan_yil=None):
         yil_kapanis_grup_adi
     )
     for col in [f"{ay} (%)" for ay in aylar]:
-        sonuc[col] = sonuc[col].apply(guvenli_sayi).astype(float)
+        sonuc[col] = sonuc[col].apply(
+            yil_kapanis_hassas_yuzde
+        ).astype(float)
     sonuc = sonuc.drop_duplicates(
         ["Yıl", "Müşteri Grubu"], keep="last"
     )
@@ -2103,7 +2187,7 @@ def yil_kapanis_yuzde_matrisi(
             satirlar.append({
                 "Müşteri Grubu": grup,
                 **{
-                    ay: guvenli_sayi(
+                    ay: yil_kapanis_hassas_yuzde(
                         manuel_yil.at[grup, f"{ay} (%)"]
                     ) if grup in manuel_yil.index else 0.0
                     for ay in aylar
@@ -2161,7 +2245,7 @@ def yil_kapanis_ortalamasini_hesapla(
         and float(harita.loc["DİĞER", aylar].sum()) > 0
     ]
     diger_fallback = (
-        np.mean(diger_satirlari, axis=0)
+        np.round(np.mean(diger_satirlari, axis=0), 15)
         if diger_satirlari else np.full(len(aylar), 100.0 / len(aylar))
     )
     for grup in grup_sirasi:
@@ -2172,18 +2256,21 @@ def yil_kapanis_ortalamasini_hesapla(
             and float(harita.loc[grup, aylar].sum()) > 0
         ]
         ortalama_degerler = (
-            np.mean(mevcut_satirlar, axis=0)
+            np.round(np.mean(mevcut_satirlar, axis=0), 15)
             if mevcut_satirlar else diger_fallback.copy()
         )
         aylik_ortalamalar = {
-            ay: float(ortalama_degerler[index])
+            ay: yil_kapanis_hassas_yuzde(ortalama_degerler[index])
             for index, ay in enumerate(aylar)
         }
         sonuc.append({
             "Müşteri Grubu": grup,
             **{f"{ay} (%)": aylik_ortalamalar[ay] for ay in aylar},
-            "Gerçekleşen Dönem Payı (%)": sum(
-                aylik_ortalamalar[ay] for ay in aylar[:son_ay_index + 1]
+            "Gerçekleşen Dönem Payı (%)": yil_kapanis_hassas_yuzde(
+                sum(
+                    aylik_ortalamalar[ay]
+                    for ay in aylar[:son_ay_index + 1]
+                )
             )
         })
     return matris_1, matris_2, pd.DataFrame(sonuc)
@@ -7674,7 +7761,8 @@ if sekme_acik_mi[8]:
                 "Dosya yüklemek yerine yılı seçip satır ekleyebilirsiniz. "
                 "Excel'deki Müşteri Grubu + Ocak–Aralık bloğunu ilk hücreye "
                 "doğrudan yapıştırın. Hücreler 7,11% veya 7,11 biçiminde "
-                "girilebilir."
+                "girilebilir. Değerler ekranda iki ondalık gösterilir; kayıt "
+                "ve hesaplamalarda 15 ondalık basamak korunur."
             )
             manuel_yil = int(st.number_input(
                 "Manuel matris yılı",
@@ -7709,9 +7797,7 @@ if sekme_acik_mi[8]:
                 ].rename(columns={f"{ay} (%)": ay for ay in aylar})
                 for ay in aylar:
                     manuel_editor_df[ay] = manuel_editor_df[ay].apply(
-                        lambda value: (
-                            f"{guvenli_sayi(value):.2f}%".replace(".", ",")
-                        )
+                        yil_kapanis_yuzdesini_goster
                     )
 
             manuel_duzenlenen = st.data_editor(
@@ -7782,6 +7868,12 @@ if sekme_acik_mi[8]:
                     manuel_ham.insert(0, "Yıl", manuel_yil)
                     hazir_manuel = yil_kapanis_manuel_matrisini_hazirla(
                         manuel_ham, varsayilan_yil=manuel_yil
+                    )
+                    # Editör iki ondalık gösterse de kullanıcı hücreyi
+                    # değiştirmediyse daha önce kaydedilmiş 15 basamaklı ham
+                    # değerin üzerine yuvarlanmış görüntüyü yazma.
+                    hazir_manuel = yil_kapanis_eski_hassasiyeti_koru(
+                        hazir_manuel, manuel_yil_df
                     )
                     yuzde_kolonlari = [f"{ay} (%)" for ay in aylar]
                     gecersiz_aralik = (
@@ -8248,8 +8340,10 @@ if sekme_acik_mi[8]:
                         for ay in aylar:
                             col = f"{ay} (%)"
                             if col in kayitli_harita.columns:
-                                ortalama_sonuc.at[idx, col] = guvenli_sayi(
-                                    kayitli_harita.at[grup, col]
+                                ortalama_sonuc.at[idx, col] = (
+                                    yil_kapanis_hassas_yuzde(
+                                        kayitli_harita.at[grup, col]
+                                    )
                                 )
 
                 # Bu oturumda yapılan fakat henüz buluta kaydedilmemiş manuel
@@ -8263,13 +8357,15 @@ if sekme_acik_mi[8]:
                     grup = row["Müşteri Grubu"]
                     for col, value in ortalama_ayarlari.get(grup, {}).items():
                         if col in [f"{ay} (%)" for ay in aylar]:
-                            ortalama_sonuc.at[idx, col] = guvenli_sayi(value)
+                            ortalama_sonuc.at[idx, col] = (
+                                yil_kapanis_hassas_yuzde(value)
+                            )
 
                 gercek_son_index = aylar.index(son_gerceklesen_ay)
                 ortalama_sonuc["Gerçekleşen Dönem Payı (%)"] = (
                     ortalama_sonuc[
                         [f"{ay} (%)" for ay in aylar[:gercek_son_index + 1]]
-                    ].sum(axis=1)
+                    ].sum(axis=1).apply(yil_kapanis_hassas_yuzde)
                 )
 
                 ortalama_onceki = ortalama_sonuc.copy()
@@ -8323,8 +8419,10 @@ if sekme_acik_mi[8]:
                     )
                     for ay in aylar:
                         col = f"{ay} (%)"
-                        yeni = guvenli_sayi(row.get(col))
-                        eski = guvenli_sayi(onceki_harita.at[grup, col])
+                        yeni = yil_kapanis_hassas_yuzde(row.get(col))
+                        eski = yil_kapanis_hassas_yuzde(
+                            onceki_harita.at[grup, col]
+                        )
                         if not np.isclose(yeni, eski):
                             grup_ayarlari[col] = yeni
                             ortalama_degisti = True
@@ -8332,11 +8430,11 @@ if sekme_acik_mi[8]:
                 for col in [f"{ay} (%)" for ay in aylar]:
                     ortalama_duzenlenen[col] = pd.to_numeric(
                         ortalama_duzenlenen[col], errors="coerce"
-                    ).fillna(0.0)
+                    ).fillna(0.0).apply(yil_kapanis_hassas_yuzde)
                 ortalama_duzenlenen["Gerçekleşen Dönem Payı (%)"] = (
                     ortalama_duzenlenen[
                         [f"{ay} (%)" for ay in aylar[:gercek_son_index + 1]]
-                    ].sum(axis=1)
+                    ].sum(axis=1).apply(yil_kapanis_hassas_yuzde)
                 )
                 ortalama_sonuc = ortalama_duzenlenen.reindex(
                     columns=yil_kapanis_sonuc_sutunlari
@@ -8444,6 +8542,79 @@ if sekme_acik_mi[8]:
                             secili_detay_kaynak["Yıl"], errors="coerce"
                         ) == int(kapanis_yili)
                     ].copy().reset_index(drop=True)
+
+                    # Müşteri bazlı hariç tutma, hesap başlamadan uygulanır;
+                    # böylece detay, toplamlar, tahmin ve dışa aktarımlar aynı
+                    # filtrelenmiş veri kümesini kullanır.
+                    musteri_kodlari = kapanacak_detay[
+                        "Müşteri Kodu"
+                    ].apply(guvenli_metin_kodu)
+                    musteri_adlari = kapanacak_detay[
+                        "Müşteri Adı"
+                    ].apply(temiz_metin)
+                    musteri_anahtarlari = pd.Series(
+                        np.where(
+                            musteri_kodlari != "",
+                            "KOD:" + musteri_kodlari,
+                            "AD:" + musteri_adlari
+                        ),
+                        index=kapanacak_detay.index
+                    )
+                    musteri_secim_df = pd.DataFrame({
+                        "Anahtar": musteri_anahtarlari,
+                        "Kod": musteri_kodlari,
+                        "Ad": musteri_adlari
+                    })
+                    musteri_secim_df = musteri_secim_df[
+                        musteri_secim_df["Anahtar"].isin(["KOD:", "AD:"])
+                        == False
+                    ].drop_duplicates("Anahtar", keep="last")
+                    musteri_etiketleri = {
+                        row["Anahtar"]: (
+                            f"{row['Kod']} — {row['Ad']}"
+                            if row["Kod"] and row["Ad"]
+                            else row["Kod"] or row["Ad"]
+                        )
+                        for _, row in musteri_secim_df.iterrows()
+                    }
+                    haric_musteriler = st.multiselect(
+                        "Hesaba dahil edilmeyecek müşteriler",
+                        options=sorted(
+                            musteri_etiketleri,
+                            key=lambda value: musteri_etiketleri[value]
+                        ),
+                        format_func=lambda value: musteri_etiketleri.get(
+                            value, value
+                        ),
+                        placeholder="Müşteri kodu veya adıyla arayın",
+                        help=(
+                            "Seçilen müşteriler detay tablosundan, aylık "
+                            "toplamlardan, yıl sonu tahmininden ve indirilen "
+                            "dosyalardan çıkarılır."
+                        ),
+                        key=(
+                            "yil_kapanis_haric_musteriler_"
+                            + hashlib.sha1(
+                                (
+                                    temiz_metin(aktif_yk_rev_id, "yerel")
+                                    + "|" + str(int(kapanis_yili))
+                                ).encode("utf-8")
+                            ).hexdigest()[:12]
+                        )
+                    )
+                    if haric_musteriler:
+                        haric_maskesi = musteri_anahtarlari.isin(
+                            haric_musteriler
+                        )
+                        haric_satir_sayisi = int(haric_maskesi.sum())
+                        kapanacak_detay = kapanacak_detay.loc[
+                            ~haric_maskesi
+                        ].reset_index(drop=True)
+                        st.info(
+                            f"{len(haric_musteriler):,} müşteri ve "
+                            f"{haric_satir_sayisi:,} detay satırı hesaplama "
+                            "ile tablodan çıkarıldı."
+                        )
                     gun_oranlari, calisma_orani_etiketi, oran_bulundu = (
                         yil_kapanis_calisma_gunu_oranlari(
                             st.session_state.get(
@@ -8507,7 +8678,10 @@ if sekme_acik_mi[8]:
                     detay_column_config = {
                         **{
                             col: st.column_config.NumberColumn(
-                                col, format="%.0f"
+                                col,
+                                format="localized",
+                                step=1,
+                                help="Binlik ayraçla gösterilir."
                             )
                             for col in (
                                 yil_kapanis_detay_ay_sutunlari
