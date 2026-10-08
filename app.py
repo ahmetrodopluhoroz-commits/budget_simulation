@@ -480,8 +480,10 @@ yil_kapanis_sonuc_sutunlari = [
 yil_kapanis_manuel_matris_sutunlari = [
     "Yıl", "Müşteri Grubu"
 ] + [f"{ay} (%)" for ay in aylar]
-YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 15
-YIL_KAPANIS_YUZDE_QUANTIZER = Decimal("0.000000000000001")
+YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 4
+YIL_KAPANIS_YUZDE_QUANTIZER = Decimal("1").scaleb(
+    -YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK
+)
 YIL_KAPANIS_DETAY_BULUT_PAKET_BOYUTU = 250
 yil_kapanis_detay_kimlik_sutunlari = [
     "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
@@ -1007,7 +1009,7 @@ def guvenli_sayi(value):
 
 
 def yil_kapanis_decimal_yuzde(value):
-    """Yıl kapanış yüzdesini kesin Decimal olarak 15 basamağa getirir."""
+    """Yıl kapanış yüzdesini kesin Decimal olarak 4 basamağa getirir."""
     if value is None:
         return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
     try:
@@ -1026,7 +1028,7 @@ def yil_kapanis_decimal_yuzde(value):
         return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
 
     # Yüzde hücresinde son ayraç ondalık kabul edilir. Böylece hem
-    # 7,123456789012345 hem de 7.123456789012345 kayıpsız okunur.
+    # 7,1234 hem de 7.1234 aynı ondalık değer olarak okunur.
     if "," in metin and "." in metin:
         if metin.rfind(",") > metin.rfind("."):
             metin = metin.replace(".", "").replace(",", ".")
@@ -1052,13 +1054,16 @@ def yil_kapanis_decimal_yuzde(value):
 
 
 def yil_kapanis_hassas_yuzde(value):
-    """Arayüz/pandas uyumu için 15 basamaklı yüzdeyi float olarak döndürür."""
+    """Arayüz/pandas uyumu için 4 basamaklı yüzdeyi float olarak döndürür."""
     return float(yil_kapanis_decimal_yuzde(value))
 
 
 def yil_kapanis_db_yuzde_degeri(value):
-    """Supabase numeric(30,15) alanına float izi bırakmadan değer hazırlar."""
-    return format(yil_kapanis_decimal_yuzde(value), ".15f")
+    """Supabase numeric(30,4) alanına float izi bırakmadan değer hazırlar."""
+    return format(
+        yil_kapanis_decimal_yuzde(value),
+        f".{YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK}f"
+    )
 
 
 def yil_kapanis_yuzdesini_goster(value):
@@ -1290,7 +1295,10 @@ def yil_kapanis_yuzde_excelini_oku(uploaded_file):
                 "Yıl": aktif_yil,
                 "Müşteri Grubu": ilk_metin,
                 **{
-                    f"{ay} (%)": format(yuzdeler[index], ".15f")
+                    f"{ay} (%)": format(
+                        yuzdeler[index],
+                        f".{YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK}f"
+                    )
                     for index, ay in enumerate(aylar)
                 }
             })
@@ -2479,9 +2487,44 @@ def yil_kapanis_ortalamasini_hesapla(
     kg_musteri_df, yil_1, yil_2, son_gerceklesen_ay,
     manuel_matris_df=None
 ):
-    """İki yılın grup/ay yüzdelerini Decimal ile kesin olarak ortalar."""
+    """Yalnızca seçili yıllarda bulunan grupların yüzdelerini ortalar."""
     manuel = yil_kapanis_manuel_matrisini_hazirla(manuel_matris_df)
-    grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df, manuel)
+
+    def yilda_verisi_olan_gruplar(yil):
+        manuel_yil = manuel[
+            pd.to_numeric(manuel["Yıl"], errors="coerce") == int(yil)
+        ].copy()
+        if not manuel_yil.empty:
+            return set(
+                manuel_yil["Müşteri Grubu"].apply(
+                    yil_kapanis_grup_adi
+                ).tolist()
+            )
+
+        kaynak_yil = kg_musteri_df[
+            pd.to_numeric(kg_musteri_df["Yıl"], errors="coerce") == int(yil)
+        ].copy()
+        if kaynak_yil.empty:
+            return set()
+        kaynak_yil = guncel_musteri_gruplarini_uygula(kaynak_yil)
+        ayliklar = [f"{ay} Kg" for ay in aylar]
+        for col in ayliklar:
+            kaynak_yil[col] = pd.to_numeric(
+                kaynak_yil[col], errors="coerce"
+            ).fillna(0.0)
+        grup_toplamlari = kaynak_yil.groupby("Müşteri Grubu")[
+            ayliklar
+        ].sum().sum(axis=1)
+        return set(grup_toplamlari[grup_toplamlari > 0].index.tolist())
+
+    secili_yil_gruplari = (
+        yilda_verisi_olan_gruplar(yil_1)
+        | yilda_verisi_olan_gruplar(yil_2)
+    )
+    grup_sirasi = [
+        grup for grup in dinamik_musteri_gruplari(kg_musteri_df, manuel)
+        if grup in secili_yil_gruplari
+    ]
     matris_1 = yil_kapanis_yuzde_matrisi(
         kg_musteri_df, yil_1, grup_sirasi, manuel
     )
@@ -2492,28 +2535,6 @@ def yil_kapanis_ortalamasini_hesapla(
     harita_2 = matris_2.set_index("Müşteri Grubu")
     son_ay_index = aylar.index(son_gerceklesen_ay)
     sonuc = []
-    diger_satirlari = [
-        [
-            yil_kapanis_decimal_yuzde(harita.at["DİĞER", ay])
-            for ay in aylar
-        ]
-        for harita in [harita_1, harita_2]
-        if "DİĞER" in harita.index
-        and float(harita.loc["DİĞER", aylar].sum()) > 0
-    ]
-    if diger_satirlari:
-        diger_fallback = [
-            (
-                sum((satir[index] for satir in diger_satirlari), Decimal("0"))
-                / Decimal(len(diger_satirlari))
-            ).quantize(YIL_KAPANIS_YUZDE_QUANTIZER, rounding=ROUND_HALF_UP)
-            for index in range(len(aylar))
-        ]
-    else:
-        varsayilan_pay = (
-            Decimal("100") / Decimal(len(aylar))
-        ).quantize(YIL_KAPANIS_YUZDE_QUANTIZER, rounding=ROUND_HALF_UP)
-        diger_fallback = [varsayilan_pay for _ in aylar]
     for grup in grup_sirasi:
         mevcut_satirlar = [
             [
@@ -2538,7 +2559,12 @@ def yil_kapanis_ortalamasini_hesapla(
                 for index in range(len(aylar))
             ]
         else:
-            ortalama_degerler = diger_fallback.copy()
+            # Veri bulunmayan bir gruba DİĞER veya eşit dağılım yüzdesi
+            # atanmaz. Böylece kaynak Excel'de olmayan grup sonuç üretmez.
+            ortalama_degerler = [
+                Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
+                for _ in aylar
+            ]
         aylik_ortalamalar = {
             ay: float(ortalama_degerler[index])
             for index, ay in enumerate(aylar)
@@ -8127,7 +8153,7 @@ if sekme_acik_mi[8]:
                 "Excel'deki Müşteri Grubu + Ocak–Aralık bloğunu ilk hücreye "
                 "doğrudan yapıştırın. Hücreler 7,11% veya 7,11 biçiminde "
                 "girilebilir. Değerler ekranda iki ondalık gösterilir; kayıt "
-                "ve hesaplamalarda 15 ondalık basamak korunur."
+                "ve hesaplamalarda 4 ondalık basamak korunur."
             )
             manuel_yil = int(st.number_input(
                 "Manuel matris yılı",
@@ -8260,7 +8286,7 @@ if sekme_acik_mi[8]:
                         manuel_ham, varsayilan_yil=manuel_yil
                     )
                     # Editör iki ondalık gösterse de kullanıcı hücreyi
-                    # değiştirmediyse daha önce kaydedilmiş 15 basamaklı ham
+                    # değiştirmediyse daha önce kaydedilmiş 4 basamaklı ham
                     # değerin üzerine yuvarlanmış görüntüyü yazma.
                     hazir_manuel = yil_kapanis_eski_hassasiyeti_koru(
                         hazir_manuel, manuel_yil_df
