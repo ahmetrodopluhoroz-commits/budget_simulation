@@ -482,6 +482,7 @@ yil_kapanis_manuel_matris_sutunlari = [
 ] + [f"{ay} (%)" for ay in aylar]
 YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 15
 YIL_KAPANIS_YUZDE_QUANTIZER = Decimal("0.000000000000001")
+YIL_KAPANIS_DETAY_BULUT_PAKET_BOYUTU = 250
 yil_kapanis_detay_kimlik_sutunlari = [
     "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
     "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
@@ -642,6 +643,14 @@ if "yil_kapanis_manuel_matris_df" not in st.session_state:
     )
 if "yil_kapanis_manuel_editor_surumu" not in st.session_state:
     st.session_state.yil_kapanis_manuel_editor_surumu = 0
+if "yil_kapanis_yuzde_excel_imzasi" not in st.session_state:
+    st.session_state.yil_kapanis_yuzde_excel_imzasi = None
+if "yil_kapanis_yuzde_excel_adi" not in st.session_state:
+    st.session_state.yil_kapanis_yuzde_excel_adi = ""
+if "yil_kapanis_yil_bulut_durumlari" not in st.session_state:
+    st.session_state.yil_kapanis_yil_bulut_durumlari = {}
+if "yil_kapanis_yil_kaynak_dosyalari" not in st.session_state:
+    st.session_state.yil_kapanis_yil_kaynak_dosyalari = {}
 if "desi_tahmin_ortalama_manuel_ayarlari" not in st.session_state:
     st.session_state.desi_tahmin_ortalama_manuel_ayarlari = {}
 if "desi_tahmin_detay_manuel_ayarlari" not in st.session_state:
@@ -900,6 +909,10 @@ def revizyon_oturumunu_temizle():
         columns=yil_kapanis_manuel_matris_sutunlari
     )
     st.session_state.yil_kapanis_manuel_editor_surumu += 1
+    st.session_state.yil_kapanis_yuzde_excel_imzasi = None
+    st.session_state.yil_kapanis_yuzde_excel_adi = ""
+    st.session_state.yil_kapanis_yil_kaynak_dosyalari = {}
+    st.session_state.yil_kapanis_yil_bulut_durumlari = {}
     st.session_state.desi_tahmin_ortalama_manuel_ayarlari = {}
     st.session_state.desi_tahmin_detay_manuel_ayarlari = {}
     st.session_state.desi_tahmin_bulut_ortalama_df = pd.DataFrame()
@@ -993,13 +1006,13 @@ def guvenli_sayi(value):
     except: return 0.0
 
 
-def yil_kapanis_hassas_yuzde(value):
-    """Yıl kapanış yüzdesini 15 ondalık basamakla güvenli biçimde okur."""
+def yil_kapanis_decimal_yuzde(value):
+    """Yıl kapanış yüzdesini kesin Decimal olarak 15 basamağa getirir."""
     if value is None:
-        return 0.0
+        return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
     try:
         if pd.isna(value):
-            return 0.0
+            return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
     except (TypeError, ValueError):
         pass
 
@@ -1010,7 +1023,7 @@ def yil_kapanis_hassas_yuzde(value):
         .replace(" ", "")
     )
     if metin.lower() in {"", "-", "nan", "none", "null", "nat"}:
-        return 0.0
+        return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
 
     # Yüzde hücresinde son ayraç ondalık kabul edilir. Böylece hem
     # 7,123456789012345 hem de 7.123456789012345 kayıpsız okunur.
@@ -1029,18 +1042,28 @@ def yil_kapanis_hassas_yuzde(value):
     try:
         sayi = Decimal(metin)
         if not sayi.is_finite():
-            return 0.0
-        return float(sayi.quantize(
+            return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
+        return sayi.quantize(
             YIL_KAPANIS_YUZDE_QUANTIZER,
             rounding=ROUND_HALF_UP
-        ))
+        )
     except (InvalidOperation, ValueError):
-        return 0.0
+        return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
+
+
+def yil_kapanis_hassas_yuzde(value):
+    """Arayüz/pandas uyumu için 15 basamaklı yüzdeyi float olarak döndürür."""
+    return float(yil_kapanis_decimal_yuzde(value))
+
+
+def yil_kapanis_db_yuzde_degeri(value):
+    """Supabase numeric(30,15) alanına float izi bırakmadan değer hazırlar."""
+    return format(yil_kapanis_decimal_yuzde(value), ".15f")
 
 
 def yil_kapanis_yuzdesini_goster(value):
     """Hassas yüzdeyi değiştirmeden kullanıcıya iki ondalıkla gösterir."""
-    sayi = Decimal(str(yil_kapanis_hassas_yuzde(value))).quantize(
+    sayi = yil_kapanis_decimal_yuzde(value).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
     return f"{sayi:.2f}%".replace(".", ",")
@@ -1197,6 +1220,90 @@ def yuklenen_tabloyu_oku(uploaded_file):
 
 def yuklenen_dosya_imzasi(uploaded_file):
     return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+
+
+def yil_kapanis_yuzde_excelini_oku(uploaded_file):
+    """2024/2025 başlık bloklu Excel yüzde matrisini kayıpsız okur."""
+    dosya_adi = uploaded_file.name.lower()
+    if not dosya_adi.endswith(".xlsx"):
+        raise ValueError(
+            "Yüzde matrisi için .xlsx dosyası kullanın; böylece hücrelerin "
+            "gerçek değeri ve yüzde biçimi korunur."
+        )
+    try:
+        from openpyxl import load_workbook
+    except ImportError as ex:
+        raise ValueError(
+            "Excel yüzde matrisi için openpyxl paketi kurulmalıdır."
+        ) from ex
+
+    workbook = load_workbook(
+        io.BytesIO(uploaded_file.getvalue()),
+        data_only=True,
+        read_only=True
+    )
+    kayitlar = []
+    for worksheet in workbook.worksheets:
+        aktif_yil = None
+        for cells in worksheet.iter_rows():
+            degerler = [cell.value for cell in cells]
+            if not degerler:
+                continue
+            ilk = degerler[0]
+            ilk_metin = temiz_metin(ilk)
+            olasi_yil = guvenli_tamsayi(ilk, nullable=True)
+            satirda_yil = (
+                olasi_yil is not None
+                and 2000 <= int(olasi_yil) <= 2100
+                and re.fullmatch(r"20\d{2}(?:\.0+)?", ilk_metin) is not None
+            )
+            if satirda_yil:
+                aktif_yil = int(olasi_yil)
+                continue
+            if aktif_yil is None or not ilk_metin:
+                continue
+            if ilk_metin.casefold() in {
+                "müşteri grubu", "müşteri grup", "musteri grubu",
+                "musteri grup"
+            }:
+                continue
+
+            yuzdeler = []
+            for index in range(1, len(aylar) + 1):
+                cell = cells[index] if index < len(cells) else None
+                value = cell.value if cell is not None else None
+                decimal_value = yil_kapanis_decimal_yuzde(value)
+                if (
+                    cell is not None
+                    and isinstance(value, (int, float, Decimal))
+                    and "%" in str(cell.number_format or "")
+                ):
+                    decimal_value = (
+                        Decimal(str(value)) * Decimal("100")
+                    ).quantize(
+                        YIL_KAPANIS_YUZDE_QUANTIZER,
+                        rounding=ROUND_HALF_UP
+                    )
+                yuzdeler.append(decimal_value)
+
+            kayitlar.append({
+                "Yıl": aktif_yil,
+                "Müşteri Grubu": ilk_metin,
+                **{
+                    f"{ay} (%)": format(yuzdeler[index], ".15f")
+                    for index, ay in enumerate(aylar)
+                }
+            })
+
+    if not kayitlar:
+        raise ValueError(
+            "Dosyada 2024/2025 gibi bir yıl başlığı altında müşteri grubu "
+            "ve Ocak–Aralık yüzde satırları bulunamadı."
+        )
+    sonuc = yil_kapanis_manuel_matrisini_hazirla(pd.DataFrame(kayitlar))
+    if sonuc.empty:
+        raise ValueError("Excel dosyasında kullanılabilir yüzde satırı yok.")
+    return sonuc
 
 
 def baz_birim_fiyat_tablosunu_hazirla(df_raw):
@@ -1460,6 +1567,153 @@ def supabase_revizyon_kayitlarini_getir(
             break
         baslangic += paket_boyutu
     return tum_kayitlar
+
+
+def yil_kapanis_manuel_yilini_buluta_kaydet(
+    db_client, revizyon_id, yil, manuel_df, kaynak_dosya_adi=""
+):
+    """Tek bir yıl matrisini diğer yıllara dokunmadan güvenli günceller."""
+    if not db_client or not revizyon_id:
+        raise ValueError("Aktif revizyon veya Supabase bağlantısı bulunamadı.")
+    hazir = yil_kapanis_manuel_matrisini_hazirla(manuel_df)
+    hazir = hazir[
+        pd.to_numeric(hazir["Yıl"], errors="coerce") == int(yil)
+    ].copy()
+    if hazir.empty:
+        raise ValueError(f"{int(yil)} için kaydedilecek yüzde matrisi yok.")
+
+    mevcut_sonuc = (
+        db_client.table(YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU)
+        .select("*")
+        .eq("revizyon_id", revizyon_id)
+        .eq("Yıl", int(yil))
+        .execute()
+    )
+    mevcut_gruplar = {
+        yil_kapanis_grup_adi(row.get("Müşteri Grubu"))
+        for row in (mevcut_sonuc.data or [])
+        if yil_kapanis_grup_adi(row.get("Müşteri Grubu"))
+    }
+    simdi = datetime.now().astimezone().isoformat()
+    gelen_gruplar = set()
+    for _, row in hazir.iterrows():
+        grup = yil_kapanis_grup_adi(row.get("Müşteri Grubu"))
+        gelen_gruplar.add(grup)
+        rec = {
+            "revizyon_id": revizyon_id,
+            "Yıl": int(yil),
+            "Müşteri Grubu": grup,
+            **{
+                f"{ay} (%)": yil_kapanis_db_yuzde_degeri(
+                    row.get(f"{ay} (%)")
+                )
+                for ay in aylar
+            },
+            "updated_by": AKTIF_KULLANICI,
+            "updated_at": simdi,
+            "source_type": "EXCEL" if kaynak_dosya_adi else "MANUEL",
+            "source_file_name": kaynak_dosya_adi or None
+        }
+        if grup in mevcut_gruplar:
+            guncelleme = {
+                key: value for key, value in rec.items()
+                if key not in {"revizyon_id", "Yıl", "Müşteri Grubu"}
+            }
+            (
+                db_client.table(YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU)
+                .update(guncelleme)
+                .eq("revizyon_id", revizyon_id)
+                .eq("Yıl", int(yil))
+                .eq("Müşteri Grubu", grup)
+                .execute()
+            )
+        else:
+            db_client.table(
+                YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU
+            ).insert(rec).execute()
+
+    # Yeni dosyada artık bulunmayan gruplar ancak bütün yazmalar başarılı
+    # olduktan sonra tek tek temizlenir. Hata olursa eski veri kaybolmaz.
+    for grup in sorted(mevcut_gruplar - gelen_gruplar):
+        (
+            db_client.table(YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU)
+            .delete()
+            .eq("revizyon_id", revizyon_id)
+            .eq("Yıl", int(yil))
+            .eq("Müşteri Grubu", grup)
+            .execute()
+        )
+    return len(hazir), simdi
+
+
+def yil_kapanis_detayini_parcali_buluta_kaydet(
+    db_client, revizyon_id, detay_df, ilerleme_callback=None
+):
+    """Detayı eski veriyi baştan silmeden tekrar çalıştırılabilir kaydeder."""
+    if not db_client or not revizyon_id:
+        raise ValueError("Aktif revizyon veya Supabase bağlantısı bulunamadı.")
+    hazir = yil_kapanis_detayini_hazirla(detay_df)
+    hazir = hazir.drop_duplicates("Uniq ID", keep="last").reset_index(drop=True)
+    if hazir.empty:
+        raise ValueError("Buluta aktarılacak yıl kapanış detayı yok.")
+
+    kayit_zamani = datetime.now().astimezone().isoformat()
+    toplam = len(hazir)
+    baslangic = 0
+    paket_boyutu = YIL_KAPANIS_DETAY_BULUT_PAKET_BOYUTU
+    while baslangic < toplam:
+        paket_df = hazir.iloc[
+            baslangic:baslangic + paket_boyutu
+        ]
+        records = []
+        for _, row in paket_df.iterrows():
+            rec = {
+                col: json_uyumlu_deger(row.get(col))
+                for col in yil_kapanis_detay_sutunlari
+            }
+            rec["revizyon_id"] = revizyon_id
+            rec["updated_at"] = kayit_zamani
+            records.append(rec)
+        try:
+            (
+                db_client.table(YIL_KAPANIS_DETAY_DB_TABLOSU)
+                .upsert(records, on_conflict="kayit_anahtari")
+                .execute()
+            )
+        except Exception as ex:
+            hata_metni = str(ex).lower()
+            if (
+                paket_boyutu > 25
+                and (
+                    "57014" in hata_metni
+                    or "statement timeout" in hata_metni
+                )
+            ):
+                paket_boyutu = max(25, paket_boyutu // 2)
+                continue
+            raise
+        tamamlanan = min(baslangic + len(paket_df), toplam)
+        if ilerleme_callback:
+            ilerleme_callback(tamamlanan, toplam)
+        baslangic = tamamlanan
+
+    # Yalnızca bütün yeni paketler başarıyla yazıldıktan sonra eski sürümde
+    # kalmış satırlar kısa SQL işlemleriyle temizlenir.
+    temizlenen = 0
+    while True:
+        sonuc = db_client.rpc(
+            "yil_kapanis_detay_eski_kayitlari_temizle",
+            {
+                "p_revizyon_id": revizyon_id,
+                "p_kayit_zamani": kayit_zamani,
+                "p_limit": 1000
+            }
+        ).execute()
+        silinen = int(sonuc.data or 0)
+        temizlenen += silinen
+        if silinen < 1000:
+            break
+    return toplam, temizlenen, kayit_zamani
 
 
 def master_bulut_kaydini_oturuma_yukle(revizyon_id, zorla=False):
@@ -2225,7 +2479,7 @@ def yil_kapanis_ortalamasini_hesapla(
     kg_musteri_df, yil_1, yil_2, son_gerceklesen_ay,
     manuel_matris_df=None
 ):
-    """İki yılın grup/ay yüzdelerinin aritmetik ortalamasını hesaplar."""
+    """İki yılın grup/ay yüzdelerini Decimal ile kesin olarak ortalar."""
     manuel = yil_kapanis_manuel_matrisini_hazirla(manuel_matris_df)
     grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df, manuel)
     matris_1 = yil_kapanis_yuzde_matrisi(
@@ -2239,37 +2493,69 @@ def yil_kapanis_ortalamasini_hesapla(
     son_ay_index = aylar.index(son_gerceklesen_ay)
     sonuc = []
     diger_satirlari = [
-        harita.loc["DİĞER", aylar].to_numpy(dtype=float)
+        [
+            yil_kapanis_decimal_yuzde(harita.at["DİĞER", ay])
+            for ay in aylar
+        ]
         for harita in [harita_1, harita_2]
         if "DİĞER" in harita.index
         and float(harita.loc["DİĞER", aylar].sum()) > 0
     ]
-    diger_fallback = (
-        np.round(np.mean(diger_satirlari, axis=0), 15)
-        if diger_satirlari else np.full(len(aylar), 100.0 / len(aylar))
-    )
+    if diger_satirlari:
+        diger_fallback = [
+            (
+                sum((satir[index] for satir in diger_satirlari), Decimal("0"))
+                / Decimal(len(diger_satirlari))
+            ).quantize(YIL_KAPANIS_YUZDE_QUANTIZER, rounding=ROUND_HALF_UP)
+            for index in range(len(aylar))
+        ]
+    else:
+        varsayilan_pay = (
+            Decimal("100") / Decimal(len(aylar))
+        ).quantize(YIL_KAPANIS_YUZDE_QUANTIZER, rounding=ROUND_HALF_UP)
+        diger_fallback = [varsayilan_pay for _ in aylar]
     for grup in grup_sirasi:
         mevcut_satirlar = [
-            harita.loc[grup, aylar].to_numpy(dtype=float)
+            [
+                yil_kapanis_decimal_yuzde(harita.at[grup, ay])
+                for ay in aylar
+            ]
             for harita in [harita_1, harita_2]
             if grup in harita.index
             and float(harita.loc[grup, aylar].sum()) > 0
         ]
-        ortalama_degerler = (
-            np.round(np.mean(mevcut_satirlar, axis=0), 15)
-            if mevcut_satirlar else diger_fallback.copy()
-        )
+        if mevcut_satirlar:
+            ortalama_degerler = [
+                (
+                    sum(
+                        (satir[index] for satir in mevcut_satirlar),
+                        Decimal("0")
+                    ) / Decimal(len(mevcut_satirlar))
+                ).quantize(
+                    YIL_KAPANIS_YUZDE_QUANTIZER,
+                    rounding=ROUND_HALF_UP
+                )
+                for index in range(len(aylar))
+            ]
+        else:
+            ortalama_degerler = diger_fallback.copy()
         aylik_ortalamalar = {
-            ay: yil_kapanis_hassas_yuzde(ortalama_degerler[index])
+            ay: float(ortalama_degerler[index])
             for index, ay in enumerate(aylar)
         }
         sonuc.append({
             "Müşteri Grubu": grup,
             **{f"{ay} (%)": aylik_ortalamalar[ay] for ay in aylar},
-            "Gerçekleşen Dönem Payı (%)": yil_kapanis_hassas_yuzde(
+            "Gerçekleşen Dönem Payı (%)": float(
                 sum(
-                    aylik_ortalamalar[ay]
-                    for ay in aylar[:son_ay_index + 1]
+                    (
+                        yil_kapanis_decimal_yuzde(aylik_ortalamalar[ay])
+                        for ay in aylar[:son_ay_index + 1]
+                    ),
+                    Decimal("0")
+                ).quantize(
+                    YIL_KAPANIS_YUZDE_QUANTIZER,
+                    rounding=ROUND_HALF_UP
                 )
             )
         })
@@ -7756,6 +8042,85 @@ if sekme_acik_mi[8]:
                 except Exception as ex:
                     st.error(f"Müşteri-Kg dosyası işlenemedi: {ex}")
 
+            st.markdown("#### 📊 Yıllık yüzde matrisi Excel yükleme")
+            st.caption(
+                "Aynı sayfada 2024 ve 2025 gibi yıl başlıkları, altlarında "
+                "Müşteri Grubu + Ocak–Aralık yüzdeleri bulunabilir. .xlsx "
+                "dosyasındaki hücrenin gerçek değeri okunur; boş satırlar "
+                "otomatik atlanır."
+            )
+            yil_kapanis_yuzde_excel = st.file_uploader(
+                "Yüzde matrisi Excel dosyasını yükleyin",
+                type=["xlsx"],
+                key="yil_kapanis_yuzde_excel_upload",
+                help=(
+                    "Örnek sıra: 2024 başlığı, müşteri grupları ve 12 ay; "
+                    "ardından 2025 başlığı ve aynı yapı."
+                )
+            )
+            if yil_kapanis_yuzde_excel is not None:
+                try:
+                    yuzde_excel_imzasi = yuklenen_dosya_imzasi(
+                        yil_kapanis_yuzde_excel
+                    )
+                    if (
+                        yuzde_excel_imzasi
+                        != st.session_state.yil_kapanis_yuzde_excel_imzasi
+                    ):
+                        yuklenen_matris = yil_kapanis_yuzde_excelini_oku(
+                            yil_kapanis_yuzde_excel
+                        )
+                        yuklenen_yillar = sorted({
+                            int(value) for value in pd.to_numeric(
+                                yuklenen_matris["Yıl"], errors="coerce"
+                            ).dropna().tolist()
+                        })
+                        mevcut_manuel = yil_kapanis_manuel_matrisini_hazirla(
+                            st.session_state.get(
+                                "yil_kapanis_manuel_matris_df",
+                                pd.DataFrame()
+                            )
+                        )
+                        korunacaklar = mevcut_manuel[
+                            ~pd.to_numeric(
+                                mevcut_manuel["Yıl"], errors="coerce"
+                            ).isin(yuklenen_yillar)
+                        ].copy()
+                        st.session_state.yil_kapanis_manuel_matris_df = (
+                            pd.concat(
+                                [korunacaklar, yuklenen_matris],
+                                ignore_index=True
+                            ).reindex(
+                                columns=yil_kapanis_manuel_matris_sutunlari
+                            )
+                        )
+                        st.session_state.yil_kapanis_yuzde_excel_imzasi = (
+                            yuzde_excel_imzasi
+                        )
+                        st.session_state.yil_kapanis_yuzde_excel_adi = (
+                            yil_kapanis_yuzde_excel.name
+                        )
+                        for yil in yuklenen_yillar:
+                            st.session_state.yil_kapanis_yil_kaynak_dosyalari[
+                                int(yil)
+                            ] = yil_kapanis_yuzde_excel.name
+                            st.session_state.yil_kapanis_yil_bulut_durumlari[
+                                int(yil)
+                            ] = "kaydedilmedi"
+                        st.session_state.yil_kapanis_kayitli_sonuc_df = (
+                            pd.DataFrame(columns=yil_kapanis_sonuc_sutunlari)
+                        )
+                        st.session_state.yil_kapanis_ortalama_manuel_ayarlari = {}
+                        st.session_state.yil_kapanis_ortalama_editor_surumu += 1
+                        st.session_state.yil_kapanis_manuel_editor_surumu += 1
+                        st.success(
+                            f"{yil_kapanis_yuzde_excel.name}: "
+                            f"{len(yuklenen_matris):,} satır okundu. Yıllar: "
+                            + ", ".join(map(str, yuklenen_yillar))
+                        )
+                except Exception as ex:
+                    st.error(f"Yüzde matrisi Excel'i işlenemedi: {ex}")
+
             st.markdown("#### ✍️ Manuel aylık yüzde matrisi")
             st.caption(
                 "Dosya yüklemek yerine yılı seçip satır ekleyebilirsiniz. "
@@ -7830,12 +8195,26 @@ if sekme_acik_mi[8]:
                 "kullanın. Excel'den yapıştırma sırası: Müşteri Grubu, Ocak, "
                 "Şubat, …, Aralık. Yıl sütununu kopyalamanız gerekmez."
             )
-            manuel_kaydet_col, manuel_sil_col = st.columns(2)
+            manuel_kaydet_col, manuel_bulut_col, manuel_sil_col = st.columns(3)
             manuel_kaydet = manuel_kaydet_col.button(
                 f"✅ {manuel_yil} Yılını Hesaplamaya Ekle",
                 type="primary",
                 use_container_width=True,
                 key="btn_yil_kapanis_manuel_matris_kaydet"
+            )
+            manuel_bulut_kaydet = manuel_bulut_col.button(
+                f"☁️ {manuel_yil} Yılını Buluta Kaydet",
+                use_container_width=True,
+                disabled=(
+                    not client
+                    or not aktif_yk_rev_id
+                    or manuel_yil_df.empty
+                ),
+                key="btn_yil_kapanis_manuel_yil_cloud_save",
+                help=(
+                    "Önce 'Hesaplamaya Ekle' ile mevcut düzenlemeleri "
+                    "onaylayın. Bu kayıt yalnızca seçili yılı günceller."
+                )
             )
             manuel_sil = manuel_sil_col.button(
                 f"🗑️ {manuel_yil} Manuel Matrisini Sil",
@@ -7843,6 +8222,17 @@ if sekme_acik_mi[8]:
                 disabled=manuel_yil_df.empty,
                 key="btn_yil_kapanis_manuel_matris_sil"
             )
+
+            bulut_durumu = st.session_state.yil_kapanis_yil_bulut_durumlari.get(
+                manuel_yil
+            )
+            if bulut_durumu and bulut_durumu != "kaydedilmedi":
+                st.caption(f"🟢 {manuel_yil} bulut kaydı: {bulut_durumu}")
+            elif not manuel_yil_df.empty:
+                st.caption(
+                    f"🟠 {manuel_yil} hesaplamada hazır; henüz ayrı bir "
+                    "bulut kontrol noktası oluşturulmadı."
+                )
 
             if manuel_kaydet:
                 manuel_ham = manuel_duzenlenen.copy()
@@ -7937,6 +8327,45 @@ if sekme_acik_mi[8]:
                                 + ", ".join(sapmali[:10])
                             )
 
+            if manuel_bulut_kaydet:
+                try:
+                    guncel_manuel = yil_kapanis_manuel_matrisini_hazirla(
+                        st.session_state.get(
+                            "yil_kapanis_manuel_matris_df", pd.DataFrame()
+                        )
+                    )
+                    kaynak_adi = (
+                        st.session_state.yil_kapanis_yil_kaynak_dosyalari.get(
+                            manuel_yil, ""
+                        )
+                    )
+                    kayit_sayisi, kayit_zamani = (
+                        yil_kapanis_manuel_yilini_buluta_kaydet(
+                            client,
+                            aktif_yk_rev_id,
+                            manuel_yil,
+                            guncel_manuel,
+                            kaynak_adi
+                        )
+                    )
+                    durum_etiketi = (
+                        kayit_zamani[:16].replace("T", " ")
+                        + f" · {kayit_sayisi} grup"
+                    )
+                    st.session_state.yil_kapanis_yil_bulut_durumlari[
+                        manuel_yil
+                    ] = durum_etiketi
+                    revizyonu_degistirildi_isaretle(aktif_yk_rev_id)
+                    st.success(
+                        f"{manuel_yil} yılı seçili revizyona kaydedildi; "
+                        "diğer yıllar değiştirilmedi."
+                    )
+                except Exception as ex:
+                    st.error(
+                        f"{manuel_yil} yılı buluta kaydedilemedi. Güncel Yıl "
+                        f"Kapanış SQL'ini çalıştırın. Ayrıntı: {ex}"
+                    )
+
             if manuel_sil:
                 st.session_state.yil_kapanis_manuel_matris_df = manuel_tum[
                     pd.to_numeric(manuel_tum["Yıl"], errors="coerce")
@@ -7987,6 +8416,10 @@ if sekme_acik_mi[8]:
                     columns=yil_kapanis_manuel_matris_sutunlari
                 )
                 st.session_state.yil_kapanis_manuel_editor_surumu += 1
+                st.session_state.yil_kapanis_yuzde_excel_imzasi = None
+                st.session_state.yil_kapanis_yuzde_excel_adi = ""
+                st.session_state.yil_kapanis_yil_kaynak_dosyalari = {}
+                st.session_state.yil_kapanis_yil_bulut_durumlari = {}
                 st.rerun()
 
             if buluttan_getir:
@@ -8064,6 +8497,30 @@ if sekme_acik_mi[8]:
                                 manuel_matris_raw
                             )
                         )
+                        durum_df = pd.DataFrame(manuel_matris_kayitlari)
+                        if not durum_df.empty and "Yıl" in durum_df.columns:
+                            for yil, yil_df in durum_df.groupby("Yıl"):
+                                yil_int = guvenli_tamsayi(yil, nullable=True)
+                                if yil_int is None:
+                                    continue
+                                son_zaman = temiz_metin(
+                                    yil_df.get(
+                                        "updated_at", pd.Series(dtype=str)
+                                    ).dropna().astype(str).max()
+                                )
+                                st.session_state[
+                                    "yil_kapanis_yil_bulut_durumlari"
+                                ][int(yil_int)] = (
+                                    son_zaman[:16].replace("T", " ")
+                                    + f" · {len(yil_df)} grup"
+                                )
+                                kaynaklar = yil_df.get(
+                                    "source_file_name", pd.Series(dtype=str)
+                                ).dropna().astype(str)
+                                if not kaynaklar.empty:
+                                    st.session_state[
+                                        "yil_kapanis_yil_kaynak_dosyalari"
+                                    ][int(yil_int)] = kaynaklar.iloc[-1]
                         st.session_state.yil_kapanis_manuel_editor_surumu += 1
                     except Exception:
                         # SQL tablosu henüz kurulmadıysa mevcut yerel girişler
@@ -8968,7 +9425,7 @@ if sekme_acik_mi[8]:
                             writer, index=False, sheet_name="KAPANIŞ DETAY"
                         )
 
-                yk1, yk_detay_indir, yk2 = st.columns(3)
+                yk1, yk_detay_indir = st.columns(2)
                 yk1.download_button(
                     "📥 Özet Excel İndir",
                     data=yk_excel.getvalue(),
@@ -9006,58 +9463,67 @@ if sekme_acik_mi[8]:
                         key="btn_yil_kapanis_detay_bos"
                     )
 
-                if yk2.button(
-                    "💾 Kg ve Yıl Kapanışını Buluta Kaydet",
+                st.markdown("#### ☁️ Bulut kayıtları")
+                cloud_ozet_col, cloud_detay_col = st.columns(2)
+                ozet_bulut_kaydet = cloud_ozet_col.button(
+                    "💾 Yüzde Matrisleri, Kg ve Özeti Kaydet",
                     type="primary",
                     use_container_width=True,
                     disabled=(not client or not aktif_yk_rev_id),
                     key="btn_yil_kapanis_cloud_save"
-                ):
+                )
+                detay_bulut_kaydet = cloud_detay_col.button(
+                    (
+                        f"☁️ Detayı Parçalı Aktar ({len(detay_sonuc):,} satır)"
+                        if not detay_sonuc.empty
+                        else "☁️ Detay Kaynağı Bekleniyor"
+                    ),
+                    use_container_width=True,
+                    disabled=(
+                        not client
+                        or not aktif_yk_rev_id
+                        or detay_sonuc.empty
+                    ),
+                    key="btn_yil_kapanis_detail_cloud_save",
+                    help=(
+                        "Mevcut bulut satırlarını baştan silmez; 250 satırlık "
+                        "paketlerle günceller ve işlem bitince eski kalan "
+                        "satırları kısa partiler halinde temizler."
+                    )
+                )
+
+                if ozet_bulut_kaydet:
+                    asama = "Yıllık yüzde matrisleri"
                     try:
-                        client.table(
-                            YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU
-                        ).delete().eq(
-                            "revizyon_id", aktif_yk_rev_id
-                        ).execute()
-                        for i in range(0, len(manuel_matris_kaynak), 500):
-                            manuel_records = []
-                            for _, row in manuel_matris_kaynak.iloc[
-                                i:i + 500
-                            ].iterrows():
-                                rec = {
-                                    col: json_uyumlu_deger(row.get(col))
-                                    for col in (
-                                        yil_kapanis_manuel_matris_sutunlari
+                        if not manuel_matris_kaynak.empty:
+                            for yil in sorted({
+                                int(value) for value in pd.to_numeric(
+                                    manuel_matris_kaynak["Yıl"],
+                                    errors="coerce"
+                                ).dropna().tolist()
+                            }):
+                                kaynak_adi = (
+                                    st.session_state
+                                    .yil_kapanis_yil_kaynak_dosyalari
+                                    .get(yil, "")
+                                )
+                                kayit_sayisi, kayit_zamani = (
+                                    yil_kapanis_manuel_yilini_buluta_kaydet(
+                                        client,
+                                        aktif_yk_rev_id,
+                                        yil,
+                                        manuel_matris_kaynak,
+                                        kaynak_adi
                                     )
-                                }
-                                rec["revizyon_id"] = aktif_yk_rev_id
-                                rec["updated_by"] = AKTIF_KULLANICI
-                                manuel_records.append(rec)
-                            client.table(
-                                YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU
-                            ).insert(manuel_records).execute()
+                                )
+                                st.session_state[
+                                    "yil_kapanis_yil_bulut_durumlari"
+                                ][yil] = (
+                                    kayit_zamani[:16].replace("T", " ")
+                                    + f" · {kayit_sayisi} grup"
+                                )
 
-                        if not detay_sonuc.empty:
-                            client.table(
-                                YIL_KAPANIS_DETAY_DB_TABLOSU
-                            ).delete().eq(
-                                "revizyon_id", aktif_yk_rev_id
-                            ).execute()
-                            for i in range(0, len(detay_sonuc), 500):
-                                detay_records = []
-                                for _, row in detay_sonuc.iloc[
-                                    i:i + 500
-                                ].iterrows():
-                                    rec = {
-                                        col: json_uyumlu_deger(row.get(col))
-                                        for col in yil_kapanis_detay_sutunlari
-                                    }
-                                    rec["revizyon_id"] = aktif_yk_rev_id
-                                    detay_records.append(rec)
-                                client.table(
-                                    YIL_KAPANIS_DETAY_DB_TABLOSU
-                                ).insert(detay_records).execute()
-
+                        asama = "Müşteri-Kg kaynağı"
                         client.table(KG_MUSTERI_DB_TABLOSU).delete().eq(
                             "revizyon_id", aktif_yk_rev_id
                         ).execute()
@@ -9076,6 +9542,7 @@ if sekme_acik_mi[8]:
                                 kg_records
                             ).execute()
 
+                        asama = "Yıl kapanış özeti"
                         kapanis_records = []
                         for _, row in ortalama_sonuc.iterrows():
                             rec = {
@@ -9087,10 +9554,22 @@ if sekme_acik_mi[8]:
                                     int(kapanis_yili)
                                     if kapanis_yili is not None else None
                                 ),
+                                "Müşteri Grubu": temiz_metin(
+                                    row.get("Müşteri Grubu")
+                                ),
                                 **{
-                                    col: json_uyumlu_deger(row.get(col))
-                                    for col in yil_kapanis_sonuc_sutunlari
-                                }
+                                    f"{ay} (%)": yil_kapanis_db_yuzde_degeri(
+                                        row.get(f"{ay} (%)")
+                                    )
+                                    for ay in aylar
+                                },
+                                "Gerçekleşen Dönem Payı (%)": (
+                                    yil_kapanis_db_yuzde_degeri(
+                                        row.get(
+                                            "Gerçekleşen Dönem Payı (%)"
+                                        )
+                                    )
+                                )
                             }
                             kapanis_records.append(rec)
                         client.table(YIL_KAPANIS_DB_TABLOSU).delete().eq(
@@ -9104,10 +9583,6 @@ if sekme_acik_mi[8]:
                         st.session_state.yil_kapanis_kayitli_sonuc_df = (
                             ortalama_sonuc.copy()
                         )
-                        if not detay_sonuc.empty:
-                            st.session_state.yil_kapanis_detay_bulut_df = (
-                                detay_sonuc.copy()
-                            )
                         st.session_state.yil_kapanis_bulut_ayarlari = {
                             "yil_1": int(yil_1),
                             "yil_2": int(yil_2),
@@ -9118,14 +9593,57 @@ if sekme_acik_mi[8]:
                             )
                         }
                         st.success(
-                            "Müşteri-Kg kaynağı, manuel yıl matrisleri, yıl "
-                            "kapanış sonucu ve detay tahminleri seçili "
-                            "revizyona kaydedildi."
+                            "Yüzde matrisleri, müşteri-Kg kaynağı ve yıl "
+                            "kapanış özeti kaydedildi. Büyük detay tablosu "
+                            "sağdaki ayrı düğmeyle aktarılır."
                         )
                     except Exception as ex:
                         st.error(
-                            "Yıl kapanışı buluta kaydedilemedi. Önce Yıl "
-                            f"Kapanış Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
+                            f"{asama} aşamasında bulut kaydı durdu. Güncel "
+                            f"Yıl Kapanış SQL'ini çalıştırın. Ayrıntı: {ex}"
+                        )
+
+                if detay_bulut_kaydet:
+                    ilerleme = st.progress(
+                        0.0,
+                        text=f"Detay aktarımı hazırlanıyor: 0 / {len(detay_sonuc):,}"
+                    )
+
+                    def detay_ilerlemesi(tamamlanan, toplam):
+                        ilerleme.progress(
+                            tamamlanan / max(toplam, 1),
+                            text=(
+                                "Detay buluta aktarılıyor: "
+                                f"{tamamlanan:,} / {toplam:,}"
+                            )
+                        )
+
+                    try:
+                        toplam, temizlenen, _ = (
+                            yil_kapanis_detayini_parcali_buluta_kaydet(
+                                client,
+                                aktif_yk_rev_id,
+                                detay_sonuc,
+                                detay_ilerlemesi
+                            )
+                        )
+                        st.session_state.yil_kapanis_detay_bulut_df = (
+                            detay_sonuc.copy()
+                        )
+                        revizyonu_degistirildi_isaretle(aktif_yk_rev_id)
+                        ilerleme.progress(
+                            1.0,
+                            text=f"Detay aktarımı tamamlandı: {toplam:,} satır"
+                        )
+                        st.success(
+                            f"{toplam:,} detay satırı güvenli biçimde "
+                            f"kaydedildi; {temizlenen:,} eski satır temizlendi."
+                        )
+                    except Exception as ex:
+                        st.error(
+                            "Detay aktarımı durdu; eski bulut kayıtları baştan "
+                            "silinmedi. Güncel Yıl Kapanış SQL'ini çalıştırıp "
+                            f"aynı düğmeye yeniden basabilirsiniz. Ayrıntı: {ex}"
                         )
 
 
