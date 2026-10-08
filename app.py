@@ -480,7 +480,7 @@ yil_kapanis_sonuc_sutunlari = [
 yil_kapanis_manuel_matris_sutunlari = [
     "Yıl", "Müşteri Grubu"
 ] + [f"{ay} (%)" for ay in aylar]
-YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 4
+YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK = 15
 YIL_KAPANIS_YUZDE_QUANTIZER = Decimal("1").scaleb(
     -YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK
 )
@@ -1009,7 +1009,7 @@ def guvenli_sayi(value):
 
 
 def yil_kapanis_decimal_yuzde(value):
-    """Yıl kapanış yüzdesini kesin Decimal olarak 4 basamağa getirir."""
+    """Yıl kapanış yüzdesini kesin Decimal olarak 15 basamağa getirir."""
     if value is None:
         return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
     try:
@@ -1028,7 +1028,7 @@ def yil_kapanis_decimal_yuzde(value):
         return Decimal("0").quantize(YIL_KAPANIS_YUZDE_QUANTIZER)
 
     # Yüzde hücresinde son ayraç ondalık kabul edilir. Böylece hem
-    # 7,1234 hem de 7.1234 aynı ondalık değer olarak okunur.
+    # 7,123456789012345 hem de 7.123456789012345 aynı değer olarak okunur.
     if "," in metin and "." in metin:
         if metin.rfind(",") > metin.rfind("."):
             metin = metin.replace(".", "").replace(",", ".")
@@ -1054,12 +1054,12 @@ def yil_kapanis_decimal_yuzde(value):
 
 
 def yil_kapanis_hassas_yuzde(value):
-    """Arayüz/pandas uyumu için 4 basamaklı yüzdeyi float olarak döndürür."""
+    """Arayüz/pandas uyumu için 15 basamaklı yüzdeyi float olarak döndürür."""
     return float(yil_kapanis_decimal_yuzde(value))
 
 
 def yil_kapanis_db_yuzde_degeri(value):
-    """Supabase numeric(30,4) alanına float izi bırakmadan değer hazırlar."""
+    """Supabase numeric(30,15) alanına float izi bırakmadan değer hazırlar."""
     return format(
         yil_kapanis_decimal_yuzde(value),
         f".{YIL_KAPANIS_YUZDE_ONDALIK_BASAMAK}f"
@@ -8153,7 +8153,7 @@ if sekme_acik_mi[8]:
                 "Excel'deki Müşteri Grubu + Ocak–Aralık bloğunu ilk hücreye "
                 "doğrudan yapıştırın. Hücreler 7,11% veya 7,11 biçiminde "
                 "girilebilir. Değerler ekranda iki ondalık gösterilir; kayıt "
-                "ve hesaplamalarda 4 ondalık basamak korunur."
+                "ve hesaplamalarda 15 ondalık basamak korunur."
             )
             manuel_yil = int(st.number_input(
                 "Manuel matris yılı",
@@ -8286,7 +8286,7 @@ if sekme_acik_mi[8]:
                         manuel_ham, varsayilan_yil=manuel_yil
                     )
                     # Editör iki ondalık gösterse de kullanıcı hücreyi
-                    # değiştirmediyse daha önce kaydedilmiş 4 basamaklı ham
+                    # değiştirmediyse daha önce kaydedilmiş 15 basamaklı ham
                     # değerin üzerine yuvarlanmış görüntüyü yazma.
                     hazir_manuel = yil_kapanis_eski_hassasiyeti_koru(
                         hazir_manuel, manuel_yil_df
