@@ -459,6 +459,8 @@ MUSTERI_DETAY_KOLONLARI = [
 MUSTERI_DUZENLENEBILIR_KOLONLAR = [
     "Yeni/Bütçelenen Müşteri", "Durum_2", "Durum_3", "Serbest Not"
 ]
+YENI_BUTCELENEN_KOLONU = "Yeni/Bütçelenen Müşteri"
+YENI_BUTCELENEN_BOS_ETIKET = "(Belirtilmemiş)"
 MUSTERI_GRUP_ESLESTIRME_KOLONLARI = [
     "Müşteri Kodu", "Sap Kodu", "Müşteri Adı",
     "Müşteri Temsilcisi", "Müşteri Grubu"
@@ -615,6 +617,8 @@ if "yil_kapanis_kg_df" not in st.session_state:
     )
 if "yil_kapanis_upload_imzasi" not in st.session_state:
     st.session_state.yil_kapanis_upload_imzasi = None
+if "musteri_kategori_dosya_haritasi" not in st.session_state:
+    st.session_state.musteri_kategori_dosya_haritasi = {}
 if "yil_kapanis_kayitli_sonuc_df" not in st.session_state:
     st.session_state.yil_kapanis_kayitli_sonuc_df = pd.DataFrame(
         columns=yil_kapanis_sonuc_sutunlari
@@ -892,6 +896,7 @@ def revizyon_oturumunu_temizle():
         columns=kg_musteri_sutunlari
     )
     st.session_state.yil_kapanis_upload_imzasi = None
+    st.session_state.musteri_kategori_dosya_haritasi = {}
     st.session_state.yil_kapanis_kayitli_sonuc_df = pd.DataFrame(
         columns=yil_kapanis_sonuc_sutunlari
     )
@@ -2586,6 +2591,56 @@ def yil_kapanis_ortalamasini_hesapla(
             )
         })
     return matris_1, matris_2, pd.DataFrame(sonuc)
+
+
+def yeni_butcelenen_haritasini_cikar(dataframe):
+    """Tablodan Müşteri Kodu -> Yeni/Bütçelenen Müşteri eşleşmesi üretir."""
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return {}
+    df = sutun_adlarini_standartlastir(dataframe)
+    if (
+        "Müşteri Kodu" not in df.columns
+        or YENI_BUTCELENEN_KOLONU not in df.columns
+    ):
+        return {}
+    work = pd.DataFrame({
+        "kod": df["Müşteri Kodu"].apply(guvenli_metin_kodu),
+        "kategori": df[YENI_BUTCELENEN_KOLONU].apply(temiz_metin),
+    })
+    work = work[(work["kod"] != "") & (work["kategori"] != "")]
+    if work.empty:
+        return {}
+    return (
+        work.drop_duplicates("kod", keep="last")
+        .set_index("kod")["kategori"].to_dict()
+    )
+
+
+def yil_kapanis_kategori_haritasi():
+    """Müşteri kartları + yüklenen dosyalardan tip haritası (dosya öncelikli)."""
+    harita = {}
+    for kod, ayar in (st.session_state.get("musteri_ayarlari") or {}).items():
+        kod = guvenli_metin_kodu(kod)
+        kategori = temiz_metin(
+            (ayar or {}).get(YENI_BUTCELENEN_KOLONU)
+            if isinstance(ayar, dict) else None
+        )
+        if kod and kategori:
+            harita[kod] = kategori
+    harita.update(yeni_butcelenen_haritasini_cikar(
+        st.session_state.get("musteri_ham_df", pd.DataFrame())
+    ))
+    harita.update(
+        st.session_state.get("musteri_kategori_dosya_haritasi", {}) or {}
+    )
+    return harita
+
+
+def yeni_butcelenen_sirala(kategoriler):
+    return sorted(
+        set(kategoriler),
+        key=lambda d: (d == YENI_BUTCELENEN_BOS_ETIKET, str(d).casefold())
+    )
 
 
 def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
@@ -8034,6 +8089,9 @@ if sekme_acik_mi[8]:
                         yeni_detay = yil_kapanis_detayini_hazirla(
                             ham_kg, varsayilan_yil=int(yukleme_yili)
                         )
+                        st.session_state.musteri_kategori_dosya_haritasi.update(
+                            yeni_butcelenen_haritasini_cikar(ham_kg)
+                        )
                         if yeni_kg.empty:
                             raise ValueError(
                                 "Dosyada kullanılabilir müşteri ve aylık Kg "
@@ -8419,6 +8477,7 @@ if sekme_acik_mi[8]:
             )
 
             if hafizayi_temizle:
+                st.session_state.musteri_kategori_dosya_haritasi = {}
                 st.session_state.yil_kapanis_kg_df = pd.DataFrame(
                     columns=kg_musteri_sutunlari
                 )
@@ -9026,6 +9085,83 @@ if sekme_acik_mi[8]:
                         ) == int(kapanis_yili)
                     ].copy().reset_index(drop=True)
 
+                    # --- Yeni/Bütçelenen Müşteri tipine göre dahil etme ---
+                    kategori_haritasi = yil_kapanis_kategori_haritasi()
+                    satir_kodlari = kapanacak_detay["Müşteri Kodu"].apply(
+                        guvenli_metin_kodu
+                    )
+                    satir_kategorileri = (
+                        satir_kodlari.map(kategori_haritasi)
+                        .fillna(YENI_BUTCELENEN_BOS_ETIKET)
+                    )
+                    kategori_secenekleri = yeni_butcelenen_sirala(
+                        satir_kategorileri.tolist()
+                    )
+                    kategori_satir_sayilari = (
+                        satir_kategorileri.value_counts().to_dict()
+                    )
+                    kategori_musteri_sayilari = (
+                        pd.DataFrame({
+                            "kategori": satir_kategorileri,
+                            "kod": satir_kodlari
+                        })
+                        .groupby("kategori")["kod"].nunique().to_dict()
+                    )
+                    if not kategori_haritasi:
+                        st.warning(
+                            "Yeni/Bütçelenen Müşteri bilgisi bulunamadı. "
+                            "Bu sütunu içeren dosyayı yükleyin veya "
+                            "Yeni-Bütçe Müşteri kartlarını buluttan getirin."
+                        )
+
+                    kategori_anahtari = hashlib.sha1(
+                        "|".join(
+                            [
+                                temiz_metin(aktif_yk_rev_id, "yerel"),
+                                str(int(kapanis_yili))
+                            ] + kategori_secenekleri
+                        ).encode("utf-8")
+                    ).hexdigest()[:12]
+                    dahil_kategoriler = st.multiselect(
+                        "Hesaba dahil edilecek müşteri tipleri "
+                        "(Yeni/Bütçelenen Müşteri)",
+                        options=kategori_secenekleri,
+                        default=kategori_secenekleri,
+                        format_func=lambda d: (
+                            f"{d} · "
+                            f"{kategori_musteri_sayilari.get(d, 0):,} müşteri / "
+                            f"{kategori_satir_sayilari.get(d, 0):,} satır"
+                        ),
+                        help=(
+                            "Seçilmeyen tiplerdeki müşteriler detay "
+                            "tablosundan, aylık toplamlardan, yıl sonu "
+                            "tahmininden ve indirilen dosyalardan çıkarılır."
+                        ),
+                        key=f"yil_kapanis_dahil_kategoriler_{kategori_anahtari}"
+                    )
+                    kategori_maskesi = satir_kategorileri.isin(
+                        dahil_kategoriler
+                    )
+                    if not dahil_kategoriler:
+                        st.warning(
+                            "Hiç müşteri tipi seçilmedi; detay tablosu boş "
+                            "kalacak."
+                        )
+                    elif not kategori_maskesi.all():
+                        disarida = [
+                            k for k in kategori_secenekleri
+                            if k not in dahil_kategoriler
+                        ]
+                        st.info(
+                            "Hesaba dahil edilmeyen tipler: "
+                            + ", ".join(disarida)
+                            + f" · {int((~kategori_maskesi).sum()):,} satır "
+                            "çıkarıldı."
+                        )
+                    kapanacak_detay = kapanacak_detay.loc[
+                        kategori_maskesi
+                    ].reset_index(drop=True)
+
                     # Müşteri bazlı hariç tutma, hesap başlamadan uygulanır;
                     # böylece detay, toplamlar, tahmin ve dışa aktarımlar aynı
                     # filtrelenmiş veri kümesini kullanır.
@@ -9061,7 +9197,7 @@ if sekme_acik_mi[8]:
                         for _, row in musteri_secim_df.iterrows()
                     }
                     haric_musteriler = st.multiselect(
-                        "Hesaba dahil edilmeyecek müşteriler",
+                        "Ayrıca hesaba dahil edilmeyecek müşteriler",
                         options=sorted(
                             musteri_etiketleri,
                             key=lambda value: musteri_etiketleri[value]
@@ -9081,6 +9217,9 @@ if sekme_acik_mi[8]:
                                 (
                                     temiz_metin(aktif_yk_rev_id, "yerel")
                                     + "|" + str(int(kapanis_yili))
+                                    + "|" + "|".join(
+                                        sorted(dahil_kategoriler)
+                                    )
                                 ).encode("utf-8")
                             ).hexdigest()[:12]
                         )
@@ -10115,6 +10254,9 @@ if sekme_acik_mi[11]:
                 yeni_imza = yuklenen_dosya_imzasi(data_new_upload)
                 if yeni_imza != st.session_state.data_new_upload_imzasi:
                     raw_data_new = yuklenen_tabloyu_oku(data_new_upload)
+                    st.session_state.musteri_kategori_dosya_haritasi.update(
+                        yeni_butcelenen_haritasini_cikar(raw_data_new)
+                    )
                     st.session_state.data_new_girdi_df = (
                         data_new_girdisini_hazirla(raw_data_new)
                     )
