@@ -461,6 +461,9 @@ MUSTERI_DUZENLENEBILIR_KOLONLAR = [
 ]
 YENI_BUTCELENEN_KOLONU = "Yeni/Bütçelenen Müşteri"
 YENI_BUTCELENEN_BOS_ETIKET = "(Belirtilmemiş)"
+YENI_BUTCELENEN_STANDART_TIPLER = [
+    "01.Yeni Müşteri", "02.DOP Bütçe Dışı", "03.Bütçelenen"
+]
 MUSTERI_GRUP_ESLESTIRME_KOLONLARI = [
     "Müşteri Kodu", "Sap Kodu", "Müşteri Adı",
     "Müşteri Temsilcisi", "Müşteri Grubu"
@@ -5081,14 +5084,22 @@ if sekme_acik_mi[2]:
                             yil_serisi.mode().iloc[0]
                         )
 
+                    # Dosyada Yeni/Bütçelenen Müşteri sütunu varsa bu değerler
+                    # korunur; yalnızca boş olanlara 03.Bütçelenen atanır.
+                    dosya_tip_haritasi = yeni_butcelenen_haritasini_cikar(
+                        df_hedef
+                    )
                     ham_df = musteri_detay_gorunumunu_hazirla(df_hedef)
                     for idx, row in ham_df.iterrows():
                         m_kod = guvenli_metin_kodu(row["Müşteri Kodu"])
                         v_durum = temiz_metin(row.get("Durum"), "GEÇERLİ")
+                        dosya_tipi = dosya_tip_haritasi.get(m_kod)
                         ayar = st.session_state.musteri_ayarlari.setdefault(
                             m_kod,
                             {
-                                "Yeni/Bütçelenen Müşteri": "03.Bütçelenen",
+                                "Yeni/Bütçelenen Müşteri": (
+                                    dosya_tipi or "03.Bütçelenen"
+                                ),
                                 "Durum_2": v_durum
                                 if v_durum in ["GEÇERLİ", "GEÇERSİZ"] else None,
                                 "Durum_3": (
@@ -5099,6 +5110,8 @@ if sekme_acik_mi[2]:
                                 "Serbest Not": ""
                             }
                         )
+                        if dosya_tipi:
+                            ayar[YENI_BUTCELENEN_KOLONU] = dosya_tipi
                         for col in MUSTERI_DUZENLENEBILIR_KOLONLAR:
                             ham_df.at[idx, col] = ayar.get(col, ham_df.at[idx, col])
                     st.session_state.musteri_ham_df = ham_df
@@ -9095,7 +9108,8 @@ if sekme_acik_mi[8]:
                         .fillna(YENI_BUTCELENEN_BOS_ETIKET)
                     )
                     kategori_secenekleri = yeni_butcelenen_sirala(
-                        satir_kategorileri.tolist()
+                        YENI_BUTCELENEN_STANDART_TIPLER
+                        + satir_kategorileri.tolist()
                     )
                     kategori_satir_sayilari = (
                         satir_kategorileri.value_counts().to_dict()
@@ -9107,6 +9121,17 @@ if sekme_acik_mi[8]:
                         })
                         .groupby("kategori")["kod"].nunique().to_dict()
                     )
+                    bulunan_tipler = set(satir_kategorileri.tolist())
+                    if kategori_haritasi and len(bulunan_tipler) == 1:
+                        st.warning(
+                            "Bu detaydaki bütün müşteriler tek tipte görünüyor: "
+                            + next(iter(bulunan_tipler))
+                            + ". Tipler yanlışsa Yeni/Bütçelenen Müşteri "
+                            "sütununu içeren müşteri dosyasını Yeni-Bütçe "
+                            "Müşteri sayfasına yeniden yükleyin (gerekirse "
+                            "buluta da kaydedin) veya bu sütunu içeren "
+                            "dosyayı Yıl Kapanış'a yükleyin."
+                        )
                     if not kategori_haritasi:
                         st.warning(
                             "Yeni/Bütçelenen Müşteri bilgisi bulunamadı. "
