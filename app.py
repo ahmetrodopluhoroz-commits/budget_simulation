@@ -608,6 +608,8 @@ if "musteri_ham_upload_imzasi" not in st.session_state:
     st.session_state.musteri_ham_upload_imzasi = None
 if "musteri_eslestirme_upload_imzasi" not in st.session_state:
     st.session_state.musteri_eslestirme_upload_imzasi = None
+if "musteri_butce_tipi_upload_imzasi" not in st.session_state:
+    st.session_state.musteri_butce_tipi_upload_imzasi = None
 if "musteri_eslestirme_editor_nonce" not in st.session_state:
     st.session_state.musteri_eslestirme_editor_nonce = 0
 if "buyume_ayarlari" not in st.session_state: st.session_state.buyume_ayarlari = {}
@@ -877,6 +879,7 @@ def revizyon_oturumunu_temizle():
     st.session_state.musteri_bulut_yuklenen_revizyon = None
     st.session_state.musteri_veri_yili = 2025
     st.session_state.musteri_ham_upload_imzasi = None
+    st.session_state.musteri_butce_tipi_upload_imzasi = None
     st.session_state.musteri_eslestirme_upload_imzasi = None
     st.session_state.musteri_eslestirme_editor_nonce += 1
     st.session_state.deg_anah_veri = pd.DataFrame(columns=deg_anah_sutunlari)
@@ -2617,6 +2620,80 @@ def yeni_butcelenen_haritasini_cikar(dataframe):
         work.drop_duplicates("kod", keep="last")
         .set_index("kod")["kategori"].to_dict()
     )
+
+
+BUTCE_TIPI_KOLON_ADAYLARI = [
+    YENI_BUTCELENEN_KOLONU, "Yeni/Bütçelenen", "Bütçelendi", "Bütçelenen",
+    "Bütçe Durumu", "Bütçe Tipi", "Müşteri Tipi", "Tip", "Kategori"
+]
+
+
+def butce_tipini_standartlastir(value):
+    """Serbest yazılmış bütçe bilgisini 01/02/03 standart etiketine çevirir."""
+    metin = temiz_metin(value)
+    if not metin:
+        return None
+    if metin in YENI_BUTCELENEN_STANDART_TIPLER:
+        return metin
+    norm = (
+        metin.translate(str.maketrans({"İ": "i", "I": "ı"}))
+        .casefold().strip()
+    )
+    norm = re.sub(r"^(\d+)\.0$", r"\1", norm)
+    if norm.startswith("01") or norm in {"1", "yeni", "yeni müşteri"}:
+        return "01.Yeni Müşteri"
+    if (
+        norm.startswith("02") or norm == "2"
+        or "dop" in norm or "bütçe dışı" in norm or "butce disi" in norm
+        or norm in {"hayır", "hayir", "bütçelenmedi", "butcelenmedi"}
+    ):
+        return "02.DOP Bütçe Dışı"
+    if (
+        norm.startswith("03") or norm == "3"
+        or norm in {"evet", "bütçelendi", "butcelendi"}
+        or "bütçelenen" in norm or "butcelenen" in norm
+    ):
+        return "03.Bütçelenen"
+    return None
+
+
+def butce_tipi_dosyasini_oku(dataframe):
+    """Müşteri Kodu + bütçe bilgisi dosyasından {kod: standart tip} üretir."""
+    df = sutun_adlarini_standartlastir(dataframe)
+    if "Müşteri Kodu" not in df.columns:
+        raise ValueError("Müşteri Kodu sütunu bulunamadı.")
+    def tr_norm(metin):
+        return str(metin).translate(
+            str.maketrans({"İ": "i", "I": "ı"})
+        ).casefold()
+
+    kolon_haritasi = {tr_norm(c): c for c in df.columns}
+    tip_kolonu = next(
+        (
+            kolon_haritasi[tr_norm(aday)]
+            for aday in BUTCE_TIPI_KOLON_ADAYLARI
+            if tr_norm(aday) in kolon_haritasi
+        ),
+        None
+    )
+    if tip_kolonu is None:
+        raise ValueError(
+            "Bütçe bilgisi sütunu bulunamadı. Beklenen başlıklardan biri: "
+            + ", ".join(BUTCE_TIPI_KOLON_ADAYLARI)
+        )
+    work = pd.DataFrame({
+        "kod": df["Müşteri Kodu"].apply(guvenli_metin_kodu),
+        "ham": df[tip_kolonu].apply(temiz_metin),
+    })
+    work = work[(work["kod"] != "") & (work["ham"] != "")]
+    work["tip"] = work["ham"].apply(butce_tipini_standartlastir)
+    taninmayan = sorted(work.loc[work["tip"].isna(), "ham"].unique())
+    work = work[work["tip"].notna()]
+    harita = (
+        work.drop_duplicates("kod", keep="last")
+        .set_index("kod")["tip"].to_dict()
+    )
+    return harita, taninmayan
 
 
 def yil_kapanis_kategori_haritasi():
@@ -5135,6 +5212,84 @@ if sekme_acik_mi[2]:
                 f"Ham müşteri: {len(ham_df):,} | "
                 f"Toplam desi: {ham_df[MUSTERI_TOPLAM_KOLONU].sum():,.0f}"
             )
+
+        st.markdown("---")
+        st.subheader("1.1 Bütçelenen Bilgisi Eşleştirme")
+        st.caption(
+            "Müşteri Kodu ve bütçe bilgisi sütunu zorunludur. Bütçe sütunu "
+            "Yeni/Bütçelenen Müşteri, Bütçelendi, Bütçe Durumu, Müşteri Tipi "
+            "gibi başlıklarla olabilir. Değerler 01.Yeni Müşteri, "
+            "02.DOP Bütçe Dışı, 03.Bütçelenen (veya 1/2/3, Yeni, DOP, "
+            "Evet/Hayır) şeklinde yazılabilir. Bu dosya diğer kaynaklardan "
+            "gelen tip bilgisinin önüne geçer."
+        )
+        yuklenen_butce_tipi = st.file_uploader(
+            "Bütçelenen bilgisi dosyasını yükleyin",
+            type=["xlsx", "xls", "csv"],
+            key="musteri_butce_tipi_upload"
+        )
+        if yuklenen_butce_tipi:
+            butce_imzasi = yuklenen_dosya_imzasi(yuklenen_butce_tipi)
+            if butce_imzasi != st.session_state.musteri_butce_tipi_upload_imzasi:
+                try:
+                    butce_haritasi, taninmayan = butce_tipi_dosyasini_oku(
+                        yuklenen_tabloyu_oku(yuklenen_butce_tipi)
+                    )
+                    if not butce_haritasi:
+                        raise ValueError(
+                            "Dosyada geçerli Müşteri Kodu / bütçe bilgisi "
+                            "satırı bulunamadı."
+                        )
+                    # Yıl kapanış ve diğer hesaplarda en öncelikli kaynak.
+                    st.session_state.musteri_kategori_dosya_haritasi.update(
+                        butce_haritasi
+                    )
+                    for m_kod, tip in butce_haritasi.items():
+                        ayar = st.session_state.musteri_ayarlari.setdefault(
+                            m_kod,
+                            {
+                                "Yeni/Bütçelenen Müşteri": tip,
+                                "Durum_2": None,
+                                "Durum_3": "",
+                                "Serbest Not": ""
+                            }
+                        )
+                        ayar[YENI_BUTCELENEN_KOLONU] = tip
+
+                    eslesen = 0
+                    if not ham_df.empty:
+                        ham_guncel = ham_df.copy()
+                        kodlar = ham_guncel["Müşteri Kodu"].apply(
+                            guvenli_metin_kodu
+                        )
+                        yeni_tip = kodlar.map(butce_haritasi)
+                        eslesen = int(yeni_tip.notna().sum())
+                        ham_guncel[YENI_BUTCELENEN_KOLONU] = yeni_tip.where(
+                            yeni_tip.notna(),
+                            ham_guncel[YENI_BUTCELENEN_KOLONU]
+                        )
+                        st.session_state.musteri_ham_df = ham_guncel
+
+                    st.session_state.musteri_butce_tipi_upload_imzasi = (
+                        butce_imzasi
+                    )
+                    st.session_state.musteri_eslestirme_editor_nonce += 1
+                    ham_df, revize_df = musteri_veri_katmanlarini_yenile()
+
+                    dagilim = pd.Series(butce_haritasi).value_counts()
+                    st.success(
+                        f"{len(butce_haritasi):,} müşterinin bütçe bilgisi "
+                        f"yüklendi ({eslesen:,} tanesi mevcut müşteri "
+                        "kartlarıyla eşleşti). "
+                        + " | ".join(f"{k}: {v:,}" for k, v in dagilim.items())
+                    )
+                    if taninmayan:
+                        st.warning(
+                            "Tanınmayan bütçe değerleri atlandı: "
+                            + ", ".join(map(str, taninmayan[:10]))
+                        )
+                except Exception as ex:
+                    st.error(f"Bütçelenen bilgisi dosyası işlenemedi: {ex}")
 
         st.markdown("---")
         st.subheader("2. Müşteri Grubu Eşleştirme")
