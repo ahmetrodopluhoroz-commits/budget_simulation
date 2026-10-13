@@ -1193,6 +1193,24 @@ def desi_kg_serisini_yuvarla(seri):
     return seri.apply(desi_kg_tam_sayiya_yuvarla).astype(float)
 
 
+def desi_kg_uc_ondalik_yuvarla(value):
+    """Tahmini Desi/Kg değerini YUVARLA mantığıyla 3 ondalığa çevirir.
+
+    Gerçekleşen değerler tam sayı olduğundan değişmez; tahminler 49,031
+    gibi 3 ondalıkla korunur.
+    """
+    sayi = nullable_sayi(value)
+    if sayi is None:
+        return 0.0
+    return float(
+        Decimal(str(sayi)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    )
+
+
+def desi_kg_serisini_uc_ondalik_yuvarla(seri):
+    return seri.apply(desi_kg_uc_ondalik_yuvarla).astype(float)
+
+
 def temiz_metin(value, varsayilan=""):
     """Gizli boşlukları temizleyip gerçek boş değerleri korur."""
     if value is None:
@@ -2806,7 +2824,7 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
                     kaynak.loc[yil_maskesi, kaynak_col]
                     .apply(guvenli_sayi).astype(float)
                 )
-        sonuc[f"{ay} Desi"] = desi_kg_serisini_yuvarla(hedef)
+        sonuc[f"{ay} Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(hedef)
 
     uniq_ham = sonuc["Uniq ID"].apply(temiz_metin)
     uniq_parcalari = [
@@ -2957,11 +2975,10 @@ def yil_kapanis_detay_tahminini_hesapla(
             calisma_gunu_oranlari.get(hedef_ay, 1.0)
         )
         tahmin = yillik_baz * pay_matrisi[:, hedef_index] * gun_orani
-        yuvarli = np.where(
-            tahmin >= 0, np.floor(tahmin + 0.5), np.ceil(tahmin - 0.5)
-        )
         sutun = f"{hedef_ay} Desi"
-        sonuc.loc[maske, sutun] = yuvarli[maske]
+        sonuc.loc[maske, sutun] = desi_kg_serisini_uc_ondalik_yuvarla(
+            pd.Series(tahmin[maske])
+        ).to_numpy(float)
         for uniq_id in sonuc.loc[maske, "Uniq ID"]:
             geriye_tahmin_hucreleri.setdefault(
                 temiz_metin(uniq_id), []
@@ -2990,18 +3007,17 @@ def yil_kapanis_detay_tahminini_hesapla(
             calisma_gunu_oranlari.get(hedef_ay, 1.0)
         )
         tahmin = yillik_baz * hedef_pay * gun_orani
+        # Tahminler 3 ondalıkla korunur (ör. 49,031).
         sonuc[f"{hedef_ay} Desi"] = np.where(
             np.isclose(onceki_uc_toplam, 0.0),
             0.0,
-            np.where(
-                tahmin >= 0,
-                np.floor(tahmin + 0.5),
-                np.ceil(tahmin - 0.5)
-            )
+            desi_kg_serisini_uc_ondalik_yuvarla(
+                pd.Series(tahmin)
+            ).to_numpy(float)
         )
 
     for col in yil_kapanis_detay_ay_sutunlari:
-        sonuc[col] = desi_kg_serisini_yuvarla(sonuc[col])
+        sonuc[col] = desi_kg_serisini_uc_ondalik_yuvarla(sonuc[col])
 
     sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
         yil_kapanis_detay_ay_sutunlari
@@ -3025,7 +3041,7 @@ def yil_kapanis_detay_toplamlarini_yenile(
     for col in yil_kapanis_detay_ay_sutunlari:
         if col not in sonuc.columns:
             sonuc[col] = 0.0
-        sonuc[col] = desi_kg_serisini_yuvarla(sonuc[col])
+        sonuc[col] = desi_kg_serisini_uc_ondalik_yuvarla(sonuc[col])
     son_ay_index = aylar.index(son_gerceklesen_ay)
     gercek_sutunlar = [
         f"{ay} Desi" for ay in aylar[:son_ay_index + 1]
@@ -3082,7 +3098,7 @@ def yil_kapanis_detay_toplamlarini_yenile(
                         satir_ayarlari.get(f"__onceki__{col}", yeni)
                     )
                     gerceklesen.at[idx] += yeni - eski
-    sonuc["Gerçekleşen Toplam Desi"] = desi_kg_serisini_yuvarla(
+    sonuc["Gerçekleşen Toplam Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(
         gerceklesen
     )
     sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
@@ -3125,7 +3141,7 @@ def yil_kapanis_manuel_degerlerini_uygula(detay_df, baglam):
             continue
         for col, value in degisiklikler.items():
             if col in yil_kapanis_detay_ay_sutunlari:
-                sonuc.at[idx, col] = desi_kg_tam_sayiya_yuvarla(value)
+                sonuc.at[idx, col] = desi_kg_uc_ondalik_yuvarla(value)
             elif col in tarih_sutunlari:
                 sonuc.at[idx, col] = pd.to_datetime(
                     value, errors="coerce", dayfirst=True
@@ -3162,8 +3178,8 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
             continue
         satir_ayarlari = ayarlar.setdefault(uniq_id, {})
         for col in yil_kapanis_detay_ay_sutunlari:
-            yeni = desi_kg_tam_sayiya_yuvarla(row.get(col))
-            eski = desi_kg_tam_sayiya_yuvarla(onceki.at[uniq_id, col])
+            yeni = desi_kg_uc_ondalik_yuvarla(row.get(col))
+            eski = desi_kg_uc_ondalik_yuvarla(onceki.at[uniq_id, col])
             if not np.isclose(yeni, eski):
                 satir_ayarlari.setdefault(f"__onceki__{col}", eski)
                 satir_ayarlari[col] = yeni
@@ -9646,11 +9662,17 @@ if sekme_acik_mi[8]:
 
                     detay_column_config = {
                         **{
+                            # localized + step yok: tam sayılar ondalıksız
+                            # (238), tahminler en fazla 3 ondalıkla (49,031)
+                            # görünür. step verilirse ondalık sayısı sabitlenir
+                            # (step=1 → 49, step=0.001 → 238,000).
                             col: st.column_config.NumberColumn(
                                 col,
                                 format="localized",
-                                step=1,
-                                help="Binlik ayraçla gösterilir."
+                                help=(
+                                    "Binlik ayraçla gösterilir. Tahmin "
+                                    "edilen değerler 3 ondalıklıdır."
+                                )
                             )
                             for col in (
                                 yil_kapanis_detay_ay_sutunlari
@@ -9723,9 +9745,17 @@ if sekme_acik_mi[8]:
                                     continue
                                 kolon_no = dataframe.columns.get_loc(kolon) + 1
                                 for satir_no in range(2, len(dataframe) + 2):
-                                    ws.cell(
+                                    hucre = ws.cell(
                                         row=satir_no, column=kolon_no
-                                    ).number_format = "#,##0"
+                                    )
+                                    # Gerçekleşen tam sayılar ondalıksız,
+                                    # tahminler 3 ondalıklı görünür.
+                                    hucre.number_format = (
+                                        "#,##0"
+                                        if isinstance(hucre.value, (int, float))
+                                        and float(hucre.value).is_integer()
+                                        else "#,##0.000"
+                                    )
                         return excel_cikti.getvalue()
 
                     yk_ham_tab, yk_revize_tab = st.tabs([
