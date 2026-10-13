@@ -2878,9 +2878,17 @@ def yil_kapanis_calisma_gunu_oranlari(takvim_df, kapanis_yili):
 
 
 def yil_kapanis_detay_tahminini_hesapla(
-    detay_df, ortalama_sonuc, son_gerceklesen_ay, calisma_gunu_oranlari
+    detay_df, ortalama_sonuc, son_gerceklesen_ay, calisma_gunu_oranlari,
+    ilk_ay_oncesini_tahminle=False
 ):
-    """Eksik ayları sabit gerçekleşen toplam ve sezon paylarıyla tamamlar."""
+    """Eksik ayları sabit gerçekleşen toplam ve sezon paylarıyla tamamlar.
+
+    ilk_ay_oncesini_tahminle açıksa müşterinin (tüm güzergahlarında) ilk desi
+    verdiği aydan önceki aylar da tahminlenir. Yıllık baz yalnızca ilk aydan
+    son gerçekleşen aya kadarki sezon paylarına bölünür; geriye dönük
+    tahminler Gerçekleşen Toplam Desi'ye katılmaz.
+    """
+    st.session_state.yil_kapanis_geriye_tahmin_hucreleri = {}
     if detay_df is None or detay_df.empty:
         return pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
     sonuc = yil_kapanis_detayini_hazirla(detay_df)
@@ -2895,19 +2903,71 @@ def yil_kapanis_detay_tahminini_hesapla(
 
     oran_haritasi = ortalama_sonuc.set_index("Müşteri Grubu")
     satir_gruplari = sonuc["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
-    grup_paydalari = {
-        grup: sum(
-            guvenli_sayi(oran_haritasi.at[grup, f"{ay} (%)"])
-            for ay in aylar[:son_ay_index + 1]
+    # Satır x 12 ay: her satırın müşteri grubuna ait aylık sezon payı (%).
+    pay_matrisi = np.column_stack([
+        satir_gruplari.map({
+            grup: guvenli_sayi(oran_haritasi.at[grup, f"{ay} (%)"])
+            for grup in oran_haritasi.index
+        }).fillna(0.0).to_numpy(float)
+        for ay in aylar
+    ])
+
+    # Paydaya giren ilk ay. Varsayılan Ocak; seçenek açıksa müşterinin
+    # gerçekleşen dönemde desi verdiği ilk ay (müşteri bazında en erken ay).
+    satir_baslangic = np.zeros(len(sonuc), dtype=int)
+    if ilk_ay_oncesini_tahminle:
+        dolu = sonuc[gercek_sutunlar].to_numpy(float) > 0
+        satir_ilk_ay = np.where(
+            dolu.any(axis=1), dolu.argmax(axis=1), son_ay_index + 1
         )
-        for grup in oran_haritasi.index
-    }
-    payda = satir_gruplari.map(grup_paydalari).fillna(0.0).to_numpy(float)
+        musteri_anahtari = (
+            sonuc["Yıl"].astype(str) + "|"
+            + sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        )
+        musteri_ilk_ay = pd.Series(
+            satir_ilk_ay, index=sonuc.index
+        ).groupby(musteri_anahtari).transform("min").to_numpy(int)
+        # Gerçekleşen dönemde hiç desisi olmayan müşteri değişmez.
+        satir_baslangic = np.where(
+            musteri_ilk_ay <= son_ay_index, musteri_ilk_ay, 0
+        )
+
+    ay_indexleri = np.arange(len(aylar))
+    payda_maskesi = (
+        (ay_indexleri[None, :] >= satir_baslangic[:, None])
+        & (ay_indexleri[None, :] <= son_ay_index)
+    )
+    payda = (pay_matrisi * payda_maskesi).sum(axis=1)
     yillik_baz = np.divide(
         gercek_toplam,
         payda,
         out=np.zeros_like(gercek_toplam, dtype=float),
         where=payda > 0
+    )
+
+    # Müşterinin ilk desi ayından önceki aylar (ör. ilk desi Mart ise
+    # Ocak-Şubat) gelecek aylarla aynı formülle tahminlenir.
+    geriye_tahmin_hucreleri = {}
+    for hedef_index in range(son_ay_index):
+        maske = hedef_index < satir_baslangic
+        if not maske.any():
+            continue
+        hedef_ay = aylar[hedef_index]
+        gun_orani = guvenli_sayi(
+            calisma_gunu_oranlari.get(hedef_ay, 1.0)
+        )
+        tahmin = yillik_baz * pay_matrisi[:, hedef_index] * gun_orani
+        yuvarli = np.where(
+            tahmin >= 0, np.floor(tahmin + 0.5), np.ceil(tahmin - 0.5)
+        )
+        sutun = f"{hedef_ay} Desi"
+        sonuc.loc[maske, sutun] = yuvarli[maske]
+        for uniq_id in sonuc.loc[maske, "Uniq ID"]:
+            geriye_tahmin_hucreleri.setdefault(
+                temiz_metin(uniq_id), []
+            ).append(sutun)
+    st.session_state.yil_kapanis_geriye_tahmin_hucreleri = (
+        geriye_tahmin_hucreleri
     )
 
     for hedef_index in range(son_ay_index + 1, len(aylar)):
@@ -2972,6 +3032,27 @@ def yil_kapanis_detay_toplamlarini_yenile(
     ]
     if gerceklesen_toplam_bazi is None:
         gerceklesen = sonuc[gercek_sutunlar].sum(axis=1).astype(float)
+        # İlk desi ayından önceki geriye dönük tahminler gerçekleşen
+        # sayılmaz; kullanıcı o hücreyi elle değiştirdiyse değeri fiilidir.
+        geriye_tahmin = st.session_state.get(
+            "yil_kapanis_geriye_tahmin_hucreleri", {}
+        ) or {}
+        if geriye_tahmin:
+            manuel_ayarlar = (
+                st.session_state.yil_kapanis_detay_manuel_ayarlari.get(
+                    manuel_baglam, {}
+                ) if manuel_baglam else {}
+            )
+            for idx, uniq_id in sonuc["Uniq ID"].items():
+                uid = temiz_metin(uniq_id)
+                for col in geriye_tahmin.get(uid, []):
+                    if (
+                        col in gercek_sutunlar
+                        and col not in manuel_ayarlar.get(uid, {})
+                    ):
+                        gerceklesen.at[idx] -= guvenli_sayi(
+                            sonuc.at[idx, col]
+                        )
     else:
         gerceklesen = pd.to_numeric(
             pd.Series(gerceklesen_toplam_bazi, index=sonuc.index),
@@ -9018,6 +9099,19 @@ if sekme_acik_mi[8]:
                 aylar,
                 key="yil_kapanis_son_ay"
             )
+            ilk_ay_oncesini_tahminle = st.checkbox(
+                "Müşterinin ilk desi verdiği aydan önceki ayları da tahminle",
+                value=True,
+                key="yil_kapanis_ilk_ay_oncesi_tahmin",
+                help=(
+                    "Örn. müşteri ilk desiyi Mart'ta verdiyse Ocak ve Şubat "
+                    "da müşteri grubunun sezon paylarıyla tahminlenir. İlk ay "
+                    "müşterinin tüm güzergahlarındaki en erken desi ayıdır. "
+                    "Yıllık baz yalnızca ilk aydan son gerçekleşen aya kadarki "
+                    "paylarla hesaplanır. Bu tahminler Gerçekleşen Toplam "
+                    "Desi'ye katılmaz."
+                )
+            )
 
             if yil_1 == yil_2:
                 st.error("Ortalama hesabı için iki farklı yıl seçin.")
@@ -9482,6 +9576,7 @@ if sekme_acik_mi[8]:
                     )
                     gerceklesen_toplam_bazi = None
                     if detay_buluttan_final:
+                        st.session_state.yil_kapanis_geriye_tahmin_hucreleri = {}
                         gerceklesen_toplam_bazi = pd.to_numeric(
                             kapanacak_detay["Gerçekleşen Toplam Desi"],
                             errors="coerce"
@@ -9495,8 +9590,25 @@ if sekme_acik_mi[8]:
                             kapanacak_detay,
                             ortalama_sonuc,
                             son_gerceklesen_ay,
-                            gun_oranlari
+                            gun_oranlari,
+                            ilk_ay_oncesini_tahminle=ilk_ay_oncesini_tahminle
                         )
+                        geriye_tahmin_idleri = set(
+                            st.session_state.get(
+                                "yil_kapanis_geriye_tahmin_hucreleri", {}
+                            )
+                        )
+                        if geriye_tahmin_idleri:
+                            etkilenen_musteri = detay_sonuc.loc[
+                                detay_sonuc["Uniq ID"].apply(temiz_metin)
+                                .isin(geriye_tahmin_idleri),
+                                "Müşteri Kodu"
+                            ].nunique()
+                            st.info(
+                                f"{etkilenen_musteri:,} müşteride "
+                                f"({len(geriye_tahmin_idleri):,} satır) ilk "
+                                "desi ayından önceki aylar tahminlendi."
+                            )
                     detay_manuel_baglam = yil_kapanis_manuel_baglami(
                         aktif_yk_rev_id, kapanis_yili, yil_1, yil_2,
                         son_gerceklesen_ay
@@ -9588,226 +9700,336 @@ if sekme_acik_mi[8]:
                     dk3_ph.metric(
                         "Tahmin Edilen Ay", str(len(tamamlanacak_aylar))
                     )
-                    st.caption(
-                        "📌 Aylık toplamlar — aşağıdaki tabloyu kendi içinde "
-                        "kaydırırken bu özet görünür kalır."
-                    )
-                    st.dataframe(
-                        pd.DataFrame([detay_toplam])[
-                            ["Uniq ID"]
-                            + yil_kapanis_detay_ay_sutunlari
-                            + [
-                                "Gerçekleşen Toplam Desi",
-                                "Tahmini Yıl Sonu Toplam Desi"
-                            ]
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
-                        height=82,
-                        column_config=detay_column_config
-                    )
+                    def yil_kapanis_detay_excel_verisi(dataframe, sayfa_adi):
+                        """Detay tablosunu biçimli tek sayfalı Excel'e yazar."""
+                        excel_cikti = io.BytesIO()
+                        with pd.ExcelWriter(
+                            excel_cikti, engine="openpyxl"
+                        ) as writer:
+                            dataframe.to_excel(
+                                writer, index=False, sheet_name=sayfa_adi
+                            )
+                            ws = writer.sheets[sayfa_adi]
+                            ws.freeze_panes = "A2"
+                            ws.auto_filter.ref = ws.dimensions
+                            for kolon in (
+                                yil_kapanis_detay_ay_sutunlari
+                                + [
+                                    "Gerçekleşen Toplam Desi",
+                                    "Tahmini Yıl Sonu Toplam Desi"
+                                ]
+                            ):
+                                if kolon not in dataframe.columns:
+                                    continue
+                                kolon_no = dataframe.columns.get_loc(kolon) + 1
+                                for satir_no in range(2, len(dataframe) + 2):
+                                    ws.cell(
+                                        row=satir_no, column=kolon_no
+                                    ).number_format = "#,##0"
+                        return excel_cikti.getvalue()
 
-                    # Excel'den çok hücreli kopyala-yapıştır lisanssız AG Grid
-                    # paketinde bulunmadığı için Yıl Kapanışta Streamlit'in
-                    # yerleşik editörü kullanılır. Data_New filtreli görünümü
-                    # AG Grid kullanmaya devam eder.
-                    yil_kapanis_excel_editoru = True
-                    if ST_AGGRID_AVAILABLE and not yil_kapanis_excel_editoru:
-                        detay_onceki_df = detay_sonuc.copy()
-                        detay_grid_df = detay_sonuc.copy()
-                        tarih_sutunlari = [
-                            "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
-                            "Esk. Enf. Başlangıç Tarihi"
-                        ]
-                        for col in tarih_sutunlari:
-                            detay_grid_df[col] = detay_grid_df[col].apply(
-                                lambda value: (
-                                    "" if pd.isna(value)
-                                    else pd.Timestamp(value).strftime("%d.%m.%Y")
-                                )
+                    yk_ham_tab, yk_revize_tab = st.tabs([
+                        "Ham detay tablosu",
+                        "Revize edilmiş (tahminli) detay tablosu"
+                    ])
+                    with yk_ham_tab:
+                        if detay_buluttan_final:
+                            st.info(
+                                "Detay buluttaki kayıtlı kapanış sonucundan "
+                                "yüklendiği için ham operasyon verisi yok; "
+                                "kayıtlı sonuç gösteriliyor."
                             )
-                        sayi_formatter = JsCode(
-                            "function(p) { if (p.value === null || "
-                            "p.value === undefined || p.value === '') "
-                            "return ''; return Number(p.value).toLocaleString("
-                            "'tr-TR', {maximumFractionDigits: 0}); }"
+                        ham_detay = yil_kapanis_detayini_hazirla(
+                            kapanacak_detay
                         )
-                        tam_sayi_parser = JsCode(
-                            "function(p) { const t=String(p.newValue ?? '')"
-                            ".trim().replace(/\\./g,'').replace(',','.'); "
-                            "const n=Number(t); return Number.isFinite(n) ? "
-                            "Math.round(n) : p.oldValue; }"
-                        )
-                        grid_builder = GridOptionsBuilder.from_dataframe(
-                            detay_grid_df
-                        )
-                        grid_builder.configure_default_column(
-                            editable=False,
-                            sortable=True,
-                            filter=True,
-                            resizable=True,
-                            minWidth=115
-                        )
-                        grid_builder.configure_column(
-                            "Uniq ID", pinned="left", minWidth=180
-                        )
-                        for col in (
-                            yil_kapanis_detay_ay_sutunlari
-                        ):
-                            grid_builder.configure_column(
-                                col,
-                                editable=True,
-                                type=["numericColumn"],
-                                filter="agNumberColumnFilter",
-                                valueFormatter=sayi_formatter,
-                                valueParser=tam_sayi_parser,
-                                cellStyle={
-                                    "backgroundColor": TEMA["editable"],
-                                    "color": TEMA["editable_text"]
-                                },
-                                minWidth=125
+                        if not ham_detay.empty and not detay_buluttan_final:
+                            ham_detay["Gerçekleşen Toplam Desi"] = ham_detay[
+                                [
+                                    f"{ay} Desi"
+                                    for ay in aylar[
+                                        :aylar.index(son_gerceklesen_ay) + 1
+                                    ]
+                                ]
+                            ].sum(axis=1)
+                            ham_detay["Tahmini Yıl Sonu Toplam Desi"] = (
+                                ham_detay[yil_kapanis_detay_ay_sutunlari]
+                                .sum(axis=1)
                             )
-                        for col in [
-                            "Gerçekleşen Toplam Desi",
-                            "Tahmini Yıl Sonu Toplam Desi"
-                        ]:
-                            grid_builder.configure_column(
-                                col,
-                                editable=False,
-                                type=["numericColumn"],
-                                filter="agNumberColumnFilter",
-                                valueFormatter=sayi_formatter,
-                                minWidth=150
-                            )
-                        for col in tarih_sutunlari:
-                            grid_builder.configure_column(
-                                col,
-                                editable=True,
-                                cellStyle={
-                                    "backgroundColor": TEMA["editable"],
-                                    "color": TEMA["editable_text"]
-                                },
-                                minWidth=145
-                            )
-                        grid_builder.configure_grid_options(
-                            pinnedBottomRowData=[detay_toplam],
-                            suppressScrollOnNewData=True,
-                            animateRows=False
+                        ham_detay = ham_detay.reindex(
+                            columns=yil_kapanis_detay_sutunlari
                         )
-                        yil_kapanis_grid_css = {
-                            **DATA_NEW_GRID_CSS,
-                            ".ag-row-pinned": {
-                                "background-color": TEMA["surface_3"],
-                                "color": TEMA["text"],
-                                "font-weight": "800",
-                                "border-top": (
-                                    f"2px solid {TEMA['primary']} !important"
-                                )
-                            }
-                        }
-                        detay_grid_response = AgGrid(
-                            detay_grid_df,
-                            gridOptions=grid_builder.build(),
-                            height=560,
-                            theme="streamlit",
-                            data_return_mode=DataReturnMode.AS_INPUT,
-                            allow_unsafe_jscode=True,
-                            enable_enterprise_modules=False,
-                            custom_css=yil_kapanis_grid_css,
-                            update_on=["cellValueChanged"],
-                            server_sync_strategy="client_wins",
-                            key=(
-                                "yil_kapanis_detay_grid_v1_"
-                                f"{TEMA['scheme']}_{int(kapanis_yili)}_"
-                                f"{son_gerceklesen_ay}"
-                            )
+                        st.caption(
+                            "Yüklenen veri; tahmin ve manuel değişiklik "
+                            "içermez, düzenlenemez."
                         )
-                        detay_grid_verisi = (
-                            detay_grid_response.get("data")
-                            if isinstance(detay_grid_response, dict)
-                            else getattr(detay_grid_response, "data", None)
-                        )
-                        if detay_grid_verisi is not None:
-                            duzenlenen_detay = pd.DataFrame(detay_grid_verisi)
-                            duzenlenen_detay = duzenlenen_detay.reindex(
-                                columns=yil_kapanis_detay_sutunlari
-                            )
-                            for col in tarih_sutunlari:
-                                duzenlenen_detay[col] = pd.to_datetime(
-                                    duzenlenen_detay[col], errors="coerce",
-                                    dayfirst=True
-                                )
-                            for col in yil_kapanis_detay_ay_sutunlari:
-                                duzenlenen_detay[col] = (
-                                    desi_kg_serisini_yuvarla(
-                                        duzenlenen_detay[col]
-                                    )
-                                )
-                            yil_kapanis_manuel_degisikliklerini_kaydet(
-                                detay_onceki_df, duzenlenen_detay,
-                                detay_manuel_baglam
-                            )
-                            detay_sonuc = (
-                                yil_kapanis_detay_toplamlarini_yenile(
-                                    duzenlenen_detay, son_gerceklesen_ay
-                                )
-                            )
-                    else:
-                        detay_onceki_df = detay_sonuc.copy()
-                        detay_sonuc = st.data_editor(
-                            detay_sonuc,
+                        st.dataframe(
+                            ham_detay,
                             use_container_width=True,
                             hide_index=True,
                             height=520,
-                            column_config=detay_column_config,
-                            disabled=[
-                                col for col in yil_kapanis_detay_sutunlari
-                                if col not in (
-                                    yil_kapanis_detay_ay_sutunlari
-                                    + [
-                                        "Kayıt Tarihi",
-                                        "Esk. Yakıt Başlangıç Tarihi",
-                                        "Esk. Enf. Başlangıç Tarihi"
-                                    ]
-                                )
-                            ],
-                            num_rows="fixed",
-                            key=(
-                                "yil_kapanis_detay_editor_v3_"
-                                f"{TEMA['scheme']}_"
-                                + hashlib.sha1(
-                                    detay_manuel_baglam.encode("utf-8")
-                                ).hexdigest()[:12]
+                            column_config=detay_column_config
+                        )
+                        if len(ham_detay) <= 20000:
+                            st.download_button(
+                                "📥 Ham Detay Tablosunu Excel İndir",
+                                data=yil_kapanis_detay_excel_verisi(
+                                    ham_detay, "HAM DETAY"
+                                ),
+                                file_name=(
+                                    "yil_kapanis_ham_detay_"
+                                    f"{int(kapanis_yili)}.xlsx"
+                                ),
+                                mime=(
+                                    "application/vnd.openxmlformats-"
+                                    "officedocument.spreadsheetml.sheet"
+                                ),
+                                use_container_width=True,
+                                key="btn_yil_kapanis_ham_excel"
                             )
-                        )
-                        detay_degisti = yil_kapanis_manuel_degisikliklerini_kaydet(
-                            detay_onceki_df, detay_sonuc, detay_manuel_baglam
-                        )
-                        detay_sonuc = yil_kapanis_detay_toplamlarini_yenile(
-                            detay_sonuc, son_gerceklesen_ay,
-                            manuel_baglam=detay_manuel_baglam,
-                            gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
-                        )
-                        st.caption(
-                            "Excel'den tek hücre veya çok hücreli blok "
-                            "kopyalayıp düzenlenebilir Desi/tarih alanlarına "
-                            "yapıştırabilirsiniz."
-                        )
-                        if detay_degisti:
-                            # İlk çalıştırmada editör yeni hücreyi döndürür;
-                            # ikinci ve tek seferlik çalıştırmada yeni toplamlar
-                            # aynı satırlarda görünür hale gelir.
-                            st.rerun()
+                        else:
+                            st.caption(
+                                "20.000 satırı aşan tablo Excel yerine "
+                                "aşağıdaki CSV ile indirilebilir."
+                            )
 
-                    # Griddeki manuel değerler Excel/CSV, dip toplam ve bulut
-                    # kaydına aynı anda yansısın.
-                    detay_toplam = yil_kapanis_detay_toplam_satiri(
-                        detay_sonuc, kapanis_yili
-                    )
-                    detay_export_df = pd.concat(
-                        [detay_sonuc, pd.DataFrame([detay_toplam])],
-                        ignore_index=True
-                    ).reindex(columns=yil_kapanis_detay_sutunlari)
+                    with yk_revize_tab:
+                        st.caption(
+                            "📌 Aylık toplamlar — aşağıdaki tabloyu kendi içinde "
+                            "kaydırırken bu özet görünür kalır."
+                        )
+                        st.dataframe(
+                            pd.DataFrame([detay_toplam])[
+                                ["Uniq ID"]
+                                + yil_kapanis_detay_ay_sutunlari
+                                + [
+                                    "Gerçekleşen Toplam Desi",
+                                    "Tahmini Yıl Sonu Toplam Desi"
+                                ]
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                            height=82,
+                            column_config=detay_column_config
+                        )
+
+                        # Excel'den çok hücreli kopyala-yapıştır lisanssız AG Grid
+                        # paketinde bulunmadığı için Yıl Kapanışta Streamlit'in
+                        # yerleşik editörü kullanılır. Data_New filtreli görünümü
+                        # AG Grid kullanmaya devam eder.
+                        yil_kapanis_excel_editoru = True
+                        if ST_AGGRID_AVAILABLE and not yil_kapanis_excel_editoru:
+                            detay_onceki_df = detay_sonuc.copy()
+                            detay_grid_df = detay_sonuc.copy()
+                            tarih_sutunlari = [
+                                "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
+                                "Esk. Enf. Başlangıç Tarihi"
+                            ]
+                            for col in tarih_sutunlari:
+                                detay_grid_df[col] = detay_grid_df[col].apply(
+                                    lambda value: (
+                                        "" if pd.isna(value)
+                                        else pd.Timestamp(value).strftime("%d.%m.%Y")
+                                    )
+                                )
+                            sayi_formatter = JsCode(
+                                "function(p) { if (p.value === null || "
+                                "p.value === undefined || p.value === '') "
+                                "return ''; return Number(p.value).toLocaleString("
+                                "'tr-TR', {maximumFractionDigits: 0}); }"
+                            )
+                            tam_sayi_parser = JsCode(
+                                "function(p) { const t=String(p.newValue ?? '')"
+                                ".trim().replace(/\\./g,'').replace(',','.'); "
+                                "const n=Number(t); return Number.isFinite(n) ? "
+                                "Math.round(n) : p.oldValue; }"
+                            )
+                            grid_builder = GridOptionsBuilder.from_dataframe(
+                                detay_grid_df
+                            )
+                            grid_builder.configure_default_column(
+                                editable=False,
+                                sortable=True,
+                                filter=True,
+                                resizable=True,
+                                minWidth=115
+                            )
+                            grid_builder.configure_column(
+                                "Uniq ID", pinned="left", minWidth=180
+                            )
+                            for col in (
+                                yil_kapanis_detay_ay_sutunlari
+                            ):
+                                grid_builder.configure_column(
+                                    col,
+                                    editable=True,
+                                    type=["numericColumn"],
+                                    filter="agNumberColumnFilter",
+                                    valueFormatter=sayi_formatter,
+                                    valueParser=tam_sayi_parser,
+                                    cellStyle={
+                                        "backgroundColor": TEMA["editable"],
+                                        "color": TEMA["editable_text"]
+                                    },
+                                    minWidth=125
+                                )
+                            for col in [
+                                "Gerçekleşen Toplam Desi",
+                                "Tahmini Yıl Sonu Toplam Desi"
+                            ]:
+                                grid_builder.configure_column(
+                                    col,
+                                    editable=False,
+                                    type=["numericColumn"],
+                                    filter="agNumberColumnFilter",
+                                    valueFormatter=sayi_formatter,
+                                    minWidth=150
+                                )
+                            for col in tarih_sutunlari:
+                                grid_builder.configure_column(
+                                    col,
+                                    editable=True,
+                                    cellStyle={
+                                        "backgroundColor": TEMA["editable"],
+                                        "color": TEMA["editable_text"]
+                                    },
+                                    minWidth=145
+                                )
+                            grid_builder.configure_grid_options(
+                                pinnedBottomRowData=[detay_toplam],
+                                suppressScrollOnNewData=True,
+                                animateRows=False
+                            )
+                            yil_kapanis_grid_css = {
+                                **DATA_NEW_GRID_CSS,
+                                ".ag-row-pinned": {
+                                    "background-color": TEMA["surface_3"],
+                                    "color": TEMA["text"],
+                                    "font-weight": "800",
+                                    "border-top": (
+                                        f"2px solid {TEMA['primary']} !important"
+                                    )
+                                }
+                            }
+                            detay_grid_response = AgGrid(
+                                detay_grid_df,
+                                gridOptions=grid_builder.build(),
+                                height=560,
+                                theme="streamlit",
+                                data_return_mode=DataReturnMode.AS_INPUT,
+                                allow_unsafe_jscode=True,
+                                enable_enterprise_modules=False,
+                                custom_css=yil_kapanis_grid_css,
+                                update_on=["cellValueChanged"],
+                                server_sync_strategy="client_wins",
+                                key=(
+                                    "yil_kapanis_detay_grid_v1_"
+                                    f"{TEMA['scheme']}_{int(kapanis_yili)}_"
+                                    f"{son_gerceklesen_ay}"
+                                )
+                            )
+                            detay_grid_verisi = (
+                                detay_grid_response.get("data")
+                                if isinstance(detay_grid_response, dict)
+                                else getattr(detay_grid_response, "data", None)
+                            )
+                            if detay_grid_verisi is not None:
+                                duzenlenen_detay = pd.DataFrame(detay_grid_verisi)
+                                duzenlenen_detay = duzenlenen_detay.reindex(
+                                    columns=yil_kapanis_detay_sutunlari
+                                )
+                                for col in tarih_sutunlari:
+                                    duzenlenen_detay[col] = pd.to_datetime(
+                                        duzenlenen_detay[col], errors="coerce",
+                                        dayfirst=True
+                                    )
+                                for col in yil_kapanis_detay_ay_sutunlari:
+                                    duzenlenen_detay[col] = (
+                                        desi_kg_serisini_yuvarla(
+                                            duzenlenen_detay[col]
+                                        )
+                                    )
+                                yil_kapanis_manuel_degisikliklerini_kaydet(
+                                    detay_onceki_df, duzenlenen_detay,
+                                    detay_manuel_baglam
+                                )
+                                detay_sonuc = (
+                                    yil_kapanis_detay_toplamlarini_yenile(
+                                        duzenlenen_detay, son_gerceklesen_ay
+                                    )
+                                )
+                        else:
+                            detay_onceki_df = detay_sonuc.copy()
+                            detay_sonuc = st.data_editor(
+                                detay_sonuc,
+                                use_container_width=True,
+                                hide_index=True,
+                                height=520,
+                                column_config=detay_column_config,
+                                disabled=[
+                                    col for col in yil_kapanis_detay_sutunlari
+                                    if col not in (
+                                        yil_kapanis_detay_ay_sutunlari
+                                        + [
+                                            "Kayıt Tarihi",
+                                            "Esk. Yakıt Başlangıç Tarihi",
+                                            "Esk. Enf. Başlangıç Tarihi"
+                                        ]
+                                    )
+                                ],
+                                num_rows="fixed",
+                                key=(
+                                    "yil_kapanis_detay_editor_v3_"
+                                    f"{TEMA['scheme']}_"
+                                    + hashlib.sha1(
+                                        detay_manuel_baglam.encode("utf-8")
+                                    ).hexdigest()[:12]
+                                )
+                            )
+                            detay_degisti = yil_kapanis_manuel_degisikliklerini_kaydet(
+                                detay_onceki_df, detay_sonuc, detay_manuel_baglam
+                            )
+                            detay_sonuc = yil_kapanis_detay_toplamlarini_yenile(
+                                detay_sonuc, son_gerceklesen_ay,
+                                manuel_baglam=detay_manuel_baglam,
+                                gerceklesen_toplam_bazi=gerceklesen_toplam_bazi
+                            )
+                            st.caption(
+                                "Excel'den tek hücre veya çok hücreli blok "
+                                "kopyalayıp düzenlenebilir Desi/tarih alanlarına "
+                                "yapıştırabilirsiniz."
+                            )
+                            if detay_degisti:
+                                # İlk çalıştırmada editör yeni hücreyi döndürür;
+                                # ikinci ve tek seferlik çalıştırmada yeni toplamlar
+                                # aynı satırlarda görünür hale gelir.
+                                st.rerun()
+
+                        # Griddeki manuel değerler Excel/CSV, dip toplam ve bulut
+                        # kaydına aynı anda yansısın.
+                        detay_toplam = yil_kapanis_detay_toplam_satiri(
+                            detay_sonuc, kapanis_yili
+                        )
+                        detay_export_df = pd.concat(
+                            [detay_sonuc, pd.DataFrame([detay_toplam])],
+                            ignore_index=True
+                        ).reindex(columns=yil_kapanis_detay_sutunlari)
+                        if len(detay_sonuc) <= 20000:
+                            st.download_button(
+                                "📥 Revize Detay Tablosunu Excel İndir",
+                                data=yil_kapanis_detay_excel_verisi(
+                                    detay_export_df, "REVİZE DETAY"
+                                ),
+                                file_name=(
+                                    "yil_kapanis_revize_detay_"
+                                    f"{int(kapanis_yili)}.xlsx"
+                                ),
+                                mime=(
+                                    "application/vnd.openxmlformats-"
+                                    "officedocument.spreadsheetml.sheet"
+                                ),
+                                use_container_width=True,
+                                key="btn_yil_kapanis_revize_excel"
+                            )
 
                 yk_excel = io.BytesIO()
                 with pd.ExcelWriter(yk_excel, engine="openpyxl") as writer:
