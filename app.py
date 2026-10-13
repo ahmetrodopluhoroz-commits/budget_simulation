@@ -1737,22 +1737,37 @@ def yil_kapanis_detayini_parcali_buluta_kaydet(
         baslangic = tamamlanan
 
     # Yalnızca bütün yeni paketler başarıyla yazıldıktan sonra eski sürümde
-    # kalmış satırlar kısa SQL işlemleriyle temizlenir.
+    # kalmış satırlar kısa SQL işlemleriyle temizlenir. Zaman aşımında parti
+    # küçültülür; yine de olmazsa yeni satırlar zaten kaydedildiği için hata
+    # yükseltilmez, temizlik hatası ayrıca döndürülür.
     temizlenen = 0
+    temizlik_limiti = 1000
+    temizlik_hatasi = None
     while True:
-        sonuc = db_client.rpc(
-            "yil_kapanis_detay_eski_kayitlari_temizle",
-            {
-                "p_revizyon_id": revizyon_id,
-                "p_kayit_zamani": kayit_zamani,
-                "p_limit": 1000
-            }
-        ).execute()
+        try:
+            sonuc = db_client.rpc(
+                "yil_kapanis_detay_eski_kayitlari_temizle",
+                {
+                    "p_revizyon_id": revizyon_id,
+                    "p_kayit_zamani": kayit_zamani,
+                    "p_limit": temizlik_limiti
+                }
+            ).execute()
+        except Exception as ex:
+            hata_metni = str(ex).lower()
+            zaman_asimi = (
+                "57014" in hata_metni or "statement timeout" in hata_metni
+            )
+            if zaman_asimi and temizlik_limiti > 50:
+                temizlik_limiti = max(50, temizlik_limiti // 2)
+                continue
+            temizlik_hatasi = ex
+            break
         silinen = int(sonuc.data or 0)
         temizlenen += silinen
-        if silinen < 1000:
+        if silinen < temizlik_limiti:
             break
-    return toplam, temizlenen, kayit_zamani
+    return toplam, temizlenen, kayit_zamani, temizlik_hatasi
 
 
 def master_bulut_kaydini_oturuma_yukle(revizyon_id, zorla=False):
@@ -10351,7 +10366,7 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                         )
 
                     try:
-                        toplam, temizlenen, _ = (
+                        toplam, temizlenen, _, temizlik_hatasi = (
                             yil_kapanis_detayini_parcali_buluta_kaydet(
                                 client,
                                 aktif_yk_rev_id,
@@ -10367,10 +10382,24 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                             1.0,
                             text=f"Detay aktarımı tamamlandı: {toplam:,} satır"
                         )
-                        st.success(
-                            f"{toplam:,} detay satırı güvenli biçimde "
-                            f"kaydedildi; {temizlenen:,} eski satır temizlendi."
-                        )
+                        if temizlik_hatasi is None:
+                            st.success(
+                                f"{toplam:,} detay satırı güvenli biçimde "
+                                f"kaydedildi; {temizlenen:,} eski satır "
+                                "temizlendi."
+                            )
+                        else:
+                            st.warning(
+                                f"{toplam:,} detay satırının tamamı buluta "
+                                "kaydedildi. Ancak önceki aktarımdan kalan "
+                                "eski satırların temizliği tamamlanamadı "
+                                f"({temizlenen:,} satır temizlendi). Bu "
+                                "satırlar buluttan getirmede görünebilir. "
+                                "Supabase'de yıl kapanış detay tablosuna "
+                                "(revizyon_id, updated_at) indeksi ekleyip "
+                                "aynı düğmeye yeniden basın. Ayrıntı: "
+                                f"{temizlik_hatasi}"
+                            )
                     except Exception as ex:
                         st.error(
                             "Detay aktarımı durdu; eski bulut kayıtları baştan "
