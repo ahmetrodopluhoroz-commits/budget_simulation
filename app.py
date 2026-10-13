@@ -2964,9 +2964,18 @@ def yil_kapanis_detay_tahminini_hesapla(
     )
 
     # Müşterinin ilk desi ayından önceki aylar (ör. ilk desi Mart ise
-    # Ocak-Şubat) gelecek aylarla aynı formülle tahminlenir.
+    # Ocak-Şubat) Excel'deki zincirleme yöntemle, sondan başa doldurulur:
+    #   ay = TOPLA(sonraki ay..son gerçekleşen ay desileri)
+    #        / TOPLA(aynı aralığın grup payları) x ayın payı x gün oranı
+    # Aralığa daha önce doldurulmuş aylar da (gün oranlarıyla) girer. İlk
+    # desi ayının hemen öncesindeki ay için taban yillik_baz ile aynıdır.
+    # Zincir yuvarlanmamış değerlerle yürür; hücreler sonda 3 ondalığa
+    # yuvarlanır.
     geriye_tahmin_hucreleri = {}
-    for hedef_index in range(son_ay_index):
+    zincir_degerleri = sonuc[
+        [f"{ay} Desi" for ay in aylar[:son_ay_index + 1]]
+    ].to_numpy(float).copy()
+    for hedef_index in range(son_ay_index - 1, -1, -1):
         maske = hedef_index < satir_baslangic
         if not maske.any():
             continue
@@ -2974,7 +2983,20 @@ def yil_kapanis_detay_tahminini_hesapla(
         gun_orani = guvenli_sayi(
             calisma_gunu_oranlari.get(hedef_ay, 1.0)
         )
-        tahmin = yillik_baz * pay_matrisi[:, hedef_index] * gun_orani
+        aralik_desi = zincir_degerleri[
+            :, hedef_index + 1:son_ay_index + 1
+        ].sum(axis=1)
+        aralik_pay = pay_matrisi[
+            :, hedef_index + 1:son_ay_index + 1
+        ].sum(axis=1)
+        zincir_taban = np.divide(
+            aralik_desi,
+            aralik_pay,
+            out=np.zeros_like(aralik_desi, dtype=float),
+            where=aralik_pay > 0
+        )
+        tahmin = zincir_taban * pay_matrisi[:, hedef_index] * gun_orani
+        zincir_degerleri[maske, hedef_index] = tahmin[maske]
         sutun = f"{hedef_ay} Desi"
         sonuc.loc[maske, sutun] = desi_kg_serisini_uc_ondalik_yuvarla(
             pd.Series(tahmin[maske])
@@ -2983,6 +3005,8 @@ def yil_kapanis_detay_tahminini_hesapla(
             geriye_tahmin_hucreleri.setdefault(
                 temiz_metin(uniq_id), []
             ).append(sutun)
+    for hucreler in geriye_tahmin_hucreleri.values():
+        hucreler.sort(key=lambda sutun: aylar.index(sutun[:-5]))
     st.session_state.yil_kapanis_geriye_tahmin_hucreleri = (
         geriye_tahmin_hucreleri
     )
@@ -9123,9 +9147,11 @@ if sekme_acik_mi[8]:
                     "Örn. müşteri ilk desiyi Mart'ta verdiyse Ocak ve Şubat "
                     "da müşteri grubunun sezon paylarıyla tahminlenir. İlk ay "
                     "müşterinin tüm güzergahlarındaki en erken desi ayıdır. "
-                    "Yıllık baz yalnızca ilk aydan son gerçekleşen aya kadarki "
-                    "paylarla hesaplanır. Bu tahminler Gerçekleşen Toplam "
-                    "Desi'ye katılmaz."
+                    "Excel'deki gibi sondan başa zincirleme doldurulur: her "
+                    "ayın tabanı, sonraki aydan son gerçekleşen aya kadarki "
+                    "desiler (önceden doldurulan aylar dahil) ÷ aynı aralığın "
+                    "grup paylarıdır. Bu tahminler Gerçekleşen Toplam Desi'ye "
+                    "katılmaz."
                 )
             )
 
