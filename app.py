@@ -900,6 +900,9 @@ def revizyon_oturumunu_temizle():
     st.session_state.buyume_ayarlari = {}
     st.session_state.buyume_ekran_df = pd.DataFrame()
     st.session_state.buyume_tarihsel_upload_imzalari = {}
+    st.session_state.pop("buyume_oran_upload_imzasi", None)
+    st.session_state.pop("buyume_oran_dosya_ozeti", None)
+    st.session_state.pop("buyume_oran_kaynaklari", None)
     st.session_state.yil_kapanis_kg_df = pd.DataFrame(
         columns=kg_musteri_sutunlari
     )
@@ -7912,6 +7915,339 @@ if sekme_acik_mi[7]:
                 "Detay Yönetimi sayfasına müşteri verisi yükleyin veya buluttan çağırın."
             )
         else:
+            buyume_editor_key_9 = "buyume_matris_editoru_musteri_detay_v2"
+            buyume_musteri_kodlari_9 = [
+                guvenli_metin_kodu(k) for k in df_calc_9["Müşteri Kodu"]
+            ]
+
+            # ------------------------------------------------------------
+            # BÜYÜME ORANI DOSYASI (müşteri koduna göre)
+            # ------------------------------------------------------------
+            st.subheader("📥 Büyüme Oranı Dosyası")
+            st.caption(
+                "Müşteri Kodu zorunludur. Ocak–Aralık sütunları aylık oran, "
+                "KULLANICAK BÜYÜME ise boş aylar için kullanılan orandır. "
+                "Gelen Özet Bilgi, Müşteriden Gelen Büyüme ve 26 için "
+                "kullanılan büyüme sütunları varsa matrise aktarılır. Dosyadaki "
+                "oranlar müşterinin mevcut oranının üzerine yazılır."
+            )
+            yb1, yb2 = st.columns([3, 2])
+            buyume_oran_dosyasi = yb1.file_uploader(
+                "Büyüme oranı dosyasını yükleyin",
+                type=["xlsx", "xls", "csv"],
+                key="buyume_oran_dosyasi_upload"
+            )
+            buyume_oran_bicimi = yb2.radio(
+                "Dosyadaki oran biçimi",
+                ["Otomatik", "Ondalık (0,08 = %8)", "Yüzde (8 = %8)"],
+                key="buyume_oran_bicimi",
+                help=(
+                    "Otomatik: dosyadaki bütün oranlar -1 ile 1 arasındaysa "
+                    "ondalık kabul edilip 100 ile çarpılır."
+                )
+            )
+            if buyume_oran_dosyasi is not None:
+                oran_imzasi = (
+                    yuklenen_dosya_imzasi(buyume_oran_dosyasi)
+                    + "|" + buyume_oran_bicimi
+                )
+                if oran_imzasi != st.session_state.get(
+                    "buyume_oran_upload_imzasi"
+                ):
+                    try:
+                        oran_df = yuklenen_tabloyu_oku(buyume_oran_dosyasi)
+                        if "Müşteri Kodu" not in oran_df.columns:
+                            raise ValueError("Müşteri Kodu sütunu bulunamadı.")
+                        kolon_bul = {
+                            str(c).strip().casefold(): c
+                            for c in oran_df.columns
+                        }
+
+                        def oran_kolonu(*adaylar):
+                            for aday in adaylar:
+                                if aday.casefold() in kolon_bul:
+                                    return kolon_bul[aday.casefold()]
+                            return None
+
+                        ay_kolonlari = {
+                            ay: oran_kolonu(ay, f"{ay} Büyüme", f"{ay} (%)")
+                            for ay in aylar
+                        }
+                        kullanilacak_kolonu = oran_kolonu(
+                            "KULLANICAK BÜYÜME", "KULLANILACAK BÜYÜME"
+                        )
+                        if not kullanilacak_kolonu and not any(
+                            ay_kolonlari.values()
+                        ):
+                            raise ValueError(
+                                "Oran sütunu bulunamadı (Ocak–Aralık veya "
+                                "KULLANICAK BÜYÜME)."
+                            )
+                        oran_kolonlari = [
+                            c for c in [kullanilacak_kolonu]
+                            + list(ay_kolonlari.values()) if c
+                        ]
+                        tum_oranlar = pd.to_numeric(
+                            oran_df[oran_kolonlari].stack(), errors="coerce"
+                        ).dropna()
+                        if buyume_oran_bicimi.startswith("Ondalık"):
+                            carpan = 100.0
+                        elif buyume_oran_bicimi.startswith("Yüzde"):
+                            carpan = 1.0
+                        else:
+                            # Excel'de oran hücreleri % biçimliyse değer
+                            # ondalık saklanır (%200 → 2,0). Biçim bilgisi
+                            # yoksa sıfırdan farklı oranların ortancasına
+                            # bakılır (tek tük büyük oran yanıltmasın).
+                            yuzde_bicimli = None
+                            if buyume_oran_dosyasi.name.lower().endswith(
+                                (".xlsx", ".xlsm")
+                            ):
+                                import openpyxl
+                                calisma = openpyxl.load_workbook(
+                                    io.BytesIO(buyume_oran_dosyasi.getvalue()),
+                                    read_only=True
+                                )
+                                sayfa = calisma.worksheets[0]
+                                satirlar = sayfa.iter_rows(max_row=400)
+                                basliklar = [
+                                    re.sub(r"\s+", " ", str(h.value or "")).strip()
+                                    for h in next(satirlar)
+                                ]
+                                hedef_indeksler = [
+                                    basliklar.index(str(c))
+                                    for c in oran_kolonlari
+                                    if str(c) in basliklar
+                                ]
+                                bicimler = [
+                                    str(satir[i].number_format or "")
+                                    for satir in satirlar
+                                    for i in hedef_indeksler
+                                    if i < len(satir)
+                                    and satir[i].value not in (None, "")
+                                ]
+                                calisma.close()
+                                if bicimler:
+                                    yuzde_bicimli = (
+                                        sum("%" in b for b in bicimler)
+                                        > len(bicimler) / 2
+                                    )
+                            if yuzde_bicimli is None:
+                                sifir_disi = tum_oranlar[tum_oranlar != 0]
+                                yuzde_bicimli = (
+                                    sifir_disi.empty
+                                    or sifir_disi.abs().median() <= 1.0
+                                )
+                            carpan = 100.0 if yuzde_bicimli else 1.0
+                        metin_kolonlari = {
+                            "25 kullanılan büyüme": oran_kolonu(
+                                "26 için kullanılan büyüme",
+                                "25 kullanılan büyüme"
+                            ),
+                            "Gelen Özet Bilgi": oran_kolonu("Gelen Özet Bilgi"),
+                            "Müşteriden Gelen Büyüme": oran_kolonu(
+                                "Müşteriden Gelen Büyüme"
+                            )
+                        }
+
+                        def oran_metni(value, alan):
+                            sayi = nullable_sayi(value)
+                            if sayi is not None and not isinstance(value, str):
+                                if alan == "Gelen Özet Bilgi":
+                                    # Metin alanı; sayısal 0 bilgi taşımaz.
+                                    return "" if sayi == 0 else str(value)
+                                return f"{sayi * carpan:.2f}%"
+                            return temiz_metin(value)
+
+                        musteri_seti = set(buyume_musteri_kodlari_9)
+                        yuklenen, oransiz, listede_yok = [], [], []
+                        for _, satir in oran_df.iterrows():
+                            mkod = guvenli_metin_kodu(satir.get("Müşteri Kodu"))
+                            if not mkod:
+                                continue
+                            kullanilacak = (
+                                nullable_sayi(satir.get(kullanilacak_kolonu))
+                                if kullanilacak_kolonu else None
+                            )
+                            aylik = {
+                                ay: nullable_sayi(satir.get(kolon))
+                                for ay, kolon in ay_kolonlari.items() if kolon
+                            }
+                            dolu_aylar = [
+                                v for v in aylik.values() if v is not None
+                            ]
+                            if kullanilacak is None and not dolu_aylar:
+                                oransiz.append(mkod)
+                                continue
+                            if kullanilacak is None:
+                                # Ay oranları tek değerse o, değilse ortalama.
+                                kullanilacak = (
+                                    dolu_aylar[0]
+                                    if len(set(dolu_aylar)) == 1
+                                    else float(np.mean(dolu_aylar))
+                                )
+                            ayar = dict(
+                                st.session_state.buyume_ayarlari.get(mkod, {})
+                            )
+                            ayar["KULLANICAK BÜYÜME"] = kullanilacak * carpan
+                            for ay in aylar:
+                                deger = aylik.get(ay)
+                                ayar[ay] = (
+                                    deger if deger is not None else kullanilacak
+                                ) * carpan
+                            for alan, kolon in metin_kolonlari.items():
+                                if kolon:
+                                    ayar[alan] = oran_metni(
+                                        satir.get(kolon), alan
+                                    )
+                            st.session_state.buyume_ayarlari[mkod] = ayar
+                            yuklenen.append(mkod)
+                            if mkod not in musteri_seti:
+                                listede_yok.append(mkod)
+
+                        kaynaklar = st.session_state.setdefault(
+                            "buyume_oran_kaynaklari", {}
+                        )
+                        for mkod in yuklenen:
+                            kaynaklar[mkod] = "Dosya"
+                        st.session_state.buyume_oran_dosya_ozeti = {
+                            "dosya": buyume_oran_dosyasi.name,
+                            "yuklenen": len(yuklenen),
+                            "oransiz": sorted(set(oransiz)),
+                            "listede_yok": sorted(set(listede_yok)),
+                            "carpan": carpan
+                        }
+                        st.session_state.buyume_oran_upload_imzasi = oran_imzasi
+                        # Editördeki eski elle değişiklikler, bir sonraki
+                        # düzenlemede dosyadan gelen oranları ezmesin.
+                        st.session_state.pop(buyume_editor_key_9, None)
+                    except Exception as ex:
+                        st.error(f"Büyüme oranı dosyası işlenemedi: {ex}")
+
+            dosya_ozeti = st.session_state.get("buyume_oran_dosya_ozeti")
+            if dosya_ozeti:
+                st.success(
+                    f"{dosya_ozeti['dosya']}: {dosya_ozeti['yuklenen']:,} "
+                    "müşterinin büyüme oranı alındı ("
+                    + (
+                        "ondalık oranlar %'ye çevrildi"
+                        if dosya_ozeti["carpan"] == 100.0
+                        else "oranlar yüzde olarak alındı"
+                    )
+                    + ")."
+                )
+                if dosya_ozeti["listede_yok"]:
+                    st.warning(
+                        f"Dosyadaki {len(dosya_ozeti['listede_yok']):,} müşteri "
+                        "kodu bu sayfanın müşteri listesinde yok; oranları "
+                        "hafızada tutulur ama matriste görünmez ve buluta "
+                        "kaydedilmez: "
+                        + ", ".join(dosya_ozeti["listede_yok"][:15])
+                    )
+
+            # ------------------------------------------------------------
+            # BÜYÜME ORANI OLMAYAN MÜŞTERİLER (manuel giriş)
+            # ------------------------------------------------------------
+            sifirlari_da_goster = st.checkbox(
+                "Büyüme oranı 0 olan müşterileri de listele",
+                value=False,
+                key="buyume_oransiz_sifir_goster",
+                help=(
+                    "Örn. dosyada 'Büyüme Bilgisi Gelmemiştir.' yazan ve oranı "
+                    "0 girilmiş müşteriler."
+                )
+            )
+            oransiz_satirlar = []
+            for _, row in df_calc_9.drop_duplicates("Müşteri Kodu").iterrows():
+                mkod = guvenli_metin_kodu(row["Müşteri Kodu"])
+                ayar = st.session_state.buyume_ayarlari.get(mkod)
+                oran = (
+                    nullable_sayi(ayar.get("KULLANICAK BÜYÜME"))
+                    if isinstance(ayar, dict) else None
+                )
+                if oran is None:
+                    durum = "Oran yok"
+                elif sifirlari_da_goster and np.isclose(oran, 0.0):
+                    durum = "Oran 0"
+                else:
+                    continue
+                oransiz_satirlar.append({
+                    "Müşteri Kodu": mkod,
+                    "Müşteri Adı": ilk_dolu_deger_9(row, ["Müşteri Adı"]),
+                    "Müşteri Grubu": ilk_dolu_deger_9(
+                        row, ["Müşteri Grubu"], "DİĞER"
+                    ),
+                    "Durum": durum,
+                    "Gelen Özet Bilgi": (
+                        ayar.get("Gelen Özet Bilgi", "")
+                        if isinstance(ayar, dict) else ""
+                    ),
+                    "Yeni Büyüme (%)": None
+                })
+            oransiz_df = pd.DataFrame(
+                oransiz_satirlar,
+                columns=[
+                    "Müşteri Kodu", "Müşteri Adı", "Müşteri Grubu", "Durum",
+                    "Gelen Özet Bilgi", "Yeni Büyüme (%)"
+                ]
+            )
+            st.markdown(
+                f"#### ⚠️ Büyüme oranı olmayan müşteriler ({len(oransiz_df):,})"
+            )
+            if oransiz_df.empty:
+                st.caption("Listedeki bütün müşterilerin büyüme oranı var.")
+            else:
+                st.caption(
+                    "Yeni Büyüme (%) sütununa oranı yüzde olarak yazın (ör. "
+                    "%8 için 8) ve uygulayın; oran o müşterinin bütün aylarına "
+                    "işlenir. Boş bıraktığınız müşteriler değişmez."
+                )
+                if "buyume_oransiz_editor_nonce" not in st.session_state:
+                    st.session_state.buyume_oransiz_editor_nonce = 0
+                oransiz_duzenlenen = st.data_editor(
+                    oransiz_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(420, 38 * (len(oransiz_df) + 1) + 4),
+                    disabled=[
+                        c for c in oransiz_df.columns if c != "Yeni Büyüme (%)"
+                    ],
+                    column_config={
+                        "Yeni Büyüme (%)": st.column_config.NumberColumn(
+                            "Yeni Büyüme (%)", format="%.2f%%"
+                        )
+                    },
+                    key=(
+                        "buyume_oransiz_editor_"
+                        f"{st.session_state.buyume_oransiz_editor_nonce}"
+                    )
+                )
+                girilenler = oransiz_duzenlenen[
+                    oransiz_duzenlenen["Yeni Büyüme (%)"].notna()
+                ]
+                if st.button(
+                    f"✍️ Girilen oranları uygula ({len(girilenler):,} müşteri)",
+                    disabled=girilenler.empty,
+                    key="btn_buyume_oransiz_uygula"
+                ):
+                    kaynaklar = st.session_state.setdefault(
+                        "buyume_oran_kaynaklari", {}
+                    )
+                    for _, satir in girilenler.iterrows():
+                        mkod = guvenli_metin_kodu(satir["Müşteri Kodu"])
+                        oran = guvenli_sayi(satir["Yeni Büyüme (%)"])
+                        ayar = dict(
+                            st.session_state.buyume_ayarlari.get(mkod, {})
+                        )
+                        ayar["KULLANICAK BÜYÜME"] = oran
+                        for ay in aylar:
+                            ayar[ay] = oran
+                        st.session_state.buyume_ayarlari[mkod] = ayar
+                        kaynaklar[mkod] = "Manuel"
+                    st.session_state.buyume_oransiz_editor_nonce += 1
+                    st.session_state.pop(buyume_editor_key_9, None)
+                    st.rerun()
+
             st.subheader("📈 Müşteri Bazlı Büyüme Matrisi")
             st.caption(
                 "Müşteri ve kimlik bilgileri Yeni-Bütçe Müşteri Detay Yönetimi "
@@ -7986,7 +8322,6 @@ if sekme_acik_mi[7]:
             # KULLANICAK BÜYÜME değiştiği anda değeri müşteri bazında hafızaya al.
             # Sonraki otomatik Streamlit yenilemesinde aynı satırdaki Ocak-Aralık
             # kolonları yukarıdaki döngü tarafından bu yeni değere eşitlenir.
-            buyume_editor_key_9 = "buyume_matris_editoru_musteri_detay_v2"
             musteri_kodlari_9 = df_final_b_9["Müşteri Kodu"].tolist()
             duzenlenebilir_alanlar_9 = [
                 "25 kullanılan büyüme", "KULLANICAK BÜYÜME",
