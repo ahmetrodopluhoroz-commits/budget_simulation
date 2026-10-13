@@ -783,7 +783,9 @@ if client:
                 ).strip()
                 kisi = str(r.get("olusturan_kisi") or "Bilinmiyor")
                 tarih = revizyon_zamani(r)[:16].replace("T", " ")
-                etiket = f"{rev_adi} | {kisi} | {tarih or 'Tarih Yok'}"
+                # ID etikette olduğu için aynı ad/kişi/dakikalı revizyonlar
+                # sözlükte birbirini ezmez.
+                etiket = f"{rev_adi} | {kisi} | {tarih or 'Tarih Yok'} | {rev_id}"
                 rev_secenekleri[etiket] = rev_id
                 revizyon_kayitlari.append(r)
                 revizyon_id_haritasi[rev_id] = r
@@ -4850,6 +4852,9 @@ if sekme_acik_mi[1]:
             "Revizyonu burada oluşturun ve aktif edin. Diğer bütün bütçe "
             "sayfalarının bulut kayıtları seçili aktif revizyona yazılır."
         )
+        aktif_mesaj = st.session_state.pop("revizyon_aktif_mesaji", None)
+        if aktif_mesaj:
+            st.success(aktif_mesaj)
 
         def revizyon_tarihini_goster(record, degisiklik=False):
             alanlar = (
@@ -5020,16 +5025,39 @@ if sekme_acik_mi[1]:
                 height=min(500, 38 * len(tarihce_satirlari) + 42)
             )
 
-            secim_etiketi = st.selectbox(
+            # Seçenekler değişmeyen revizyon ID'leridir. Etiketler (tarih,
+            # sıralama) başka bir kayıtla değişse bile seçim sıfırlanmaz ve
+            # aynı etiketli revizyonlar birbirini ezmez.
+            rev_id_listesi = [
+                str(k.get("revizyon_id", "")).strip()
+                for k in revizyon_kayitlari
+            ]
+            if (
+                st.session_state.get("revizyon_yonetim_secimi_id")
+                not in rev_id_listesi
+            ):
+                st.session_state.revizyon_yonetim_secimi_id = (
+                    aktif_id if aktif_id in rev_id_listesi
+                    else rev_id_listesi[0]
+                )
+
+            def revizyon_secim_etiketi(rev_id):
+                kayit = revizyon_id_haritasi.get(rev_id, {})
+                ad = (
+                    kayit.get("revizyon_adi")
+                    or kayit.get("revizyon_notu") or rev_id
+                )
+                kisi = kayit.get("olusturan_kisi") or "Bilinmiyor"
+                tarih = revizyon_tarihini_goster(kayit) or "Tarih Yok"
+                isaret = "✅ " if rev_id == aktif_id else ""
+                return f"{isaret}{ad} | {kisi} | {tarih} | {rev_id}"
+
+            secili_rev = st.selectbox(
                 "İşlem Yapılacak Revizyon",
-                list(rev_secenekleri.keys()),
-                index=(
-                    list(rev_secenekleri.values()).index(aktif_id)
-                    if aktif_id in rev_secenekleri.values() else 0
-                ),
-                key="revizyon_yonetim_secimi"
+                rev_id_listesi,
+                format_func=revizyon_secim_etiketi,
+                key="revizyon_yonetim_secimi_id"
             )
-            secili_rev = rev_secenekleri[secim_etiketi]
             r1, r2 = st.columns(2)
             if r1.button(
                 "✅ Seçili Revizyonu Aktif Et",
@@ -5044,7 +5072,10 @@ if sekme_acik_mi[1]:
                     kayit.get("revizyon_adi")
                     or kayit.get("revizyon_notu") or secili_rev
                 )
-                st.success("Aktif revizyon değiştirildi.")
+                revizyon_loglarini_getir.clear()
+                st.session_state.revizyon_aktif_mesaji = (
+                    f"Aktif revizyon: {st.session_state.aktif_revizyon_adi}"
+                )
                 st.rerun()
 
             silme_onayi = r2.checkbox(
