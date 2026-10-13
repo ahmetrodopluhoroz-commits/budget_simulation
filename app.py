@@ -2878,9 +2878,17 @@ def yil_kapanis_calisma_gunu_oranlari(takvim_df, kapanis_yili):
 
 
 def yil_kapanis_detay_tahminini_hesapla(
-    detay_df, ortalama_sonuc, son_gerceklesen_ay, calisma_gunu_oranlari
+    detay_df, ortalama_sonuc, son_gerceklesen_ay, calisma_gunu_oranlari,
+    ilk_ay_oncesini_tahminle=False
 ):
-    """Eksik ayları sabit gerçekleşen toplam ve sezon paylarıyla tamamlar."""
+    """Eksik ayları sabit gerçekleşen toplam ve sezon paylarıyla tamamlar.
+
+    ilk_ay_oncesini_tahminle açıksa müşterinin (tüm güzergahlarında) ilk desi
+    verdiği aydan önceki aylar da tahminlenir. Yıllık baz yalnızca ilk aydan
+    son gerçekleşen aya kadarki sezon paylarına bölünür; geriye dönük
+    tahminler Gerçekleşen Toplam Desi'ye katılmaz.
+    """
+    st.session_state.yil_kapanis_geriye_tahmin_hucreleri = {}
     if detay_df is None or detay_df.empty:
         return pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
     sonuc = yil_kapanis_detayini_hazirla(detay_df)
@@ -2895,19 +2903,71 @@ def yil_kapanis_detay_tahminini_hesapla(
 
     oran_haritasi = ortalama_sonuc.set_index("Müşteri Grubu")
     satir_gruplari = sonuc["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
-    grup_paydalari = {
-        grup: sum(
-            guvenli_sayi(oran_haritasi.at[grup, f"{ay} (%)"])
-            for ay in aylar[:son_ay_index + 1]
+    # Satır x 12 ay: her satırın müşteri grubuna ait aylık sezon payı (%).
+    pay_matrisi = np.column_stack([
+        satir_gruplari.map({
+            grup: guvenli_sayi(oran_haritasi.at[grup, f"{ay} (%)"])
+            for grup in oran_haritasi.index
+        }).fillna(0.0).to_numpy(float)
+        for ay in aylar
+    ])
+
+    # Paydaya giren ilk ay. Varsayılan Ocak; seçenek açıksa müşterinin
+    # gerçekleşen dönemde desi verdiği ilk ay (müşteri bazında en erken ay).
+    satir_baslangic = np.zeros(len(sonuc), dtype=int)
+    if ilk_ay_oncesini_tahminle:
+        dolu = sonuc[gercek_sutunlar].to_numpy(float) > 0
+        satir_ilk_ay = np.where(
+            dolu.any(axis=1), dolu.argmax(axis=1), son_ay_index + 1
         )
-        for grup in oran_haritasi.index
-    }
-    payda = satir_gruplari.map(grup_paydalari).fillna(0.0).to_numpy(float)
+        musteri_anahtari = (
+            sonuc["Yıl"].astype(str) + "|"
+            + sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+        )
+        musteri_ilk_ay = pd.Series(
+            satir_ilk_ay, index=sonuc.index
+        ).groupby(musteri_anahtari).transform("min").to_numpy(int)
+        # Gerçekleşen dönemde hiç desisi olmayan müşteri değişmez.
+        satir_baslangic = np.where(
+            musteri_ilk_ay <= son_ay_index, musteri_ilk_ay, 0
+        )
+
+    ay_indexleri = np.arange(len(aylar))
+    payda_maskesi = (
+        (ay_indexleri[None, :] >= satir_baslangic[:, None])
+        & (ay_indexleri[None, :] <= son_ay_index)
+    )
+    payda = (pay_matrisi * payda_maskesi).sum(axis=1)
     yillik_baz = np.divide(
         gercek_toplam,
         payda,
         out=np.zeros_like(gercek_toplam, dtype=float),
         where=payda > 0
+    )
+
+    # Müşterinin ilk desi ayından önceki aylar (ör. ilk desi Mart ise
+    # Ocak-Şubat) gelecek aylarla aynı formülle tahminlenir.
+    geriye_tahmin_hucreleri = {}
+    for hedef_index in range(son_ay_index):
+        maske = hedef_index < satir_baslangic
+        if not maske.any():
+            continue
+        hedef_ay = aylar[hedef_index]
+        gun_orani = guvenli_sayi(
+            calisma_gunu_oranlari.get(hedef_ay, 1.0)
+        )
+        tahmin = yillik_baz * pay_matrisi[:, hedef_index] * gun_orani
+        yuvarli = np.where(
+            tahmin >= 0, np.floor(tahmin + 0.5), np.ceil(tahmin - 0.5)
+        )
+        sutun = f"{hedef_ay} Desi"
+        sonuc.loc[maske, sutun] = yuvarli[maske]
+        for uniq_id in sonuc.loc[maske, "Uniq ID"]:
+            geriye_tahmin_hucreleri.setdefault(
+                temiz_metin(uniq_id), []
+            ).append(sutun)
+    st.session_state.yil_kapanis_geriye_tahmin_hucreleri = (
+        geriye_tahmin_hucreleri
     )
 
     for hedef_index in range(son_ay_index + 1, len(aylar)):
@@ -2972,6 +3032,27 @@ def yil_kapanis_detay_toplamlarini_yenile(
     ]
     if gerceklesen_toplam_bazi is None:
         gerceklesen = sonuc[gercek_sutunlar].sum(axis=1).astype(float)
+        # İlk desi ayından önceki geriye dönük tahminler gerçekleşen
+        # sayılmaz; kullanıcı o hücreyi elle değiştirdiyse değeri fiilidir.
+        geriye_tahmin = st.session_state.get(
+            "yil_kapanis_geriye_tahmin_hucreleri", {}
+        ) or {}
+        if geriye_tahmin:
+            manuel_ayarlar = (
+                st.session_state.yil_kapanis_detay_manuel_ayarlari.get(
+                    manuel_baglam, {}
+                ) if manuel_baglam else {}
+            )
+            for idx, uniq_id in sonuc["Uniq ID"].items():
+                uid = temiz_metin(uniq_id)
+                for col in geriye_tahmin.get(uid, []):
+                    if (
+                        col in gercek_sutunlar
+                        and col not in manuel_ayarlar.get(uid, {})
+                    ):
+                        gerceklesen.at[idx] -= guvenli_sayi(
+                            sonuc.at[idx, col]
+                        )
     else:
         gerceklesen = pd.to_numeric(
             pd.Series(gerceklesen_toplam_bazi, index=sonuc.index),
@@ -9018,6 +9099,19 @@ if sekme_acik_mi[8]:
                 aylar,
                 key="yil_kapanis_son_ay"
             )
+            ilk_ay_oncesini_tahminle = st.checkbox(
+                "Müşterinin ilk desi verdiği aydan önceki ayları da tahminle",
+                value=True,
+                key="yil_kapanis_ilk_ay_oncesi_tahmin",
+                help=(
+                    "Örn. müşteri ilk desiyi Mart'ta verdiyse Ocak ve Şubat "
+                    "da müşteri grubunun sezon paylarıyla tahminlenir. İlk ay "
+                    "müşterinin tüm güzergahlarındaki en erken desi ayıdır. "
+                    "Yıllık baz yalnızca ilk aydan son gerçekleşen aya kadarki "
+                    "paylarla hesaplanır. Bu tahminler Gerçekleşen Toplam "
+                    "Desi'ye katılmaz."
+                )
+            )
 
             if yil_1 == yil_2:
                 st.error("Ortalama hesabı için iki farklı yıl seçin.")
@@ -9482,6 +9576,7 @@ if sekme_acik_mi[8]:
                     )
                     gerceklesen_toplam_bazi = None
                     if detay_buluttan_final:
+                        st.session_state.yil_kapanis_geriye_tahmin_hucreleri = {}
                         gerceklesen_toplam_bazi = pd.to_numeric(
                             kapanacak_detay["Gerçekleşen Toplam Desi"],
                             errors="coerce"
@@ -9495,8 +9590,25 @@ if sekme_acik_mi[8]:
                             kapanacak_detay,
                             ortalama_sonuc,
                             son_gerceklesen_ay,
-                            gun_oranlari
+                            gun_oranlari,
+                            ilk_ay_oncesini_tahminle=ilk_ay_oncesini_tahminle
                         )
+                        geriye_tahmin_idleri = set(
+                            st.session_state.get(
+                                "yil_kapanis_geriye_tahmin_hucreleri", {}
+                            )
+                        )
+                        if geriye_tahmin_idleri:
+                            etkilenen_musteri = detay_sonuc.loc[
+                                detay_sonuc["Uniq ID"].apply(temiz_metin)
+                                .isin(geriye_tahmin_idleri),
+                                "Müşteri Kodu"
+                            ].nunique()
+                            st.info(
+                                f"{etkilenen_musteri:,} müşteride "
+                                f"({len(geriye_tahmin_idleri):,} satır) ilk "
+                                "desi ayından önceki aylar tahminlendi."
+                            )
                     detay_manuel_baglam = yil_kapanis_manuel_baglami(
                         aktif_yk_rev_id, kapanis_yili, yil_1, yil_2,
                         son_gerceklesen_ay
