@@ -5010,8 +5010,9 @@ if sekme_acik_mi[1]:
             tarihce_satirlari = []
             aktif_id = aktif_revizyon_id_getir()
             for kayit in revizyon_kayitlari:
-                rev_id = str(kayit.get("revizyon_id"))
+                rev_id = str(kayit.get("revizyon_id")).strip()
                 tarihce_satirlari.append({
+                    "Seç": False,
                     "Aktif": "✅" if rev_id == aktif_id else "",
                     "Revizyon Adı": kayit.get("revizyon_adi")
                     or kayit.get("revizyon_notu") or rev_id,
@@ -5025,82 +5026,86 @@ if sekme_acik_mi[1]:
                     "Açıklama": kayit.get("revizyon_notu") or "",
                     "Teknik ID": rev_id
                 })
-            st.dataframe(
-                pd.DataFrame(tarihce_satirlari),
+            tarihce_df = pd.DataFrame(tarihce_satirlari)
+            # data_editor tikleri satır numarasıyla saklar. Revizyon sırası
+            # değişirse (ör. biri kayıt yapınca liste yeniden sıralanır) editör
+            # anahtarı da değişir ve tikler sıfırlanır; böylece bir tik başka
+            # bir revizyonun satırına kaymaz. İşlem her zaman tikli satırın
+            # Teknik ID'si okunarak yapılır.
+            sira_imzasi = hashlib.sha256(
+                "|".join(tarihce_df["Teknik ID"]).encode("utf-8")
+            ).hexdigest()[:12]
+            if "revizyon_secim_nonce" not in st.session_state:
+                st.session_state.revizyon_secim_nonce = 0
+            st.caption(
+                "İşlem yapmak istediğiniz revizyonun **Seç** kutucuğunu "
+                "işaretleyin, ardından aşağıdaki butonu kullanın."
+            )
+            secim_df = st.data_editor(
+                tarihce_df,
                 use_container_width=True,
                 hide_index=True,
-                height=min(500, 38 * len(tarihce_satirlari) + 42)
-            )
-
-            rev_id_listesi = [
-                str(k.get("revizyon_id", "")).strip()
-                for k in revizyon_kayitlari
-            ]
-
-            def revizyon_secim_etiketi(rev_id):
-                kayit = revizyon_id_haritasi.get(rev_id, {})
-                ad = (
-                    kayit.get("revizyon_adi")
-                    or kayit.get("revizyon_notu") or rev_id
+                height=min(500, 38 * len(tarihce_df) + 42),
+                disabled=[c for c in tarihce_df.columns if c != "Seç"],
+                column_config={
+                    "Seç": st.column_config.CheckboxColumn(
+                        "Seç", default=False, width="small"
+                    )
+                },
+                key=(
+                    f"revizyon_secim_tablosu_{sira_imzasi}_"
+                    f"{st.session_state.revizyon_secim_nonce}"
                 )
-                kisi = kayit.get("olusturan_kisi") or "Bilinmiyor"
-                tarih = revizyon_tarihini_goster(kayit) or "Tarih Yok"
-                return f"{ad} | {kisi} | {tarih} | {rev_id}"
-
-            # Aktif etme her revizyonun kendi butonuyla yapılır. Streamlit
-            # selectbox'ı seçimi görünen etiket metniyle eşleştirir; eşleşme
-            # kaçarsa sessizce ilk seçeneğe (en yeni revizyona) döner ve eski
-            # revizyonlar aktif edilemez. Satır butonunda sıfırlanacak seçim yok.
-            st.markdown("#### ✅ Revizyonu Aktif Et")
-            with st.container(
-                height=min(420, 52 * len(rev_id_listesi) + 16), border=True
-            ):
-                for rev_id in rev_id_listesi:
-                    kayit = revizyon_id_haritasi.get(rev_id, {})
-                    ad = (
-                        kayit.get("revizyon_adi")
-                        or kayit.get("revizyon_notu") or rev_id
-                    )
-                    aktif_mi = rev_id == aktif_id
-                    s1, s2 = st.columns([5, 1], vertical_alignment="center")
-                    s1.markdown(
-                        f"{'✅ ' if aktif_mi else ''}**{ad}** · "
-                        f"{kayit.get('olusturan_kisi') or 'Bilinmiyor'} · "
-                        f"{revizyon_tarihini_goster(kayit) or 'Tarih Yok'} · "
-                        f"`{rev_id}`"
-                    )
-                    if s2.button(
-                        "Aktif" if aktif_mi else "Aktif Et",
-                        type="secondary" if aktif_mi else "primary",
-                        disabled=aktif_mi,
-                        use_container_width=True,
-                        key=f"btn_revizyon_aktif_et_{rev_id}"
-                    ):
-                        revizyon_oturumunu_temizle()
-                        st.session_state.aktif_revizyon_id = rev_id
-                        st.session_state.aktif_revizyon_adi = str(ad)
-                        revizyon_loglarini_getir.clear()
-                        st.session_state.revizyon_aktif_mesaji = (
-                            f"Aktif revizyon: {ad}"
-                        )
-                        st.rerun()
-
-            st.markdown("#### 🗑️ Revizyon Sil")
-            # index=None: seçim herhangi bir nedenle sıfırlanırsa en yeni
-            # revizyona değil "seçim yok" durumuna döner; yanlış silme olmaz.
-            secili_rev = st.selectbox(
-                "Silinecek Revizyon",
-                rev_id_listesi,
-                index=None,
-                placeholder="Silinecek revizyonu seçin",
-                format_func=revizyon_secim_etiketi,
-                key="revizyon_silme_secimi_id"
             )
-            silme_onayi = st.checkbox(
+            secilen_idler = (
+                secim_df.loc[secim_df["Seç"].fillna(False).astype(bool),
+                             "Teknik ID"]
+                .astype(str).str.strip().tolist()
+            )
+            secili_rev = (
+                secilen_idler[0]
+                if len(secilen_idler) == 1
+                and secilen_idler[0] in revizyon_id_haritasi
+                else None
+            )
+            secili_ad = ""
+            if secili_rev:
+                secili_kayit = revizyon_id_haritasi[secili_rev]
+                secili_ad = str(
+                    secili_kayit.get("revizyon_adi")
+                    or secili_kayit.get("revizyon_notu") or secili_rev
+                )
+            if len(secilen_idler) > 1:
+                st.warning(
+                    "Birden fazla revizyon işaretli. Lütfen yalnızca bir "
+                    "revizyonun kutucuğunu işaretleyin."
+                )
+            elif secili_rev:
+                st.info(f"Seçili revizyon: **{secili_ad}** (`{secili_rev}`)")
+
+            r1, r2 = st.columns(2)
+            if r1.button(
+                "✅ Seçili Revizyonu Aktif Et",
+                type="primary",
+                use_container_width=True,
+                disabled=(not secili_rev or secili_rev == aktif_id),
+                key="btn_revizyon_aktif_et"
+            ):
+                revizyon_oturumunu_temizle()
+                st.session_state.aktif_revizyon_id = secili_rev
+                st.session_state.aktif_revizyon_adi = secili_ad
+                revizyon_loglarini_getir.clear()
+                st.session_state.revizyon_secim_nonce += 1
+                st.session_state.revizyon_aktif_mesaji = (
+                    f"Aktif revizyon: {secili_ad}"
+                )
+                st.rerun()
+
+            silme_onayi = r2.checkbox(
                 "Silme işlemini onaylıyorum",
                 key="revizyon_silme_onayi"
             )
-            if st.button(
+            if r2.button(
                 "🗑️ Seçili Revizyonu Kalıcı Sil",
                 use_container_width=True,
                 disabled=not (silme_onayi and secili_rev),
@@ -5137,6 +5142,7 @@ if sekme_acik_mi[1]:
                     st.session_state.aktif_revizyon_id = None
                     st.session_state.aktif_revizyon_adi = ""
                 revizyon_loglarini_getir.clear()
+                st.session_state.revizyon_secim_nonce += 1
                 st.success("Revizyon ve bağlı kayıtları silindi.")
                 st.rerun()
         else:
