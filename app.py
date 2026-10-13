@@ -4750,8 +4750,24 @@ sekme_etiketleri = [
     "👤 Yeni-Bütçe Müşteri", "⚙️ değ.anah.-yakıt-kdv", "⛽ Baz Yakıt Fiyatları",
     "🧾 Eskalasyon & Master Data", "📊 2026 Mazot Analizi", "📈 Müşteri Büyüme Oranları",
     "🏁 Yıl Kapanış", "📉 ÜFE-TÜFE Yönetimi", "💳 Baz Birim Fiyatlar", "🆕 Data_New",
-    "🔮 Desi Tahminleme"
+    "🔮 Desi Tahminleme",
+    # 13: Yıl Kapanış sayfasının önceki (yalnızca sonraki ayları dolduran)
+    # mantıkla çalışan kopyası. Diğer sayfaların sekme_acik_mi indeksleri
+    # kaymasın diye listenin sonuna eklenir; menüde Yıl Kapanış'ın altında
+    # gösterilir.
+    "🏁 Yıl Kapanış (Önceki Mantık)"
 ]
+YIL_KAPANIS_ONCEKI_MANTIK_INDEX = 13
+
+# Menü sırası: önceki mantık sayfası Yıl Kapanış'ın hemen altında.
+menu_etiketleri = [
+    etiket for etiket in sekme_etiketleri
+    if etiket != sekme_etiketleri[YIL_KAPANIS_ONCEKI_MANTIK_INDEX]
+]
+menu_etiketleri.insert(
+    menu_etiketleri.index("🏁 Yıl Kapanış") + 1,
+    sekme_etiketleri[YIL_KAPANIS_ONCEKI_MANTIK_INDEX]
+)
 
 # Başlıklar tema kontrolüyle aynı sol menüde yer alır. Yalnızca seçili sayfa
 # çalıştırıldığı için ağır tablolar arasında geçiş de daha hızlıdır.
@@ -4759,7 +4775,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption("📚 SAYFALAR")
 aktif_sekme_etiketi = st.sidebar.radio(
     "Sayfa",
-    sekme_etiketleri,
+    menu_etiketleri,
     label_visibility="collapsed",
     key="ana_uygulama_sayfasi_v5"
 )
@@ -8335,10 +8351,25 @@ if sekme_acik_mi[7]:
 
 # ------------------------------------------------------------
 # 9. SAYFA: YIL KAPANIŞ
+# Aynı blok "Yıl Kapanış (Önceki Mantık)" sayfasında da çalışır. O sayfada
+# yalnızca son gerçekleşen aydan sonraki aylar doldurulur, ilk desi ayından
+# önceki aylar doldurulmaz ve sonuçlar buluta kaydedilmez.
 # ------------------------------------------------------------
-if sekme_acik_mi[8]:
+yk_onceki_mantik = sekme_acik_mi[YIL_KAPANIS_ONCEKI_MANTIK_INDEX]
+if sekme_acik_mi[8] or yk_onceki_mantik:
     with sekmeler[8]:
-        st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
+        if yk_onceki_mantik:
+            st.title("🏁 Yıl Kapanış (Önceki Mantık)")
+            st.info(
+                "Bu sayfa önceki yıl kapanış mantığıyla çalışır: yalnızca "
+                "son gerçekleşen aydan **sonraki** aylar tahminlenir; "
+                "müşterinin ilk desi ayından önceki aylar doldurulmaz. "
+                "Girdi dosyaları ve yüzde matrisleri Yıl Kapanış sayfasıyla "
+                "ortaktır; manuel hücre değişiklikleri ayrı tutulur. Sonuçlar "
+                "Excel/CSV olarak indirilebilir, buluta kaydedilmez."
+            )
+        else:
+            st.title("🏁 Yıl Kapanış ve Sezon Dağılımı")
         musteri_kaynak_secicisi("yil_kapanis")
         st.caption(
             "Dosyadan hesaplanan veya manuel yüzde matrisi oluşturulan iki "
@@ -9139,7 +9170,9 @@ if sekme_acik_mi[8]:
                 aylar,
                 key="yil_kapanis_son_ay"
             )
-            ilk_ay_oncesini_tahminle = st.checkbox(
+            # Önceki mantık sayfasında ilk desi ayından önceki aylar
+            # doldurulmaz; seçenek yalnızca Yıl Kapanış sayfasında görünür.
+            ilk_ay_oncesini_tahminle = False if yk_onceki_mantik else st.checkbox(
                 "Müşterinin ilk desi verdiği aydan önceki ayları da tahminle",
                 value=True,
                 key="yil_kapanis_ilk_ay_oncesi_tahmin",
@@ -9617,6 +9650,14 @@ if sekme_acik_mi[8]:
                         )
                     )
                     gerceklesen_toplam_bazi = None
+                    if detay_buluttan_final and yk_onceki_mantik:
+                        st.warning(
+                            "Detay, revizyonun buluttaki kayıtlı kapanış "
+                            "sonucundan geliyor; bu sonuç Yıl Kapanış "
+                            "sayfasının mantığıyla hesaplanmış olabilir. "
+                            "Önceki mantıkla hesaplamak için operasyon "
+                            "dosyasını yükleyin."
+                        )
                     if detay_buluttan_final:
                         st.session_state.yil_kapanis_geriye_tahmin_hucreleri = {}
                         gerceklesen_toplam_bazi = pd.to_numeric(
@@ -9655,6 +9696,9 @@ if sekme_acik_mi[8]:
                         aktif_yk_rev_id, kapanis_yili, yil_1, yil_2,
                         son_gerceklesen_ay
                     )
+                    if yk_onceki_mantik:
+                        # Manuel hücreler iki sayfa arasında karışmasın.
+                        detay_manuel_baglam += "|onceki_mantik"
                     detay_sonuc = yil_kapanis_manuel_degerlerini_uygula(
                         detay_sonuc, detay_manuel_baglam
                     )
@@ -10142,12 +10186,21 @@ if sekme_acik_mi[8]:
                     )
 
                 st.markdown("#### ☁️ Bulut kayıtları")
+                if yk_onceki_mantik:
+                    st.caption(
+                        "Önceki mantık sayfasında bulut kaydı kapalıdır: iki "
+                        "sayfa aynı revizyonun yıl kapanış kaydını paylaşır ve "
+                        "buradan kaydetmek Yıl Kapanış sayfasının (ve Desi "
+                        "Tahminleme'nin kullandığı) sonucun üzerine yazardı."
+                    )
                 cloud_ozet_col, cloud_detay_col = st.columns(2)
                 ozet_bulut_kaydet = cloud_ozet_col.button(
                     "💾 Yüzde Matrisleri, Kg ve Özeti Kaydet",
                     type="primary",
                     use_container_width=True,
-                    disabled=(not client or not aktif_yk_rev_id),
+                    disabled=(
+                        not client or not aktif_yk_rev_id or yk_onceki_mantik
+                    ),
                     key="btn_yil_kapanis_cloud_save"
                 )
                 detay_bulut_kaydet = cloud_detay_col.button(
@@ -10161,6 +10214,7 @@ if sekme_acik_mi[8]:
                         not client
                         or not aktif_yk_rev_id
                         or detay_sonuc.empty
+                        or yk_onceki_mantik
                     ),
                     key="btn_yil_kapanis_detail_cloud_save",
                     help=(
