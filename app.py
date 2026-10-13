@@ -2965,25 +2965,11 @@ def yil_kapanis_detay_tahminini_hesapla(
             musteri_ilk_ay <= son_ay_index, musteri_ilk_ay, 0
         )
 
-    ay_indexleri = np.arange(len(aylar))
-    payda_maskesi = (
-        (ay_indexleri[None, :] >= satir_baslangic[:, None])
-        & (ay_indexleri[None, :] <= son_ay_index)
-    )
-    payda = (pay_matrisi * payda_maskesi).sum(axis=1)
-    yillik_baz = np.divide(
-        gercek_toplam,
-        payda,
-        out=np.zeros_like(gercek_toplam, dtype=float),
-        where=payda > 0
-    )
-
     # Müşterinin ilk desi ayından önceki aylar (ör. ilk desi Mart ise
     # Ocak-Şubat) Excel'deki zincirleme yöntemle, sondan başa doldurulur:
     #   ay = TOPLA(sonraki ay..son gerçekleşen ay desileri)
     #        / TOPLA(aynı aralığın grup payları) x ayın payı x gün oranı
-    # Aralığa daha önce doldurulmuş aylar da (gün oranlarıyla) girer. İlk
-    # desi ayının hemen öncesindeki ay için taban yillik_baz ile aynıdır.
+    # Aralığa daha önce doldurulmuş aylar da (gün oranlarıyla) girer.
     # Zincir yuvarlanmamış değerlerle yürür; hücreler sonda 3 ondalığa
     # yuvarlanır.
     geriye_tahmin_hucreleri = {}
@@ -3024,6 +3010,17 @@ def yil_kapanis_detay_tahminini_hesapla(
         hucreler.sort(key=lambda sutun: aylar.index(sutun[:-5]))
     st.session_state.yil_kapanis_geriye_tahmin_hucreleri = (
         geriye_tahmin_hucreleri
+    )
+
+    # Gelecek ayların tabanı (Excel ile aynı): TOPLA(Ocak..son gerçekleşen ay
+    # desileri, geriye doldurulan aylar dahil) / TOPLA(aynı ayların grup
+    # payları). Geriye doldurma kapalıyken önceki mantıkla birebir aynıdır.
+    yillik_baz_payi = pay_matrisi[:, :son_ay_index + 1].sum(axis=1)
+    yillik_baz = np.divide(
+        zincir_degerleri.sum(axis=1),
+        yillik_baz_payi,
+        out=np.zeros(len(sonuc), dtype=float),
+        where=yillik_baz_payi > 0
     )
 
     for hedef_index in range(son_ay_index + 1, len(aylar)):
@@ -9198,8 +9195,10 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                     "Excel'deki gibi sondan başa zincirleme doldurulur: her "
                     "ayın tabanı, sonraki aydan son gerçekleşen aya kadarki "
                     "desiler (önceden doldurulan aylar dahil) ÷ aynı aralığın "
-                    "grup paylarıdır. Bu tahminler Gerçekleşen Toplam Desi'ye "
-                    "katılmaz."
+                    "grup paylarıdır. Son gerçekleşen aydan sonraki aylar da "
+                    "Excel'deki gibi Ocak–son ay toplamı (doldurulan aylar "
+                    "dahil) ÷ aynı ayların paylarıyla hesaplanır. Bu tahminler "
+                    "Gerçekleşen Toplam Desi'ye katılmaz."
                 )
             )
 
