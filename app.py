@@ -938,6 +938,8 @@ def revizyon_oturumunu_temizle():
     st.session_state.desi_tahmin_bulut_ayarlari = {}
     st.session_state.desi_tahmin_buyume_df = pd.DataFrame()
     st.session_state.desi_tahmin_bulut_revizyon = None
+    st.session_state.pop("desi_tahmin_yk_matris_df", None)
+    st.session_state.pop("desi_tahmin_yk_matris_revizyon", None)
     st.session_state.desi_tahmin_editor_surumu += 1
     st.session_state.baz_birim_fiyat_df = pd.DataFrame(
         columns=baz_birim_fiyat_sutunlari
@@ -3259,13 +3261,21 @@ def yil_kapanis_detay_toplam_satiri(detay_df, kapanis_yili=None):
     return toplam
 
 
-def desi_tahmin_ortalamasini_hesapla(kg_musteri_df, referans_yillar):
-    """Seçilen tüm yılların grup/ay dağılımlarının aritmetik ortalaması."""
+def desi_tahmin_ortalamasini_hesapla(
+    kg_musteri_df, referans_yillar, manuel_matris_df=None
+):
+    """Seçilen tüm yılların grup/ay dağılımlarının aritmetik ortalaması.
+
+    manuel_matris_df verilirse (Yıl Kapanış sayfasındaki yüzde matrisleri),
+    matrisi olan yıllarda Kg'dan hesaplanan dağılımın yerine o matris
+    kullanılır; Yıl Kapanış sayfasıyla aynı kural.
+    """
     yillar = sorted({int(yil) for yil in referans_yillar})
-    grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df)
+    manuel = yil_kapanis_manuel_matrisini_hazirla(manuel_matris_df)
+    grup_sirasi = dinamik_musteri_gruplari(kg_musteri_df, manuel)
     matrisler = {
         yil: yil_kapanis_yuzde_matrisi(
-            kg_musteri_df, yil, grup_sirasi
+            kg_musteri_df, yil, grup_sirasi, manuel
         )
         for yil in yillar
     }
@@ -3494,12 +3504,29 @@ def desi_tahmin_detayini_hesapla(
 
 
 def desi_tahmin_manuel_baglami(
-    revizyon_id, kaynak_yil, referans_yillar
+    revizyon_id, kaynak_yil, referans_yillar, yil_kapanis_matrisi=False
 ):
-    return "|".join([
+    baglam = "|".join([
         temiz_metin(revizyon_id, "yerel"), str(int(kaynak_yil)),
         ",".join(map(str, sorted({int(y) for y in referans_yillar})))
     ])
+    # Yıl Kapanış matrisleriyle yapılan manuel düzeltmeler ayrı tutulur.
+    return baglam + "|ykm" if yil_kapanis_matrisi else baglam
+
+
+def desi_tahmin_referans_ayarini_coz(ham):
+    """Bulut "Referans Yıllar" değerini (eski: liste, yeni: nesne) çözer."""
+    if isinstance(ham, str):
+        try:
+            ham = json.loads(ham)
+        except Exception:
+            ham = []
+    if isinstance(ham, dict):
+        yillar = ham.get("yillar", [])
+        matris = bool(ham.get("yil_kapanis_matrisi", False))
+    else:
+        yillar, matris = ham or [], False
+    return [int(yil) for yil in yillar], matris
 
 
 def desi_tahmin_manuel_degerlerini_uygula(detay_df, baglam):
@@ -11932,12 +11959,11 @@ if sekme_acik_mi[12]:
             if ortalama_kayitlari:
                 ortalama_raw = pd.DataFrame(ortalama_kayitlari)
                 ilk = ortalama_raw.iloc[0]
-                referanslar = ilk.get("Referans Yıllar", [])
-                if isinstance(referanslar, str):
-                    try:
-                        referanslar = json.loads(referanslar)
-                    except Exception:
-                        referanslar = []
+                referanslar, yil_kapanis_matrisi = (
+                    desi_tahmin_referans_ayarini_coz(
+                        ilk.get("Referans Yıllar", [])
+                    )
+                )
                 st.session_state.desi_tahmin_bulut_ayarlari = {
                     "kaynak_yil": guvenli_tamsayi(
                         ilk.get("Kaynak Yıl"), nullable=True
@@ -11945,9 +11971,8 @@ if sekme_acik_mi[12]:
                     "tahmin_yili": guvenli_tamsayi(
                         ilk.get("Tahmin Yılı"), nullable=True
                     ),
-                    "referans_yillar": [
-                        int(yil) for yil in (referanslar or [])
-                    ]
+                    "referans_yillar": referanslar,
+                    "yil_kapanis_matrisi": yil_kapanis_matrisi
                 }
                 st.session_state.desi_tahmin_bulut_ortalama_df = (
                     ortalama_raw.drop(
@@ -11989,7 +12014,8 @@ if sekme_acik_mi[12]:
                 if ayarlar.get("kaynak_yil") and ayarlar.get("referans_yillar"):
                     baglam = desi_tahmin_manuel_baglami(
                         revizyon_id, ayarlar["kaynak_yil"],
-                        ayarlar["referans_yillar"]
+                        ayarlar["referans_yillar"],
+                        ayarlar.get("yil_kapanis_matrisi", False)
                     )
                     manuel_harita = {}
                     for _, row in detay_raw.iterrows():
@@ -12084,6 +12110,70 @@ if sekme_acik_mi[12]:
             kapanis_referans_kg
         )
 
+        # Yıl Kapanış sayfasındaki yüzde matrisleri (ör. 2024/2025 Excel'i):
+        # yeniden yüklemeden referans yıl olarak kullanılabilir.
+        yk_matris_kullan = st.checkbox(
+            "Yıl Kapanış sayfasındaki yüzde matrislerini kullan",
+            value=bool(
+                st.session_state.get("desi_tahmin_bulut_ayarlari", {}).get(
+                    "yil_kapanis_matrisi", False
+                )
+            ),
+            key="desi_tahmin_yil_kapanis_matrisi",
+            help=(
+                "Açıkken Yıl Kapanış sayfasında yüklenen/girilen aylık yüzde "
+                "matrisi olan yıllar (ör. 2024, 2025) referans yıl olarak "
+                "seçilebilir ve o yıllarda Kg'dan hesaplanan dağılımın yerine "
+                "matris kullanılır. Ortalama, seçtiğiniz bütün referans "
+                "yılların aritmetik ortalamasıdır."
+            )
+        )
+        yk_matris_df = pd.DataFrame(columns=yil_kapanis_manuel_matris_sutunlari)
+        if yk_matris_kullan:
+            yk_matris_df = yil_kapanis_manuel_matrisini_hazirla(
+                st.session_state.get(
+                    "yil_kapanis_manuel_matris_df", pd.DataFrame()
+                )
+            )
+            if yk_matris_df.empty and client and desi_rev_id:
+                if (
+                    st.session_state.get("desi_tahmin_yk_matris_revizyon")
+                    != desi_rev_id
+                ):
+                    try:
+                        matris_kayitlari = supabase_revizyon_kayitlarini_getir(
+                            YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU, desi_rev_id
+                        )
+                    except Exception:
+                        matris_kayitlari = []
+                    st.session_state.desi_tahmin_yk_matris_df = (
+                        yil_kapanis_manuel_matrisini_hazirla(
+                            pd.DataFrame(matris_kayitlari)
+                        )
+                    )
+                    st.session_state.desi_tahmin_yk_matris_revizyon = (
+                        desi_rev_id
+                    )
+                yk_matris_df = st.session_state.get(
+                    "desi_tahmin_yk_matris_df", yk_matris_df
+                )
+            if yk_matris_df.empty:
+                st.warning(
+                    "Yıl Kapanış sayfasında yüzde matrisi bulunamadı (oturumda "
+                    "ve seçili revizyonun bulut kaydında). Yıl Kapanış "
+                    "sayfasında matrisi yükleyip yılını buluta kaydedin."
+                )
+        yk_matris_yillari = {
+            int(yil) for yil in pd.to_numeric(
+                yk_matris_df["Yıl"], errors="coerce"
+            ).dropna().tolist()
+        }
+        if yk_matris_yillari:
+            st.caption(
+                "Yıl Kapanış yüzde matrisi olan yıllar: "
+                + ", ".join(map(str, sorted(yk_matris_yillari)))
+            )
+
         kapanis_yillari = sorted({
             int(yil) for yil in pd.to_numeric(
                 kapanis_kaynak.get("Yıl", pd.Series(dtype=float)),
@@ -12095,7 +12185,7 @@ if sekme_acik_mi[12]:
                 tahmin_kg_kaynak.get("Yıl", pd.Series(dtype=float)),
                 errors="coerce"
             ).dropna().tolist()
-        })
+        } | yk_matris_yillari)
 
         if not kapanis_yillari:
             st.warning(
@@ -12149,7 +12239,9 @@ if sekme_acik_mi[12]:
                 uygun_referans_secenekleri,
                 default=kayitli_referanslar,
                 format_func=lambda yil: (
-                    f"{yil} (Yıl Kapanış)"
+                    f"{yil} (Yıl Kapanış matrisi)"
+                    if int(yil) in yk_matris_yillari
+                    else f"{yil} (Yıl Kapanış)"
                     if int(yil) in kapanis_referans_yillari
                     else f"{yil} (Gerçekleşen)"
                 ),
@@ -12166,7 +12258,8 @@ if sekme_acik_mi[12]:
                 st.error("Ortalama hesabı için en az bir referans yıl seçin.")
             else:
                 matrisler, tahmin_ortalama = desi_tahmin_ortalamasini_hesapla(
-                    tahmin_kg_kaynak, referans_yillar
+                    tahmin_kg_kaynak, referans_yillar,
+                    yk_matris_df if yk_matris_kullan else None
                 )
                 with st.expander("📊 Referans yıl dağılımları", expanded=False):
                     yuzde_config = {
@@ -12182,14 +12275,18 @@ if sekme_acik_mi[12]:
                         )
 
                 tahmin_baglam = desi_tahmin_manuel_baglami(
-                    desi_rev_id, kaynak_yil, referans_yillar
+                    desi_rev_id, kaynak_yil, referans_yillar, yk_matris_kullan
                 )
+                # Kayıtlı ortalama yalnızca aynı kaynak yıl, referans yıllar
+                # ve aynı matris seçimiyle kaydedildiyse kullanılır.
                 bulut_ayar_uygun = (
                     guvenli_tamsayi(
                         kayitli_desi_ayar.get("kaynak_yil")
                     ) == int(kaynak_yil)
                     and sorted(kayitli_referanslar)
                     == sorted(int(yil) for yil in referans_yillar)
+                    and bool(kayitli_desi_ayar.get("yil_kapanis_matrisi", False))
+                    == bool(yk_matris_kullan)
                 )
                 bulut_ortalama = st.session_state.get(
                     "desi_tahmin_bulut_ortalama_df", pd.DataFrame()
@@ -12481,12 +12578,22 @@ if sekme_acik_mi[12]:
                     ):
                         try:
                             ortalama_records = []
+                            referans_listesi = [
+                                int(yil) for yil in sorted(referans_yillar)
+                            ]
+                            # Matris seçimi açıksa nesne olarak saklanır;
+                            # kapalıyken eski liste biçimi korunur.
+                            referans_kaydi = (
+                                {
+                                    "yillar": referans_listesi,
+                                    "yil_kapanis_matrisi": True
+                                }
+                                if yk_matris_kullan else referans_listesi
+                            )
                             for _, row in tahmin_ortalama.iterrows():
                                 rec = {
                                     "revizyon_id": desi_rev_id,
-                                    "Referans Yıllar": [
-                                        int(yil) for yil in sorted(referans_yillar)
-                                    ],
+                                    "Referans Yıllar": referans_kaydi,
                                     "Kaynak Yıl": int(kaynak_yil),
                                     "Tahmin Yılı": int(tahmin_yili),
                                     **{
@@ -12541,9 +12648,8 @@ if sekme_acik_mi[12]:
                             st.session_state.desi_tahmin_bulut_ayarlari = {
                                 "kaynak_yil": int(kaynak_yil),
                                 "tahmin_yili": int(tahmin_yili),
-                                "referans_yillar": [
-                                    int(yil) for yil in sorted(referans_yillar)
-                                ]
+                                "referans_yillar": referans_listesi,
+                                "yil_kapanis_matrisi": bool(yk_matris_kullan)
                             }
                             st.success(
                                 f"{tahmin_yili} Desi tahmini seçili revizyona "
