@@ -3581,7 +3581,7 @@ def desi_tahmin_detayini_hazirla(dataframe):
         ["Kaynak Yıl Toplam Desi", "Tahmini Yıl Toplam Desi"]
         + yil_kapanis_detay_ay_sutunlari
     ):
-        sonuc[col] = desi_kg_serisini_yuvarla(sonuc[col])
+        sonuc[col] = desi_kg_serisini_uc_ondalik_yuvarla(sonuc[col])
     for col in [
         "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
         "Esk. Enf. Başlangıç Tarihi"
@@ -3623,7 +3623,7 @@ def desi_tahmin_detayini_hesapla(
     sonuc = kapanis[yil_kapanis_detay_kimlik_sutunlari].copy()
     sonuc["Kaynak Uniq ID"] = kapanis["Uniq ID"].apply(temiz_metin)
     sonuc["Kaynak Yıl"] = int(kaynak_yil)
-    sonuc["Kaynak Yıl Toplam Desi"] = desi_kg_serisini_yuvarla(
+    sonuc["Kaynak Yıl Toplam Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(
         kaynak_toplam
     )
     sonuc["Yıl"] = tahmin_yili
@@ -3656,14 +3656,14 @@ def desi_tahmin_detayini_hesapla(
             if yontem == "aylik"
             else kaynak_toplam.to_numpy() * aylik_pay
         )
-        sonuc[f"{ay} Desi"] = desi_kg_serisini_yuvarla(pd.Series(
+        sonuc[f"{ay} Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(pd.Series(
             aylik_taban * gun_katsayisi * (1.0 + aylik_buyume),
             index=sonuc.index
         ))
 
-    sonuc["Tahmini Yıl Toplam Desi"] = sonuc[
-        yil_kapanis_detay_ay_sutunlari
-    ].sum(axis=1)
+    sonuc["Tahmini Yıl Toplam Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(
+        sonuc[yil_kapanis_detay_ay_sutunlari].sum(axis=1)
+    )
     eslesmeyen = int((~musteri_kodlari.isin(set(buyume_haritasi))).sum())
     return (
         sonuc.reindex(columns=desi_tahmin_detay_sutunlari), eslesmeyen
@@ -3773,7 +3773,7 @@ def desi_tahmin_manuel_degerlerini_uygula(detay_df, baglam):
             continue
         for col, value in degisiklikler.items():
             if col in yil_kapanis_detay_ay_sutunlari:
-                sonuc.at[idx, col] = desi_kg_tam_sayiya_yuvarla(value)
+                sonuc.at[idx, col] = desi_kg_uc_ondalik_yuvarla(value)
     sonuc["Tahmini Yıl Toplam Desi"] = sonuc[
         yil_kapanis_detay_ay_sutunlari
     ].sum(axis=1)
@@ -3803,8 +3803,8 @@ def desi_tahmin_manuel_degisikliklerini_kaydet(
             continue
         satir_ayarlari = ayarlar.setdefault(uniq_id, {})
         for col in yil_kapanis_detay_ay_sutunlari:
-            yeni = desi_kg_tam_sayiya_yuvarla(row.get(col))
-            eski = desi_kg_tam_sayiya_yuvarla(onceki.at[uniq_id, col])
+            yeni = desi_kg_uc_ondalik_yuvarla(row.get(col))
+            eski = desi_kg_uc_ondalik_yuvarla(onceki.at[uniq_id, col])
             if not np.isclose(yeni, eski):
                 satir_ayarlari[col] = yeni
                 degisti = True
@@ -12357,7 +12357,7 @@ if sekme_acik_mi[12]:
                                 ham = {}
                         if isinstance(ham, dict) and ham:
                             manuel_harita[temiz_metin(row.get("Uniq ID"))] = {
-                                col: desi_kg_tam_sayiya_yuvarla(value)
+                                col: desi_kg_uc_ondalik_yuvarla(value)
                                 for col, value in ham.items()
                                 if col in yil_kapanis_detay_ay_sutunlari
                             }
@@ -12565,7 +12565,7 @@ if sekme_acik_mi[12]:
                     detay_config = {
                         **{
                             col: st.column_config.NumberColumn(
-                                col, format="localized", step=1
+                                col, format="localized"
                             )
                             for col in (
                                 ["Kaynak Yıl Toplam Desi"]
@@ -12609,12 +12609,16 @@ if sekme_acik_mi[12]:
                         detay_onceki, detay_editor, tahmin_baglam
                     )
                     for col in yil_kapanis_detay_ay_sutunlari:
-                        detay_editor[col] = desi_kg_serisini_yuvarla(
+                        detay_editor[col] = desi_kg_serisini_uc_ondalik_yuvarla(
                             detay_editor[col]
                         )
-                    detay_editor["Tahmini Yıl Toplam Desi"] = detay_editor[
-                        yil_kapanis_detay_ay_sutunlari
-                    ].sum(axis=1)
+                    detay_editor["Tahmini Yıl Toplam Desi"] = (
+                        desi_kg_serisini_uc_ondalik_yuvarla(
+                            detay_editor[yil_kapanis_detay_ay_sutunlari].sum(
+                                axis=1
+                            )
+                        )
+                    )
                     tahmin_detay_sonuc = detay_editor.reindex(
                         columns=desi_tahmin_detay_sutunlari
                     )
@@ -12642,7 +12646,7 @@ if sekme_acik_mi[12]:
                         height=82,
                         column_config={
                             col: st.column_config.NumberColumn(
-                                col, format="localized", step=1
+                                col, format="localized"
                             )
                             for col in (
                                 ["Kaynak Yıl Toplam Desi"]
