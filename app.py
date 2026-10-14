@@ -3635,6 +3635,56 @@ def desi_tahmin_manuel_baglami(
     return baglam + "|ykm" if yil_kapanis_matrisi else baglam
 
 
+def desi_tahmin_durum2_uygula(detay_df, musteri_kartlari):
+    """Durum'u Yeni-Bütçe kartlarındaki Durum_2 ile günceller.
+
+    Kartında Durum_2 GEÇERLİ/GEÇERSİZ olan müşteride satırın Durum'u o değer
+    olur; Durum_2 boşsa veya kart yoksa dosyadaki Durum korunur. Durum_2
+    GEÇERSİZ olan müşterinin satırları tabloda kalır ama aylık tahminleri ve
+    yıl toplamı 0 olur (toplamlara, buluta ve Data_New'e 0 gider).
+    Döndürür: (güncel tablo, GEÇERSİZ müşteri sayısı).
+    """
+    if detay_df is None or detay_df.empty:
+        return detay_df, 0
+    sonuc = detay_df.copy()
+    if (
+        not isinstance(musteri_kartlari, pd.DataFrame)
+        or musteri_kartlari.empty
+        or not {"Müşteri Kodu", "Durum_2"}.issubset(musteri_kartlari.columns)
+    ):
+        return sonuc, 0
+
+    def durum_normalize(value):
+        metin = temiz_metin(value)
+        return metin.translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
+
+    kart = pd.DataFrame({
+        "kod": seri_benzersiz_uygula(
+            musteri_kartlari["Müşteri Kodu"], guvenli_metin_kodu
+        ).to_numpy(),
+        "durum": seri_benzersiz_uygula(
+            musteri_kartlari["Durum_2"], durum_normalize
+        ).to_numpy()
+    })
+    kart = kart[
+        (kart["kod"] != "") & kart["durum"].isin(["GEÇERLİ", "GEÇERSİZ"])
+    ].drop_duplicates("kod", keep="last")
+    if kart.empty:
+        return sonuc, 0
+    durum_haritasi = dict(zip(kart["kod"], kart["durum"]))
+    kodlar = seri_benzersiz_uygula(sonuc["Müşteri Kodu"], guvenli_metin_kodu)
+    kart_durumu = kodlar.map(durum_haritasi)
+    sonuc["Durum"] = kart_durumu.where(kart_durumu.notna(), sonuc["Durum"])
+    gecersiz = (kart_durumu == "GEÇERSİZ").fillna(False).to_numpy(dtype=bool)
+    if gecersiz.any():
+        sifirlanacak = [
+            col for col in yil_kapanis_detay_ay_sutunlari
+            + ["Tahmini Yıl Toplam Desi"] if col in sonuc.columns
+        ]
+        sonuc.loc[gecersiz, sifirlanacak] = 0.0
+    return sonuc, int(kodlar[gecersiz].nunique())
+
+
 def desi_tahmin_referans_ayarini_coz(ham):
     """Bulut "Referans Yıllar" değerini (eski: liste, yeni: nesne) çözer."""
     if isinstance(ham, str):
@@ -12528,6 +12578,14 @@ if sekme_acik_mi[12]:
                 hesaplanan_detay = desi_tahmin_manuel_degerlerini_uygula(
                     hesaplanan_detay, tahmin_baglam
                 )
+                # Durum, Yeni-Bütçe kartlarındaki Durum_2 ile güncellenir;
+                # GEÇERSİZ müşterilerin tahmini 0 olur (satırlar kalır).
+                desi_musteri_kartlari = musteri_kaynagini_getir("desi_tahmin")
+                hesaplanan_detay, gecersiz_musteri_sayisi = (
+                    desi_tahmin_durum2_uygula(
+                        hesaplanan_detay, desi_musteri_kartlari
+                    )
+                )
 
                 st.subheader(f"🧮 {tahmin_yili} Desi Tahmini")
                 st.caption(
@@ -12546,6 +12604,13 @@ if sekme_acik_mi[12]:
                     st.warning(
                         f"{buyume_eslesmeyen:,} satırın müşteri kodu büyüme "
                         "kartlarıyla eşleşmedi; bu satırlarda büyüme %0 kullanıldı."
+                    )
+                if gecersiz_musteri_sayisi:
+                    st.info(
+                        f"{gecersiz_musteri_sayisi:,} müşteri Yeni-Bütçe "
+                        "kartındaki Durum_2'ye göre GEÇERSİZ; satırları "
+                        "tabloda gösterilir ama tahminleri 0'dır ve "
+                        "toplamlara dahil edilmez."
                     )
 
                 if hesaplanan_detay.empty:
@@ -12631,6 +12696,10 @@ if sekme_acik_mi[12]:
                     ].sum(axis=1)
                     tahmin_detay_sonuc = detay_editor.reindex(
                         columns=desi_tahmin_detay_sutunlari
+                    )
+                    # Editörde GEÇERSİZ bir satıra değer yazılsa da 0 kalır.
+                    tahmin_detay_sonuc, _ = desi_tahmin_durum2_uygula(
+                        tahmin_detay_sonuc, desi_musteri_kartlari
                     )
 
                     for col in (
