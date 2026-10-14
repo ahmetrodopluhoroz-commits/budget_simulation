@@ -3291,7 +3291,7 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
     ):
         return False
     onceki = onceki_df.copy()
-    onceki["Uniq ID"] = onceki["Uniq ID"].apply(temiz_metin)
+    onceki["Uniq ID"] = seri_benzersiz_uygula(onceki["Uniq ID"], temiz_metin)
     onceki = onceki.drop_duplicates("Uniq ID", keep="last").set_index(
         "Uniq ID"
     )
@@ -3302,34 +3302,65 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
         "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
         "Esk. Enf. Başlangıç Tarihi"
     ]
+    # 86 bin satırı hücre hücre gezmek yerine tablo bir kerede karşılaştırılır;
+    # yalnızca gerçekten değişen hücreler dolaşılır (sonuç aynı).
+    uniq_idler = seri_benzersiz_uygula(
+        duzenlenen_df["Uniq ID"], temiz_metin
+    ).reset_index(drop=True)
+    gecerli = (
+        (uniq_idler != "") & uniq_idler.isin(onceki.index)
+    ).to_numpy()
+    if not gecerli.any():
+        return False
+    duzenlenen = duzenlenen_df.reset_index(drop=True).loc[gecerli]
+    uniq_idler = uniq_idler.loc[gecerli].to_numpy()
+    eslesen_onceki = onceki.loc[uniq_idler]
+
+    def sutun(df, col):
+        if col in df.columns:
+            return df[col].reset_index(drop=True)
+        return pd.Series([None] * len(df), dtype=object)
+
+    def tarihe_cevir(seri):
+        if pd.api.types.is_datetime64_any_dtype(seri):
+            return pd.to_datetime(seri, errors="coerce")
+        return pd.to_datetime(
+            seri_benzersiz_uygula(
+                seri,
+                lambda v: pd.to_datetime(v, errors="coerce", dayfirst=True)
+            ),
+            errors="coerce"
+        )
+
     degisti = False
-    for _, row in duzenlenen_df.iterrows():
-        uniq_id = temiz_metin(row.get("Uniq ID"))
-        if not uniq_id or uniq_id not in onceki.index:
-            continue
-        satir_ayarlari = ayarlar.setdefault(uniq_id, {})
-        for col in yil_kapanis_detay_ay_sutunlari:
-            yeni = desi_kg_uc_ondalik_yuvarla(row.get(col))
-            eski = desi_kg_uc_ondalik_yuvarla(onceki.at[uniq_id, col])
-            if not np.isclose(yeni, eski):
-                satir_ayarlari.setdefault(f"__onceki__{col}", eski)
-                satir_ayarlari[col] = yeni
-                degisti = True
-        for col in tarih_sutunlari:
-            yeni = pd.to_datetime(row.get(col), errors="coerce", dayfirst=True)
-            eski = pd.to_datetime(
-                onceki.at[uniq_id, col], errors="coerce", dayfirst=True
+    for col in yil_kapanis_detay_ay_sutunlari:
+        yeni = desi_kg_serisini_uc_ondalik_yuvarla(
+            sutun(duzenlenen, col)
+        ).to_numpy(dtype=float)
+        eski = desi_kg_serisini_uc_ondalik_yuvarla(
+            sutun(eslesen_onceki, col)
+        ).to_numpy(dtype=float)
+        for i in np.flatnonzero(~np.isclose(yeni, eski)):
+            satir_ayarlari = ayarlar.setdefault(uniq_idler[i], {})
+            satir_ayarlari.setdefault(f"__onceki__{col}", float(eski[i]))
+            satir_ayarlari[col] = float(yeni[i])
+            degisti = True
+    for col in tarih_sutunlari:
+        yeni = tarihe_cevir(sutun(duzenlenen, col))
+        eski = tarihe_cevir(sutun(eslesen_onceki, col))
+        ayni = (yeni.isna() & eski.isna()) | (
+            yeni.notna() & eski.notna()
+            & (yeni.dt.normalize() == eski.dt.normalize())
+        )
+        for i in np.flatnonzero(~ayni.to_numpy()):
+            deger = yeni.iloc[i]
+            satir_ayarlari = ayarlar.setdefault(uniq_idler[i], {})
+            satir_ayarlari[col] = (
+                None if pd.isna(deger) else deger.date().isoformat()
             )
-            ayni = (pd.isna(yeni) and pd.isna(eski)) or (
-                not pd.isna(yeni) and not pd.isna(eski)
-                and yeni.normalize() == eski.normalize()
-            )
-            if not ayni:
-                satir_ayarlari[col] = (
-                    None if pd.isna(yeni) else yeni.date().isoformat()
-                )
-                degisti = True
-        if not satir_ayarlari:
+            degisti = True
+    for uniq_id in set(uniq_idler):
+        if uniq_id in ayarlar and not ayarlar[uniq_id]:
             ayarlar.pop(uniq_id, None)
     return degisti
 
