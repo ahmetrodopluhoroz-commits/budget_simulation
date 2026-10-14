@@ -3291,7 +3291,7 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
     ):
         return False
     onceki = onceki_df.copy()
-    onceki["Uniq ID"] = onceki["Uniq ID"].apply(temiz_metin)
+    onceki["Uniq ID"] = seri_benzersiz_uygula(onceki["Uniq ID"], temiz_metin)
     onceki = onceki.drop_duplicates("Uniq ID", keep="last").set_index(
         "Uniq ID"
     )
@@ -3302,34 +3302,65 @@ def yil_kapanis_manuel_degisikliklerini_kaydet(
         "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
         "Esk. Enf. Başlangıç Tarihi"
     ]
+    # 86 bin satırı hücre hücre gezmek yerine tablo bir kerede karşılaştırılır;
+    # yalnızca gerçekten değişen hücreler dolaşılır (sonuç aynı).
+    uniq_idler = seri_benzersiz_uygula(
+        duzenlenen_df["Uniq ID"], temiz_metin
+    ).reset_index(drop=True)
+    gecerli = (
+        (uniq_idler != "") & uniq_idler.isin(onceki.index)
+    ).to_numpy()
+    if not gecerli.any():
+        return False
+    duzenlenen = duzenlenen_df.reset_index(drop=True).loc[gecerli]
+    uniq_idler = uniq_idler.loc[gecerli].to_numpy()
+    eslesen_onceki = onceki.loc[uniq_idler]
+
+    def sutun(df, col):
+        if col in df.columns:
+            return df[col].reset_index(drop=True)
+        return pd.Series([None] * len(df), dtype=object)
+
+    def tarihe_cevir(seri):
+        if pd.api.types.is_datetime64_any_dtype(seri):
+            return pd.to_datetime(seri, errors="coerce")
+        return pd.to_datetime(
+            seri_benzersiz_uygula(
+                seri,
+                lambda v: pd.to_datetime(v, errors="coerce", dayfirst=True)
+            ),
+            errors="coerce"
+        )
+
     degisti = False
-    for _, row in duzenlenen_df.iterrows():
-        uniq_id = temiz_metin(row.get("Uniq ID"))
-        if not uniq_id or uniq_id not in onceki.index:
-            continue
-        satir_ayarlari = ayarlar.setdefault(uniq_id, {})
-        for col in yil_kapanis_detay_ay_sutunlari:
-            yeni = desi_kg_uc_ondalik_yuvarla(row.get(col))
-            eski = desi_kg_uc_ondalik_yuvarla(onceki.at[uniq_id, col])
-            if not np.isclose(yeni, eski):
-                satir_ayarlari.setdefault(f"__onceki__{col}", eski)
-                satir_ayarlari[col] = yeni
-                degisti = True
-        for col in tarih_sutunlari:
-            yeni = pd.to_datetime(row.get(col), errors="coerce", dayfirst=True)
-            eski = pd.to_datetime(
-                onceki.at[uniq_id, col], errors="coerce", dayfirst=True
+    for col in yil_kapanis_detay_ay_sutunlari:
+        yeni = desi_kg_serisini_uc_ondalik_yuvarla(
+            sutun(duzenlenen, col)
+        ).to_numpy(dtype=float)
+        eski = desi_kg_serisini_uc_ondalik_yuvarla(
+            sutun(eslesen_onceki, col)
+        ).to_numpy(dtype=float)
+        for i in np.flatnonzero(~np.isclose(yeni, eski)):
+            satir_ayarlari = ayarlar.setdefault(uniq_idler[i], {})
+            satir_ayarlari.setdefault(f"__onceki__{col}", float(eski[i]))
+            satir_ayarlari[col] = float(yeni[i])
+            degisti = True
+    for col in tarih_sutunlari:
+        yeni = tarihe_cevir(sutun(duzenlenen, col))
+        eski = tarihe_cevir(sutun(eslesen_onceki, col))
+        ayni = (yeni.isna() & eski.isna()) | (
+            yeni.notna() & eski.notna()
+            & (yeni.dt.normalize() == eski.dt.normalize())
+        )
+        for i in np.flatnonzero(~ayni.to_numpy()):
+            deger = yeni.iloc[i]
+            satir_ayarlari = ayarlar.setdefault(uniq_idler[i], {})
+            satir_ayarlari[col] = (
+                None if pd.isna(deger) else deger.date().isoformat()
             )
-            ayni = (pd.isna(yeni) and pd.isna(eski)) or (
-                not pd.isna(yeni) and not pd.isna(eski)
-                and yeni.normalize() == eski.normalize()
-            )
-            if not ayni:
-                satir_ayarlari[col] = (
-                    None if pd.isna(yeni) else yeni.date().isoformat()
-                )
-                degisti = True
-        if not satir_ayarlari:
+            degisti = True
+    for uniq_id in set(uniq_idler):
+        if uniq_id in ayarlar and not ayarlar[uniq_id]:
             ayarlar.pop(uniq_id, None)
     return degisti
 
@@ -3602,6 +3633,56 @@ def desi_tahmin_manuel_baglami(
     ])
     # Yıl Kapanış matrisleriyle yapılan manuel düzeltmeler ayrı tutulur.
     return baglam + "|ykm" if yil_kapanis_matrisi else baglam
+
+
+def desi_tahmin_durum2_uygula(detay_df, musteri_kartlari):
+    """Durum'u Yeni-Bütçe kartlarındaki Durum_2 ile günceller.
+
+    Kartında Durum_2 GEÇERLİ/GEÇERSİZ olan müşteride satırın Durum'u o değer
+    olur; Durum_2 boşsa veya kart yoksa dosyadaki Durum korunur. Durum_2
+    GEÇERSİZ olan müşterinin satırları tabloda kalır ama aylık tahminleri ve
+    yıl toplamı 0 olur (toplamlara, buluta ve Data_New'e 0 gider).
+    Döndürür: (güncel tablo, GEÇERSİZ müşteri sayısı).
+    """
+    if detay_df is None or detay_df.empty:
+        return detay_df, 0
+    sonuc = detay_df.copy()
+    if (
+        not isinstance(musteri_kartlari, pd.DataFrame)
+        or musteri_kartlari.empty
+        or not {"Müşteri Kodu", "Durum_2"}.issubset(musteri_kartlari.columns)
+    ):
+        return sonuc, 0
+
+    def durum_normalize(value):
+        metin = temiz_metin(value)
+        return metin.translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
+
+    kart = pd.DataFrame({
+        "kod": seri_benzersiz_uygula(
+            musteri_kartlari["Müşteri Kodu"], guvenli_metin_kodu
+        ).to_numpy(),
+        "durum": seri_benzersiz_uygula(
+            musteri_kartlari["Durum_2"], durum_normalize
+        ).to_numpy()
+    })
+    kart = kart[
+        (kart["kod"] != "") & kart["durum"].isin(["GEÇERLİ", "GEÇERSİZ"])
+    ].drop_duplicates("kod", keep="last")
+    if kart.empty:
+        return sonuc, 0
+    durum_haritasi = dict(zip(kart["kod"], kart["durum"]))
+    kodlar = seri_benzersiz_uygula(sonuc["Müşteri Kodu"], guvenli_metin_kodu)
+    kart_durumu = kodlar.map(durum_haritasi)
+    sonuc["Durum"] = kart_durumu.where(kart_durumu.notna(), sonuc["Durum"])
+    gecersiz = (kart_durumu == "GEÇERSİZ").fillna(False).to_numpy(dtype=bool)
+    if gecersiz.any():
+        sifirlanacak = [
+            col for col in yil_kapanis_detay_ay_sutunlari
+            + ["Tahmini Yıl Toplam Desi"] if col in sonuc.columns
+        ]
+        sonuc.loc[gecersiz, sifirlanacak] = 0.0
+    return sonuc, int(kodlar[gecersiz].nunique())
 
 
 def desi_tahmin_referans_ayarini_coz(ham):
@@ -12497,6 +12578,14 @@ if sekme_acik_mi[12]:
                 hesaplanan_detay = desi_tahmin_manuel_degerlerini_uygula(
                     hesaplanan_detay, tahmin_baglam
                 )
+                # Durum, Yeni-Bütçe kartlarındaki Durum_2 ile güncellenir;
+                # GEÇERSİZ müşterilerin tahmini 0 olur (satırlar kalır).
+                desi_musteri_kartlari = musteri_kaynagini_getir("desi_tahmin")
+                hesaplanan_detay, gecersiz_musteri_sayisi = (
+                    desi_tahmin_durum2_uygula(
+                        hesaplanan_detay, desi_musteri_kartlari
+                    )
+                )
 
                 st.subheader(f"🧮 {tahmin_yili} Desi Tahmini")
                 st.caption(
@@ -12515,6 +12604,13 @@ if sekme_acik_mi[12]:
                     st.warning(
                         f"{buyume_eslesmeyen:,} satırın müşteri kodu büyüme "
                         "kartlarıyla eşleşmedi; bu satırlarda büyüme %0 kullanıldı."
+                    )
+                if gecersiz_musteri_sayisi:
+                    st.info(
+                        f"{gecersiz_musteri_sayisi:,} müşteri Yeni-Bütçe "
+                        "kartındaki Durum_2'ye göre GEÇERSİZ; satırları "
+                        "tabloda gösterilir ama tahminleri 0'dır ve "
+                        "toplamlara dahil edilmez."
                     )
 
                 if hesaplanan_detay.empty:
@@ -12600,6 +12696,10 @@ if sekme_acik_mi[12]:
                     ].sum(axis=1)
                     tahmin_detay_sonuc = detay_editor.reindex(
                         columns=desi_tahmin_detay_sutunlari
+                    )
+                    # Editörde GEÇERSİZ bir satıra değer yazılsa da 0 kalır.
+                    tahmin_detay_sonuc, _ = desi_tahmin_durum2_uygula(
+                        tahmin_detay_sonuc, desi_musteri_kartlari
                     )
 
                     for col in (
