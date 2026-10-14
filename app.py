@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import functools
 import io
 import json
 import os
@@ -1212,8 +1213,65 @@ def desi_kg_uc_ondalik_yuvarla(value):
     )
 
 
+def seri_benzersiz_uygula(seri, fonksiyon):
+    """Hücre başına pahalı dönüşümü her benzersiz değer için bir kez çalıştırır.
+
+    86 bin satırlık detayda müşteri kodu, şube, grup gibi değerler binlerce
+    kez tekrarlanır; sonuç seri.apply(fonksiyon) ile birebir aynıdır. Eşleme
+    (tip, değer) ile yapılır ki 1 ile 1.0 gibi değerler karışmasın.
+    """
+    if not isinstance(seri, pd.Series) or seri.empty:
+        return pd.Series(seri).apply(fonksiyon)
+    eksik = seri.isna().to_numpy()
+    try:
+        degerler = seri.to_numpy(dtype=object)
+        harita = {}
+        sonuc = []
+        bos_sonuc = None
+        for deger, bos in zip(degerler, eksik):
+            if bos:
+                if bos_sonuc is None:
+                    bos_sonuc = (fonksiyon(deger),)
+                sonuc.append(bos_sonuc[0])
+                continue
+            anahtar = (type(deger), deger)
+            if anahtar not in harita:
+                harita[anahtar] = fonksiyon(deger)
+            sonuc.append(harita[anahtar])
+    except TypeError:
+        # Hash'lenemeyen değer (liste, sözlük) varsa güvenli yola dön.
+        return seri.apply(fonksiyon)
+    return pd.Series(sonuc, index=seri.index, dtype=object)
+
+
 def desi_kg_serisini_uc_ondalik_yuvarla(seri):
-    return seri.apply(desi_kg_uc_ondalik_yuvarla).astype(float)
+    """desi_kg_uc_ondalik_yuvarla'nın vektörel karşılığı (sonuç birebir aynı).
+
+    Sayılar 1000 ile çarpılıp YUVARLA (yarım yukarı, sıfırdan uzağa) ile
+    yuvarlanır. Kayan nokta nedeniyle tam ,5 sınırında belirsiz kalan az
+    sayıdaki değer Decimal ile hücre bazında yuvarlanır.
+    """
+    seri = pd.Series(seri)
+    if pd.api.types.is_numeric_dtype(seri) and not pd.api.types.is_bool_dtype(
+        seri
+    ):
+        x = seri.astype(float).to_numpy(copy=True)
+    else:
+        x = seri_benzersiz_uygula(seri, nullable_sayi).to_numpy(dtype=object)
+        x = np.array(
+            [np.nan if v is None else float(v) for v in x], dtype=float
+        )
+    x = np.where(np.isfinite(x), x, 0.0)
+    y = np.abs(x) * 1000.0
+    alt = np.floor(y)
+    kesir = y - alt
+    yuvarli = np.where(kesir >= 0.5, alt + 1.0, alt)
+    sonuc = np.copysign(yuvarli / 1000.0, x)
+    belirsiz = np.abs(kesir - 0.5) < (1e-6 + y * 1e-14)
+    for i in np.flatnonzero(belirsiz):
+        sonuc[i] = desi_kg_uc_ondalik_yuvarla(float(x[i]))
+    sonuc[sonuc == 0] = 0.0
+    return pd.Series(sonuc, index=seri.index, dtype=float)
 
 
 def temiz_metin(value, varsayilan=""):
@@ -1858,6 +1916,34 @@ def yil_kapanis_grup_adi(value):
     # adlarında KLİMA / MOBİLYA gibi değerlerin tekilleşmesi için önce çevir.
     grup = grup.translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
     return grup or "DİĞER"
+
+
+def _degere_gore_onbellekle(fonksiyon, boyut=200_000):
+    """Saf dönüşüm fonksiyonlarını sınırlı ve tipe duyarlı önbellekle sarar.
+
+    86 bin satırlık tablolarda aynı kod/şube/grup/sayı değerleri binlerce kez
+    tekrar dönüştürülüyordu. typed=True ile 1, 1.0 ve "1" ayrı tutulur;
+    hash'lenemeyen girdiler doğrudan asıl fonksiyona gider. Boyut sınırı
+    sunucu belleğinin büyümesini engeller.
+    """
+    onbellekli = functools.lru_cache(maxsize=boyut, typed=True)(fonksiyon)
+
+    @functools.wraps(fonksiyon)
+    def sarmal(*args, **kwargs):
+        try:
+            return onbellekli(*args, **kwargs)
+        except TypeError:
+            return fonksiyon(*args, **kwargs)
+
+    return sarmal
+
+
+guvenli_sayi = _degere_gore_onbellekle(guvenli_sayi)
+guvenli_tamsayi = _degere_gore_onbellekle(guvenli_tamsayi)
+guvenli_metin_kodu = _degere_gore_onbellekle(guvenli_metin_kodu)
+nullable_sayi = _degere_gore_onbellekle(nullable_sayi)
+temiz_metin = _degere_gore_onbellekle(temiz_metin)
+yil_kapanis_grup_adi = _degere_gore_onbellekle(yil_kapanis_grup_adi)
 
 
 def musteri_ilk_dolu_deger(seri, varsayilan=""):
@@ -2779,7 +2865,8 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
             sonuc[col] = np.nan if col == "Yıl" else ""
 
     if "Yıl" in kaynak.columns:
-        sonuc["Yıl"] = kaynak["Yıl"].apply(
+        sonuc["Yıl"] = seri_benzersiz_uygula(
+            kaynak["Yıl"],
             lambda value: guvenli_tamsayi(value, nullable=True)
         )
     else:
@@ -2791,8 +2878,8 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
         return pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
     sonuc["Yıl"] = sonuc["Yıl"].astype(int)
 
-    sonuc["Müşteri Kodu"] = sonuc["Müşteri Kodu"].apply(
-        guvenli_metin_kodu
+    sonuc["Müşteri Kodu"] = seri_benzersiz_uygula(
+        sonuc["Müşteri Kodu"], guvenli_metin_kodu
     )
     sonuc = sonuc[sonuc["Müşteri Kodu"] != ""].copy()
     sonuc = guncel_musteri_gruplarini_uygula(sonuc)
@@ -2801,7 +2888,7 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
         "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi",
         "Müşteri Adı", "Müşteri Temsilcisi", "Sap Kodu", "Durum"
     ]:
-        sonuc[col] = sonuc[col].apply(temiz_metin)
+        sonuc[col] = seri_benzersiz_uygula(sonuc[col], temiz_metin)
     for col in [
         "Kayıt Tarihi", "Esk. Yakıt Başlangıç Tarihi",
         "Esk. Enf. Başlangıç Tarihi"
@@ -2827,9 +2914,10 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
             data_new_kaynak_maskesi = (
                 kaynak_yil_serisi == sonuc["Yıl"]
             ).fillna(False)
-            hedef.loc[data_new_kaynak_maskesi] = kaynak.loc[
-                data_new_kaynak_maskesi, data_new_kaynak_col
-            ].apply(guvenli_sayi).astype(float)
+            hedef.loc[data_new_kaynak_maskesi] = seri_benzersiz_uygula(
+                kaynak.loc[data_new_kaynak_maskesi, data_new_kaynak_col],
+                guvenli_sayi
+            ).astype(float)
         for yil in sonuc["Yıl"].dropna().astype(int).unique():
             yil_maskesi = (sonuc["Yıl"] == yil) & (~data_new_kaynak_maskesi)
             adaylar = [
@@ -2840,37 +2928,39 @@ def yil_kapanis_detayini_hazirla(dataframe, varsayilan_yil=None):
                 (col for col in adaylar if col in kaynak.columns), None
             )
             if kaynak_col:
-                hedef.loc[yil_maskesi] = (
-                    kaynak.loc[yil_maskesi, kaynak_col]
-                    .apply(guvenli_sayi).astype(float)
-                )
+                hedef.loc[yil_maskesi] = seri_benzersiz_uygula(
+                    kaynak.loc[yil_maskesi, kaynak_col], guvenli_sayi
+                ).astype(float)
         sonuc[f"{ay} Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(hedef)
 
-    uniq_ham = sonuc["Uniq ID"].apply(temiz_metin)
+    uniq_ham = seri_benzersiz_uygula(sonuc["Uniq ID"], temiz_metin)
     uniq_parcalari = [
         "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
         "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
         "İlk Okutma Şubesi", "Müşteri Kodu"
     ]
-    olusturulan_uniq = sonuc[uniq_parcalari].fillna("").astype(str).agg(
-        "".join, axis=1
-    )
+    # Satır satır "".join yerine sütunları birleştir (sonuç aynı).
+    uniq_metinleri = sonuc[uniq_parcalari].fillna("").astype(str)
+    olusturulan_uniq = uniq_metinleri[uniq_parcalari[0]]
+    for parca in uniq_parcalari[1:]:
+        olusturulan_uniq = olusturulan_uniq + uniq_metinleri[parca]
     sonuc["Uniq ID"] = uniq_ham.where(uniq_ham != "", olusturulan_uniq)
     # Buluttan çağrılan kapanış detayında daha önce kaydedilmiş manuel
     # gerçekleşen/yıl sonu toplamlarını koru. Ham operasyon dosyasında bu
     # alanlar yoksa ilk toplam aylardan oluşturulur.
     if "Gerçekleşen Toplam Desi" in kaynak.columns:
-        sonuc["Gerçekleşen Toplam Desi"] = kaynak.loc[
-            sonuc.index, "Gerçekleşen Toplam Desi"
-        ].apply(guvenli_sayi).astype(float)
+        sonuc["Gerçekleşen Toplam Desi"] = seri_benzersiz_uygula(
+            kaynak.loc[sonuc.index, "Gerçekleşen Toplam Desi"], guvenli_sayi
+        ).astype(float)
     else:
         sonuc["Gerçekleşen Toplam Desi"] = sonuc[
             yil_kapanis_detay_ay_sutunlari
         ].sum(axis=1)
     if "Tahmini Yıl Sonu Toplam Desi" in kaynak.columns:
-        sonuc["Tahmini Yıl Sonu Toplam Desi"] = kaynak.loc[
-            sonuc.index, "Tahmini Yıl Sonu Toplam Desi"
-        ].apply(guvenli_sayi).astype(float)
+        sonuc["Tahmini Yıl Sonu Toplam Desi"] = seri_benzersiz_uygula(
+            kaynak.loc[sonuc.index, "Tahmini Yıl Sonu Toplam Desi"],
+            guvenli_sayi
+        ).astype(float)
     else:
         sonuc["Tahmini Yıl Sonu Toplam Desi"] = sonuc[
             yil_kapanis_detay_ay_sutunlari
@@ -10248,9 +10338,13 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                         if len(ham_detay) <= 20000:
                             st.download_button(
                                 "📥 Ham Detay Tablosunu Excel İndir",
-                                data=yil_kapanis_detay_excel_verisi(
-                                    ham_detay, "HAM DETAY"
+                                # Dosya yalnızca butona basılınca üretilir.
+                                data=lambda df=ham_detay: (
+                                    yil_kapanis_detay_excel_verisi(
+                                        df, "HAM DETAY"
+                                    )
                                 ),
+                                on_click="ignore",
                                 file_name=(
                                     "yil_kapanis_ham_detay_"
                                     f"{int(kapanis_yili)}.xlsx"
@@ -10492,9 +10586,12 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                         if len(detay_sonuc) <= 20000:
                             st.download_button(
                                 "📥 Revize Detay Tablosunu Excel İndir",
-                                data=yil_kapanis_detay_excel_verisi(
-                                    detay_export_df, "REVİZE DETAY"
+                                data=lambda df=detay_export_df: (
+                                    yil_kapanis_detay_excel_verisi(
+                                        df, "REVİZE DETAY"
+                                    )
                                 ),
+                                on_click="ignore",
                                 file_name=(
                                     "yil_kapanis_revize_detay_"
                                     f"{int(kapanis_yili)}.xlsx"
@@ -10507,26 +10604,28 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                                 key="btn_yil_kapanis_revize_excel"
                             )
 
-                yk_excel = io.BytesIO()
-                with pd.ExcelWriter(yk_excel, engine="openpyxl") as writer:
-                    matris_1.to_excel(
-                        writer, index=False, sheet_name=str(yil_1)
-                    )
-                    matris_2.to_excel(
-                        writer, index=False, sheet_name=str(yil_2)
-                    )
-                    ortalama_gosterim.to_excel(
-                        writer, index=False, sheet_name="ORTALAMA"
-                    )
-                    if not detay_export_df.empty and len(detay_sonuc) <= 20000:
-                        detay_export_df.to_excel(
-                            writer, index=False, sheet_name="KAPANIŞ DETAY"
-                        )
+                def yil_kapanis_ozet_excel_verisi(
+                    m1=matris_1, m2=matris_2, ort=ortalama_gosterim,
+                    detay=detay_export_df, satir=len(detay_sonuc),
+                    y1=yil_1, y2=yil_2
+                ):
+                    """Özet Excel'i yalnızca indirme butonuna basılınca üretir."""
+                    yk_excel = io.BytesIO()
+                    with pd.ExcelWriter(yk_excel, engine="openpyxl") as writer:
+                        m1.to_excel(writer, index=False, sheet_name=str(y1))
+                        m2.to_excel(writer, index=False, sheet_name=str(y2))
+                        ort.to_excel(writer, index=False, sheet_name="ORTALAMA")
+                        if not detay.empty and satir <= 20000:
+                            detay.to_excel(
+                                writer, index=False, sheet_name="KAPANIŞ DETAY"
+                            )
+                    return yk_excel.getvalue()
 
                 yk1, yk_detay_indir = st.columns(2)
                 yk1.download_button(
                     "📥 Özet Excel İndir",
-                    data=yk_excel.getvalue(),
+                    data=yil_kapanis_ozet_excel_verisi,
+                    on_click="ignore",
                     file_name=f"yil_kapanis_{yil_1}_{yil_2}.xlsx",
                     mime=(
                         "application/vnd.openxmlformats-officedocument."
@@ -10537,15 +10636,16 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                 )
 
                 if not detay_sonuc.empty:
-                    detay_csv = detay_export_df.to_csv(
-                        index=False,
-                        sep=";",
-                        decimal=",",
-                        date_format="%d.%m.%Y"
-                    ).encode("utf-8-sig")
                     yk_detay_indir.download_button(
                         "📥 Detayı CSV İndir",
-                        data=detay_csv,
+                        # CSV yalnızca butona basılınca üretilir.
+                        data=lambda df=detay_export_df: df.to_csv(
+                            index=False,
+                            sep=";",
+                            decimal=",",
+                            date_format="%d.%m.%Y"
+                        ).encode("utf-8-sig"),
+                        on_click="ignore",
                         file_name=(
                             f"yil_kapanis_detay_{int(kapanis_yili)}.csv"
                         ),
