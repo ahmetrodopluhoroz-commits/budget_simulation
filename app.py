@@ -1918,23 +1918,28 @@ def yil_kapanis_grup_adi(value):
     return grup or "DİĞER"
 
 
-def _degere_gore_onbellekle(fonksiyon, boyut=200_000):
+def _degere_gore_onbellekle(fonksiyon, boyut=20_000):
     """Saf dönüşüm fonksiyonlarını sınırlı ve tipe duyarlı önbellekle sarar.
 
-    86 bin satırlık tablolarda aynı kod/şube/grup/sayı değerleri binlerce kez
-    tekrar dönüştürülüyordu. typed=True ile 1, 1.0 ve "1" ayrı tutulur;
-    hash'lenemeyen girdiler doğrudan asıl fonksiyona gider. Boyut sınırı
-    sunucu belleğinin büyümesini engeller.
+    86 bin satırlık tablolarda aynı kod/şube/grup metinleri binlerce kez
+    tekrar dönüştürülüyordu. Yalnızca metin girdiler önbelleğe alınır:
+    desi gibi sayılar neredeyse hep farklıdır, önbelleği fayda sağlamadan
+    doldurup sunucu belleğini büyütür. typed=True ile "1" ve 1 karışmaz;
+    hash'lenemeyen girdiler doğrudan asıl fonksiyona gider.
     """
     onbellekli = functools.lru_cache(maxsize=boyut, typed=True)(fonksiyon)
 
     @functools.wraps(fonksiyon)
     def sarmal(*args, **kwargs):
+        if not args or not isinstance(args[0], str):
+            return fonksiyon(*args, **kwargs)
         try:
             return onbellekli(*args, **kwargs)
         except TypeError:
             return fonksiyon(*args, **kwargs)
 
+    sarmal.cache_info = onbellekli.cache_info
+    sarmal.cache_clear = onbellekli.cache_clear
     return sarmal
 
 
@@ -2818,6 +2823,35 @@ def butce_tipi_dosyasini_oku(dataframe):
     harita = (
         work.drop_duplicates("kod", keep="last")
         .set_index("kod")["tip"].to_dict()
+    )
+    return harita, taninmayan
+
+
+def durum2_dosyasini_oku(dataframe):
+    """Dosyada Durum_2 sütunu varsa {kod: GEÇERLİ/GEÇERSİZ} üretir.
+
+    Boş Durum_2 hücreleri atlanır (o müşterinin kartı değişmez).
+    """
+    df = sutun_adlarini_standartlastir(dataframe)
+    durum_kolonu = next(
+        (c for c in df.columns if c.casefold() == "durum_2"), None
+    )
+    if "Müşteri Kodu" not in df.columns or durum_kolonu is None:
+        return {}, []
+    work = pd.DataFrame({
+        "kod": df["Müşteri Kodu"].apply(guvenli_metin_kodu),
+        "ham": df[durum_kolonu].apply(temiz_metin),
+    })
+    work = work[(work["kod"] != "") & (work["ham"] != "")]
+    work["durum"] = work["ham"].apply(
+        lambda v: v.translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
+        .replace("GECERSIZ", "GEÇERSİZ").replace("GECERLI", "GEÇERLİ")
+    )
+    gecerli = work["durum"].isin(["GEÇERLİ", "GEÇERSİZ"])
+    taninmayan = sorted(work.loc[~gecerli, "ham"].unique())
+    harita = (
+        work[gecerli].drop_duplicates("kod", keep="last")
+        .set_index("kod")["durum"].to_dict()
     )
     return harita, taninmayan
 
@@ -5626,7 +5660,9 @@ if sekme_acik_mi[2]:
             "gibi başlıklarla olabilir. Değerler 01.Yeni Müşteri, "
             "02.DOP Bütçe Dışı, 03.Bütçelenen (veya 1/2/3, Yeni, DOP, "
             "Evet/Hayır) şeklinde yazılabilir. Bu dosya diğer kaynaklardan "
-            "gelen tip bilgisinin önüne geçer."
+            "gelen tip bilgisinin önüne geçer. Dosyada Durum_2 sütunu da "
+            "varsa dolu olan GEÇERLİ/GEÇERSİZ değerleri müşteri kartlarına "
+            "yazılır; boş Durum_2 hücreleri kartı değiştirmez."
         )
         yuklenen_butce_tipi = st.file_uploader(
             "Bütçelenen bilgisi dosyasını yükleyin",
@@ -5637,8 +5673,12 @@ if sekme_acik_mi[2]:
             butce_imzasi = yuklenen_dosya_imzasi(yuklenen_butce_tipi)
             if butce_imzasi != st.session_state.musteri_butce_tipi_upload_imzasi:
                 try:
+                    butce_tablosu = yuklenen_tabloyu_oku(yuklenen_butce_tipi)
                     butce_haritasi, taninmayan = butce_tipi_dosyasini_oku(
-                        yuklenen_tabloyu_oku(yuklenen_butce_tipi)
+                        butce_tablosu
+                    )
+                    durum2_haritasi, taninmayan_durum = durum2_dosyasini_oku(
+                        butce_tablosu
                     )
                     if not butce_haritasi:
                         raise ValueError(
@@ -5660,6 +5700,19 @@ if sekme_acik_mi[2]:
                             }
                         )
                         ayar[YENI_BUTCELENEN_KOLONU] = tip
+                    for m_kod, durum in durum2_haritasi.items():
+                        ayar = st.session_state.musteri_ayarlari.setdefault(
+                            m_kod,
+                            {
+                                "Yeni/Bütçelenen Müşteri": (
+                                    butce_haritasi.get(m_kod, "03.Bütçelenen")
+                                ),
+                                "Durum_2": durum,
+                                "Durum_3": "",
+                                "Serbest Not": ""
+                            }
+                        )
+                        ayar["Durum_2"] = durum
 
                     eslesen = 0
                     if not ham_df.empty:
@@ -5673,6 +5726,16 @@ if sekme_acik_mi[2]:
                             yeni_tip.notna(),
                             ham_guncel[YENI_BUTCELENEN_KOLONU]
                         )
+                        if durum2_haritasi:
+                            yeni_durum = kodlar.map(durum2_haritasi)
+                            eski_durum = ham_guncel.get(
+                                "Durum_2",
+                                pd.Series(None, index=ham_guncel.index,
+                                          dtype=object)
+                            )
+                            ham_guncel["Durum_2"] = yeni_durum.where(
+                                yeni_durum.notna(), eski_durum
+                            )
                         st.session_state.musteri_ham_df = ham_guncel
 
                     st.session_state.musteri_butce_tipi_upload_imzasi = (
@@ -5688,10 +5751,26 @@ if sekme_acik_mi[2]:
                         "kartlarıyla eşleşti). "
                         + " | ".join(f"{k}: {v:,}" for k, v in dagilim.items())
                     )
+                    if durum2_haritasi:
+                        durum_dagilim = pd.Series(
+                            durum2_haritasi
+                        ).value_counts()
+                        st.success(
+                            f"{len(durum2_haritasi):,} müşterinin Durum_2 "
+                            "bilgisi güncellendi. "
+                            + " | ".join(
+                                f"{k}: {v:,}" for k, v in durum_dagilim.items()
+                            )
+                        )
                     if taninmayan:
                         st.warning(
                             "Tanınmayan bütçe değerleri atlandı: "
                             + ", ".join(map(str, taninmayan[:10]))
+                        )
+                    if taninmayan_durum:
+                        st.warning(
+                            "Tanınmayan Durum_2 değerleri atlandı: "
+                            + ", ".join(map(str, taninmayan_durum[:10]))
                         )
                 except Exception as ex:
                     st.error(f"Bütçelenen bilgisi dosyası işlenemedi: {ex}")
@@ -10386,40 +10465,72 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                                 "yüklendiği için ham operasyon verisi yok; "
                                 "kayıtlı sonuç gösteriliyor."
                             )
-                        ham_detay = yil_kapanis_detayini_hazirla(
-                            kapanacak_detay
-                        )
-                        if not ham_detay.empty and not detay_buluttan_final:
-                            ham_detay["Gerçekleşen Toplam Desi"] = ham_detay[
-                                [
-                                    f"{ay} Desi"
-                                    for ay in aylar[
-                                        :aylar.index(son_gerceklesen_ay) + 1
+
+                        def ham_detayi_hazirla(kaynak_df):
+                            ham = yil_kapanis_detayini_hazirla(kaynak_df)
+                            if not ham.empty and not detay_buluttan_final:
+                                ham["Gerçekleşen Toplam Desi"] = ham[
+                                    [
+                                        f"{ay} Desi"
+                                        for ay in aylar[
+                                            :aylar.index(son_gerceklesen_ay) + 1
+                                        ]
                                     ]
-                                ]
-                            ].sum(axis=1)
-                            ham_detay["Tahmini Yıl Sonu Toplam Desi"] = (
-                                ham_detay[yil_kapanis_detay_ay_sutunlari]
-                                .sum(axis=1)
+                                ].sum(axis=1)
+                                ham["Tahmini Yıl Sonu Toplam Desi"] = ham[
+                                    yil_kapanis_detay_ay_sutunlari
+                                ].sum(axis=1)
+                            return ham.reindex(
+                                columns=yil_kapanis_detay_sutunlari
                             )
-                        ham_detay = ham_detay.reindex(
-                            columns=yil_kapanis_detay_sutunlari
+
+                        # Bellek: 86 bin satırı tarayıcıya göndermek tek
+                        # başına ~350 MB tutuyordu (Streamlit Cloud sınırı
+                        # ~1 GB). Ham tablo seçili müşteriler için gösterilir;
+                        # tam tablo yalnızca indirmede üretilir.
+                        ham_kodlar = seri_benzersiz_uygula(
+                            kapanacak_detay["Müşteri Kodu"], guvenli_metin_kodu
+                        )
+                        ham_adlar = (
+                            pd.DataFrame({
+                                "kod": ham_kodlar.to_numpy(),
+                                "ad": kapanacak_detay.get(
+                                    "Müşteri Adı",
+                                    pd.Series("", index=kapanacak_detay.index)
+                                ).astype(str).to_numpy()
+                            })
+                            .drop_duplicates("kod").set_index("kod")["ad"]
+                        )
+                        ham_secili = st.multiselect(
+                            "Ham satırlarını görmek istediğiniz müşteriler",
+                            sorted(ham_adlar.index),
+                            format_func=lambda kod: (
+                                f"{kod} - {ham_adlar.get(kod, '')}"
+                            ),
+                            placeholder="Müşteri kodu veya adıyla arayın",
+                            key="yil_kapanis_ham_musteri_secimi"
                         )
                         st.caption(
-                            "Yüklenen veri; tahmin ve manuel değişiklik "
-                            "içermez, düzenlenemez."
+                            f"Yüklenen veri ({len(kapanacak_detay):,} satır, "
+                            f"{len(ham_adlar):,} müşteri); tahmin ve manuel "
+                            "değişiklik içermez, düzenlenemez. Tamamı aşağıdaki "
+                            "CSV ile indirilebilir."
                         )
-                        st.dataframe(
-                            ham_detay,
-                            use_container_width=True,
-                            hide_index=True,
-                            height=520,
-                            column_config=detay_column_config
-                        )
-                        if len(ham_detay) <= 20000:
+                        if ham_secili:
+                            ham_detay = ham_detayi_hazirla(
+                                kapanacak_detay.loc[
+                                    ham_kodlar.isin(ham_secili).to_numpy()
+                                ]
+                            )
+                            st.dataframe(
+                                ham_detay,
+                                use_container_width=True,
+                                hide_index=True,
+                                height=min(520, 38 * (len(ham_detay) + 1) + 4),
+                                column_config=detay_column_config
+                            )
                             st.download_button(
-                                "📥 Ham Detay Tablosunu Excel İndir",
-                                # Dosya yalnızca butona basılınca üretilir.
+                                "📥 Seçili Müşterilerin Ham Detayını Excel İndir",
                                 data=lambda df=ham_detay: (
                                     yil_kapanis_detay_excel_verisi(
                                         df, "HAM DETAY"
@@ -10427,7 +10538,7 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                                 ),
                                 on_click="ignore",
                                 file_name=(
-                                    "yil_kapanis_ham_detay_"
+                                    "yil_kapanis_ham_detay_secili_"
                                     f"{int(kapanis_yili)}.xlsx"
                                 ),
                                 mime=(
@@ -10438,10 +10549,27 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                                 key="btn_yil_kapanis_ham_excel"
                             )
                         else:
-                            st.caption(
-                                "20.000 satırı aşan tablo Excel yerine "
-                                "aşağıdaki CSV ile indirilebilir."
+                            st.info(
+                                "Ham satırları görmek için yukarıdan bir veya "
+                                "birkaç müşteri seçin."
                             )
+                        st.download_button(
+                            "📥 Ham Detayın Tamamını CSV İndir",
+                            # Tam ham tablo yalnızca butona basılınca üretilir.
+                            data=lambda kaynak_df=kapanacak_detay: (
+                                ham_detayi_hazirla(kaynak_df).to_csv(
+                                    index=False, sep=";", decimal=",",
+                                    date_format="%d.%m.%Y"
+                                ).encode("utf-8-sig")
+                            ),
+                            on_click="ignore",
+                            file_name=(
+                                f"yil_kapanis_ham_detay_{int(kapanis_yili)}.csv"
+                            ),
+                            mime="text/csv",
+                            use_container_width=True,
+                            key="btn_yil_kapanis_ham_csv"
+                        )
 
                     with yk_revize_tab:
                         st.caption(
