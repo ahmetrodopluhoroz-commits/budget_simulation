@@ -12224,10 +12224,9 @@ if sekme_acik_mi[12]:
         st.title("🔮 Desi Tahminleme")
         musteri_kaynak_secicisi("desi_tahmin")
         st.caption(
-            "Yıl Kapanışında tamamlanan yılı; müşterinin aylık büyümesi ve "
-            "YYtoYY çalışma günü katsayısıyla bir sonraki yıla taşır. Aylık "
-            "yöntemde her satırın kendi aylık değerleri, dağılım yönteminde "
-            "satır toplamı × referans yılların aylık dağılımı kullanılır."
+            "Yıl Kapanışında tamamlanan yılın her satırını ay ay bir sonraki "
+            "yıla taşır: kaynak yılın aynı ayı × YYtoYY çalışma günü "
+            "katsayısı × (1 + müşterinin o ayki büyümesi)."
         )
 
         desi_rev_id = sayfa_aktif_revizyonunu_getir()
@@ -12420,140 +12419,20 @@ if sekme_acik_mi[12]:
                 "buluttan getir butonunu kullanın."
             )
 
-        tarihsel_kg = kg_musteri_verisini_hazirla(
-            st.session_state.get("data_sayfası_df", pd.DataFrame())
-        )
-        guncel_kg = kg_musteri_verisini_hazirla(
-            st.session_state.get("df_2026_buyume_9", pd.DataFrame()),
-            varsayilan_yil=2026
-        )
         kapanis_kaynak = st.session_state.get(
             "yil_kapanis_detay_bulut_df", pd.DataFrame()
         )
-        kapanis_referans_kg = yil_kapanis_detayindan_kg_musteri(
-            kapanis_kaynak
-        )
-        # Kesinleşmiş kapanış en sona alınır; aynı müşteri-yılın kısmi
-        # gerçekleşen kaydının üzerine yazılır.
-        tahmin_kg_kaynak = kg_musteri_kaynaklarini_birlestir(
-            tarihsel_kg, guncel_kg,
-            st.session_state.get("yil_kapanis_kg_df", pd.DataFrame()),
-            kapanis_referans_kg
-        )
-
-        desi_yontemleri = {
-            "aylik": "Kaynak yılın aylık değerleri",
-            "dagilim": "Referans yılların grup dağılımı",
-        }
-        varsayilan_yontem = st.session_state.get(
-            "desi_tahmin_bulut_ayarlari", {}
-        ).get("yontem") or "aylik"
-        desi_yontem = st.radio(
-            "Hesaplama yöntemi",
-            list(desi_yontemleri),
-            index=list(desi_yontemleri).index(
-                varsayilan_yontem
-                if varsayilan_yontem in desi_yontemleri else "aylik"
-            ),
-            format_func=desi_yontemleri.get,
-            horizontal=True,
-            key="desi_tahmin_yontem",
-            help=(
-                "Aylık: ay = kaynak yılın aynı ayı × çalışma günü × "
-                "(1 + büyüme); satırın kendi mevsimselliği korunur. "
-                "Dağılım: ay = kaynak yıl toplamı × grubun aylık payı × "
-                "çalışma günü × (1 + büyüme)."
-            )
-        )
-        aylik_yontem = desi_yontem == "aylik"
-
-        # Yıl Kapanış sayfasındaki yüzde matrisleri (ör. 2024/2025 Excel'i):
-        # yeniden yüklemeden referans yıl olarak kullanılabilir.
-        yk_matris_kullan = st.checkbox(
-            "Yıl Kapanış sayfasındaki yüzde matrislerini kullan",
-            value=bool(
-                st.session_state.get("desi_tahmin_bulut_ayarlari", {}).get(
-                    "yil_kapanis_matrisi", False
-                )
-            ),
-            key="desi_tahmin_yil_kapanis_matrisi",
-            disabled=aylik_yontem,
-            help=(
-                "Açıkken Yıl Kapanış sayfasında yüklenen/girilen aylık yüzde "
-                "matrisi olan yıllar (ör. 2024, 2025) referans yıl olarak "
-                "seçilebilir ve o yıllarda Kg'dan hesaplanan dağılımın yerine "
-                "matris kullanılır. Ortalama, seçtiğiniz bütün referans "
-                "yılların aritmetik ortalamasıdır."
-            )
-        ) and not aylik_yontem
-        yk_matris_df = pd.DataFrame(columns=yil_kapanis_manuel_matris_sutunlari)
-        if yk_matris_kullan:
-            yk_matris_df = yil_kapanis_manuel_matrisini_hazirla(
-                st.session_state.get(
-                    "yil_kapanis_manuel_matris_df", pd.DataFrame()
-                )
-            )
-            if yk_matris_df.empty and client and desi_rev_id:
-                if (
-                    st.session_state.get("desi_tahmin_yk_matris_revizyon")
-                    != desi_rev_id
-                ):
-                    try:
-                        matris_kayitlari = supabase_revizyon_kayitlarini_getir(
-                            YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU, desi_rev_id
-                        )
-                    except Exception:
-                        matris_kayitlari = []
-                    st.session_state.desi_tahmin_yk_matris_df = (
-                        yil_kapanis_manuel_matrisini_hazirla(
-                            pd.DataFrame(matris_kayitlari)
-                        )
-                    )
-                    st.session_state.desi_tahmin_yk_matris_revizyon = (
-                        desi_rev_id
-                    )
-                yk_matris_df = st.session_state.get(
-                    "desi_tahmin_yk_matris_df", yk_matris_df
-                )
-            if yk_matris_df.empty:
-                st.warning(
-                    "Yıl Kapanış sayfasında yüzde matrisi bulunamadı (oturumda "
-                    "ve seçili revizyonun bulut kaydında). Yıl Kapanış "
-                    "sayfasında matrisi yükleyip yılını buluta kaydedin."
-                )
-        yk_matris_yillari = {
-            int(yil) for yil in pd.to_numeric(
-                yk_matris_df["Yıl"], errors="coerce"
-            ).dropna().tolist()
-        }
-        if yk_matris_yillari:
-            st.caption(
-                "Yıl Kapanış yüzde matrisi olan yıllar: "
-                + ", ".join(map(str, sorted(yk_matris_yillari)))
-            )
-
         kapanis_yillari = sorted({
             int(yil) for yil in pd.to_numeric(
                 kapanis_kaynak.get("Yıl", pd.Series(dtype=float)),
                 errors="coerce"
             ).dropna().tolist()
         })
-        referans_secenekleri = sorted({
-            int(yil) for yil in pd.to_numeric(
-                tahmin_kg_kaynak.get("Yıl", pd.Series(dtype=float)),
-                errors="coerce"
-            ).dropna().tolist()
-        } | yk_matris_yillari)
 
         if not kapanis_yillari:
             st.warning(
                 "Önce Yıl Kapanış sonucunu buluta kaydedin. Tahminin kaynak "
                 "yılı yil_kapanis_detay_tablosu kayıtlarından alınır."
-            )
-        elif not referans_secenekleri and not aylik_yontem:
-            st.warning(
-                "Aylık dağılım için Müşteri-Kg geçmişi bulunamadı. Yıl Kapanış "
-                "sayfasından kaynak yılları yükleyip buluta kaydedin."
             )
         else:
             kayitli_desi_ayar = st.session_state.get(
@@ -12563,7 +12442,7 @@ if sekme_acik_mi[12]:
             if varsayilan_kaynak not in kapanis_yillari:
                 varsayilan_kaynak = kapanis_yillari[-1]
 
-            ds1, ds2, ds3 = st.columns([1, 2, 1])
+            ds1, ds2 = st.columns(2)
             kaynak_yil = ds1.selectbox(
                 "Kapanmış kaynak yıl",
                 kapanis_yillari,
@@ -12571,173 +12450,34 @@ if sekme_acik_mi[12]:
                 key="desi_tahmin_kaynak_yil"
             )
             tahmin_yili = int(kaynak_yil) + 1
-            ds3.metric("Tahmin yılı", tahmin_yili)
+            ds2.metric("Tahmin yılı", tahmin_yili)
 
-            uygun_referans_secenekleri = [
-                yil for yil in referans_secenekleri
-                if int(yil) <= int(kaynak_yil)
-            ]
-            kapanis_referans_yillari = {
-                int(yil) for yil in pd.to_numeric(
-                    kapanis_referans_kg.get(
-                        "Yıl", pd.Series(dtype=float)
-                    ), errors="coerce"
-                ).dropna().tolist()
-            }
-
-            kayitli_referanslar = [
-                int(yil) for yil in kayitli_desi_ayar.get(
-                    "referans_yillar", []
-                ) if int(yil) in uygun_referans_secenekleri
-            ]
-            if not kayitli_referanslar:
-                kayitli_referanslar = uygun_referans_secenekleri[-2:]
-            referans_yillar = ds2.multiselect(
-                "Aylık dağılım için referans yıllar",
-                uygun_referans_secenekleri,
-                default=kayitli_referanslar,
-                format_func=lambda yil: (
-                    f"{yil} (Yıl Kapanış matrisi)"
-                    if int(yil) in yk_matris_yillari
-                    else f"{yil} (Yıl Kapanış)"
-                    if int(yil) in kapanis_referans_yillari
-                    else f"{yil} (Gerçekleşen)"
-                ),
-                key="desi_tahmin_referans_yillari",
-                disabled=aylik_yontem,
-                help="Yalnızca dağılım yönteminde kullanılır."
-            )
-            if kapanis_referans_yillari:
-                st.caption(
-                    "Yıl Kapanış etiketi taşıyan yıllarda kesinleşmiş kapanış "
-                    "verisi, kısmi gerçekleşen kaydının önüne geçer. Hedef yıl "
-                    "referans seçilemez."
-                )
-
-            if not referans_yillar and not aylik_yontem:
-                st.error("Ortalama hesabı için en az bir referans yıl seçin.")
-            else:
-                matrisler, tahmin_ortalama = desi_tahmin_ortalamasini_hesapla(
-                    tahmin_kg_kaynak, referans_yillar,
-                    yk_matris_df if yk_matris_kullan else None
-                )
-                if not aylik_yontem:
-                    with st.expander("📊 Referans yıl dağılımları", expanded=False):
-                        yuzde_config = {
-                            ay: st.column_config.NumberColumn(
-                                ay, format="%.2f%%"
-                            ) for ay in aylar
-                        }
-                        for yil, matris in matrisler.items():
-                            st.markdown(f"**{yil} aylık dağılımı**")
-                            st.dataframe(
-                                matris, use_container_width=True, hide_index=True,
-                                column_config=yuzde_config
-                            )
-
+            with st.container():
+                # Tek yöntem: ay = kaynak yılın aynı ayı × çalışma günü
+                # katsayısı × (1 + aylık büyüme). Referans yıl/dağılım yok.
+                desi_yontem = "aylik"
+                referans_yillar = []
+                yk_matris_kullan = False
                 tahmin_baglam = desi_tahmin_manuel_baglami(
-                    desi_rev_id, kaynak_yil, referans_yillar, yk_matris_kullan,
+                    desi_rev_id, kaynak_yil, referans_yillar, False,
                     desi_yontem
                 )
-                # Kayıtlı ortalama yalnızca aynı kaynak yıl, referans yıllar
-                # ve aynı matris seçimiyle kaydedildiyse kullanılır.
-                bulut_ayar_uygun = (
-                    guvenli_tamsayi(
-                        kayitli_desi_ayar.get("kaynak_yil")
-                    ) == int(kaynak_yil)
-                    and sorted(kayitli_referanslar)
-                    == sorted(int(yil) for yil in referans_yillar)
-                    and bool(kayitli_desi_ayar.get("yil_kapanis_matrisi", False))
-                    == bool(yk_matris_kullan)
-                )
-                bulut_ortalama = st.session_state.get(
-                    "desi_tahmin_bulut_ortalama_df", pd.DataFrame()
-                )
-                if bulut_ayar_uygun and not bulut_ortalama.empty:
-                    bulut_harita = bulut_ortalama.drop_duplicates(
-                        "Müşteri Grubu", keep="last"
-                    ).set_index("Müşteri Grubu")
-                    for idx, row in tahmin_ortalama.iterrows():
-                        grup = row["Müşteri Grubu"]
-                        if grup not in bulut_harita.index:
-                            continue
-                        for ay in aylar:
-                            col = f"{ay} (%)"
-                            tahmin_ortalama.at[idx, col] = guvenli_sayi(
-                                bulut_harita.at[grup, col]
-                            )
-
-                oturum_ortalama = (
-                    st.session_state.desi_tahmin_ortalama_manuel_ayarlari.get(
-                        tahmin_baglam, {}
+                # Bulut kaydında ayarlar ortalama tablosunun satırlarında
+                # tutulduğu için grup başına bir ayar satırı üretilir.
+                kaynak_gruplari = sorted({
+                    yil_kapanis_grup_adi(grup)
+                    for grup in kapanis_kaynak.get(
+                        "Müşteri Grubu", pd.Series(dtype=object)
                     )
-                )
-                for idx, row in tahmin_ortalama.iterrows():
-                    grup = row["Müşteri Grubu"]
-                    for col, value in oturum_ortalama.get(grup, {}).items():
-                        if col in [f"{ay} (%)" for ay in aylar]:
-                            tahmin_ortalama.at[idx, col] = guvenli_sayi(value)
-                tahmin_ortalama["Toplam (%)"] = tahmin_ortalama[
-                    [f"{ay} (%)" for ay in aylar]
-                ].sum(axis=1)
-
-                if not aylik_yontem:
-                    st.subheader("📌 Düzenlenebilir Aylık Dağılım Ortalaması")
-                    ortalama_onceki = tahmin_ortalama.copy()
-                    ortalama_editor_config = {
-                        **{
-                            f"{ay} (%)": st.column_config.NumberColumn(
-                                ay, format="%.2f%%"
-                            ) for ay in aylar
-                        },
-                        "Toplam (%)": st.column_config.NumberColumn(
-                            "Toplam (%)", format="%.2f%%"
-                        )
+                }) or ["DİĞER"]
+                tahmin_ortalama = pd.DataFrame([
+                    {
+                        "Müşteri Grubu": grup,
+                        **{f"{ay} (%)": 100.0 / len(aylar) for ay in aylar},
+                        "Toplam (%)": 100.0
                     }
-                    tahmin_ortalama_editor = st.data_editor(
-                        tahmin_ortalama,
-                        use_container_width=True,
-                        hide_index=True,
-                        num_rows="fixed",
-                        disabled=["Müşteri Grubu", "Toplam (%)"],
-                        column_config=ortalama_editor_config,
-                        key=(
-                            "desi_tahmin_ortalama_editor_v1_"
-                            f"{st.session_state.desi_tahmin_editor_surumu}_"
-                            + hashlib.sha1(tahmin_baglam.encode("utf-8")).hexdigest()[:12]
-                        )
-                    )
-
-                    manuel_ortalama = (
-                        st.session_state.desi_tahmin_ortalama_manuel_ayarlari
-                        .setdefault(tahmin_baglam, {})
-                    )
-                    onceki_ortalama_harita = ortalama_onceki.set_index(
-                        "Müşteri Grubu"
-                    )
-                    for _, row in tahmin_ortalama_editor.iterrows():
-                        grup = temiz_metin(row.get("Müşteri Grubu"))
-                        grup_ayarlari = manuel_ortalama.setdefault(grup, {})
-                        for ay in aylar:
-                            col = f"{ay} (%)"
-                            yeni = guvenli_sayi(row.get(col))
-                            eski = guvenli_sayi(
-                                onceki_ortalama_harita.at[grup, col]
-                            )
-                            if not np.isclose(yeni, eski):
-                                grup_ayarlari[col] = yeni
-                    for col in [f"{ay} (%)" for ay in aylar]:
-                        tahmin_ortalama_editor[col] = pd.to_numeric(
-                            tahmin_ortalama_editor[col], errors="coerce"
-                        ).fillna(0.0)
-                    tahmin_ortalama_editor["Toplam (%)"] = (
-                        tahmin_ortalama_editor[
-                            [f"{ay} (%)" for ay in aylar]
-                        ].sum(axis=1)
-                    )
-                    tahmin_ortalama = tahmin_ortalama_editor.reindex(
-                        columns=desi_tahmin_ortalama_sutunlari
-                    )
+                    for grup in kaynak_gruplari
+                ]).reindex(columns=desi_tahmin_ortalama_sutunlari)
 
                 gun_oranlari, gun_etiketi, gun_bulundu = (
                     desi_tahmin_calisma_gunu_oranlari(
@@ -12772,17 +12512,9 @@ if sekme_acik_mi[12]:
                 st.subheader(f"🧮 {tahmin_yili} Desi Tahmini")
                 st.caption(
                     f"Kaynak kapanış yılı: {kaynak_yil} · "
-                    + (
-                        f"Çalışma günü katsayısı: {gun_etiketi} · "
-                        f"Formül: {kaynak_yil} aynı ay × çalışma günü "
-                        "katsayısı × (1 + aylık müşteri büyümesi)."
-                        if aylik_yontem else
-                        "Referans yıllar: "
-                        f"{', '.join(map(str, sorted(referans_yillar)))} · "
-                        f"Çalışma günü katsayısı: {gun_etiketi} · "
-                        "Formül: kaynak yıl toplamı × aylık pay × çalışma "
-                        "günü katsayısı × (1 + aylık müşteri büyümesi)."
-                    )
+                    f"Çalışma günü katsayısı: {gun_etiketi} · "
+                    f"Formül: {kaynak_yil} aynı ay × çalışma günü "
+                    "katsayısı × (1 + aylık müşteri büyümesi)."
                 )
                 if not gun_bulundu:
                     st.warning(
@@ -12932,14 +12664,6 @@ if sekme_acik_mi[12]:
                     with pd.ExcelWriter(
                         excel_buffer, engine="openpyxl"
                     ) as writer:
-                        for yil, matris in matrisler.items():
-                            matris.to_excel(
-                                writer, index=False,
-                                sheet_name=f"Dağılım {yil}"[:31]
-                            )
-                        tahmin_ortalama.to_excel(
-                            writer, index=False, sheet_name="Ortalama"
-                        )
                         tahmin_detay_sonuc.to_excel(
                             writer, index=False,
                             sheet_name=f"{tahmin_yili} Desi Tahmini"[:31]
