@@ -8,6 +8,8 @@ import os
 import hashlib
 import inspect
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime
@@ -752,6 +754,23 @@ def revizyon_loglarini_getir():
     return sonuc.data or []
 
 client = get_supabase_client()
+_IS_PARCACIGI_ISTEMCILERI = threading.local()
+
+
+def is_parcacigi_istemcisi():
+    """Paralel istekler için iş parçacığına özel Supabase istemcisi.
+
+    Ortak istemci tek bir HTTP/2 bağlantısı kullanır; aynı bağlantıyı birden
+    fazla iş parçacığından kullanmak büyük yazma isteklerinde paketlerin
+    kopmasına yol açabildiği için her iş parçacığı kendi bağlantısını açar.
+    """
+    istemci = getattr(_IS_PARCACIGI_ISTEMCILERI, "istemci", None)
+    if istemci is None:
+        istemci = create_client(GIZLI_SUPABASE_URL, GIZLI_SUPABASE_KEY)
+        _IS_PARCACIGI_ISTEMCILERI.istemci = istemci
+    return istemci
+
+
 rev_secenekleri = {}
 revizyon_kayitlari = []
 revizyon_id_haritasi = {}
@@ -1713,30 +1732,42 @@ def json_kayitlarina_cevir(dataframe, sutunlar):
     return [dict(zip(sutunlar, satir)) for satir in zip(*kolon_degerleri)]
 
 
+SUPABASE_PARALEL_YAZMA_ISCI = 4
+SUPABASE_YAZMA_DENEME = 3
+
+
 def supabase_paketleri_paralel_yaz(
     yaz, kayitlar, paket_boyutu, ilerleme_callback=None, en_kucuk_paket=25
 ):
     """Kayıtları paketler halinde aynı anda birkaç istekle yazar.
 
-    Zaman aşımına (57014) düşen paket ikiye bölünüp yeniden denenir. İlerleme
+    yaz(paket) iş parçacığına özel istemciyi (is_parcacigi_istemcisi)
+    kullanmalıdır. Zaman aşımına (57014) düşen paket ikiye bölünür; bağlantı
+    kopması gibi diğer hatalarda paket kısa beklemeyle yeniden denenir. İlerleme
     bilgisi yalnızca ana iş parçacığından bildirilir (Streamlit için).
     """
     from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 
+    def dene(paket, deneme):
+        if deneme:
+            time.sleep(1.5 * deneme)
+        return yaz(paket)
+
     toplam = len(kayitlar)
     bekleyen = [
-        kayitlar[i:i + paket_boyutu] for i in range(0, toplam, paket_boyutu)
+        (kayitlar[i:i + paket_boyutu], 0)
+        for i in range(0, toplam, paket_boyutu)
     ]
     tamamlanan = 0
-    with ThreadPoolExecutor(SUPABASE_PARALEL_ISCI) as havuz:
+    with ThreadPoolExecutor(SUPABASE_PARALEL_YAZMA_ISCI) as havuz:
         calisan = {}
         while bekleyen or calisan:
-            while bekleyen and len(calisan) < SUPABASE_PARALEL_ISCI:
-                paket = bekleyen.pop(0)
-                calisan[havuz.submit(yaz, paket)] = paket
+            while bekleyen and len(calisan) < SUPABASE_PARALEL_YAZMA_ISCI:
+                paket, deneme = bekleyen.pop(0)
+                calisan[havuz.submit(dene, paket, deneme)] = (paket, deneme)
             biten, _ = wait(list(calisan), return_when=FIRST_COMPLETED)
             for gorev in biten:
-                paket = calisan.pop(gorev)
+                paket, deneme = calisan.pop(gorev)
                 try:
                     gorev.result()
                 except Exception as ex:
@@ -1747,7 +1778,12 @@ def supabase_paketleri_paralel_yaz(
                     )
                     if zaman_asimi and len(paket) > en_kucuk_paket:
                         yari = len(paket) // 2
-                        bekleyen[:0] = [paket[:yari], paket[yari:]]
+                        bekleyen[:0] = [
+                            (paket[:yari], deneme), (paket[yari:], deneme)
+                        ]
+                        continue
+                    if deneme + 1 < SUPABASE_YAZMA_DENEME:
+                        bekleyen.insert(0, (paket, deneme + 1))
                         continue
                     for diger in calisan:
                         diger.cancel()
@@ -1756,6 +1792,14 @@ def supabase_paketleri_paralel_yaz(
                 if ilerleme_callback:
                     ilerleme_callback(tamamlanan, toplam)
     return tamamlanan
+
+
+def supabase_revizyon_satir_sayisi(tablo_adi, revizyon_id):
+    """Bir revizyonun buluttaki satır sayısı (kayıt doğrulaması için)."""
+    return (
+        client.table(tablo_adi).select("id", count="exact")
+        .eq("revizyon_id", revizyon_id).range(0, 0).execute()
+    ).count
 
 
 def supabase_revizyon_kayitlarini_getir(
@@ -1784,7 +1828,7 @@ def supabase_revizyon_kayitlarini_getir(
 
             def paketi_getir(bas):
                 return (
-                    client.table(tablo_adi)
+                    is_parcacigi_istemcisi().table(tablo_adi)
                     .select("*")
                     .eq("revizyon_id", revizyon_id)
                     .range(bas, bas + paket_boyutu - 1)
@@ -1917,7 +1961,7 @@ def yil_kapanis_detayini_parcali_buluta_kaydet(
         rec["updated_at"] = kayit_zamani
     supabase_paketleri_paralel_yaz(
         lambda paket: (
-            db_client.table(YIL_KAPANIS_DETAY_DB_TABLOSU)
+            is_parcacigi_istemcisi().table(YIL_KAPANIS_DETAY_DB_TABLOSU)
             .upsert(paket, on_conflict="kayit_anahtari")
             .execute()
         ),
@@ -11912,6 +11956,15 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                             1.0,
                             text=f"Detay aktarımı tamamlandı: {toplam:,} satır"
                         )
+                        buluttaki_satir = supabase_revizyon_satir_sayisi(
+                            YIL_KAPANIS_DETAY_DB_TABLOSU, aktif_yk_rev_id
+                        )
+                        if buluttaki_satir < toplam:
+                            raise RuntimeError(
+                                f"kayıt doğrulanamadı: bulutta "
+                                f"{buluttaki_satir:,} satır var, {toplam:,} "
+                                "bekleniyordu"
+                            )
                         detay_kaydedildi = True
                         if temizlik_hatasi is None:
                             st.session_state.yil_kapanis_kayit_mesaji = (
@@ -13326,6 +13379,27 @@ if sekme_acik_mi[12]:
                     f"{kayitli_kaynak_yil} · Tahmin yılı: {kayitli_tahmin_yili}"
                     f" · Kayıt: {zaman_metni(zamanlar.get('tahmin'))}"
                 )
+                kayitli_kapanis = st.session_state.get(
+                    "yil_kapanis_detay_bulut_df", pd.DataFrame()
+                )
+                kapanis_satir_sayisi = int((
+                    pd.to_numeric(
+                        kayitli_kapanis.get("Yıl", pd.Series(dtype=float)),
+                        errors="coerce"
+                    ) == int(kayitli_kaynak_yil)
+                ).sum())
+                if (
+                    kapanis_satir_sayisi
+                    and kapanis_satir_sayisi != len(kayitli_tahmin)
+                ):
+                    st.error(
+                        f"Kayıtlı tahmin eksik görünüyor: tahminde "
+                        f"{len(kayitli_tahmin):,} satır var, {kayitli_kaynak_yil}"
+                        f" Yıl Kapanış kaydında {kapanis_satir_sayisi:,} satır "
+                        "var. Önceki kayıt yarıda kalmış olabilir; "
+                        "'Yeniden hesapla / düzenle' ile tahmini hesaplayıp "
+                        "tekrar buluta kaydedin."
+                    )
                 if (
                     zamanlar.get("kapanis") is not None
                     and zamanlar.get("tahmin") is not None
@@ -13711,11 +13785,22 @@ if sekme_acik_mi[12]:
                                     manuel_ayarlar.get(uniq_id, {})
                                 )
                             supabase_paketleri_paralel_yaz(
-                                lambda paket: client.table(
+                                lambda paket: is_parcacigi_istemcisi().table(
                                     DESI_TAHMIN_DETAY_DB_TABLOSU
                                 ).insert(paket).execute(),
                                 records, 500
                             )
+                            # Kayıt yarım kalmışsa kayıtlı görünüme geçilmez.
+                            buluttaki_satir = supabase_revizyon_satir_sayisi(
+                                DESI_TAHMIN_DETAY_DB_TABLOSU, desi_rev_id
+                            )
+                            if buluttaki_satir != len(records):
+                                raise RuntimeError(
+                                    f"kayıt doğrulanamadı: bulutta "
+                                    f"{buluttaki_satir:,} satır var, "
+                                    f"{len(records):,} bekleniyordu. Lütfen "
+                                    "tekrar kaydedin"
+                                )
                             revizyonu_degistirildi_isaretle(desi_rev_id)
                             st.session_state.desi_tahmin_bulut_ortalama_df = (
                                 tahmin_ortalama.copy()
