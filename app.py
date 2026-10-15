@@ -1543,7 +1543,11 @@ def data_new_girdisini_hazirla(df_raw):
     uniq_df["Yıl"] = uniq_df["Yıl"].apply(lambda v: str(int(v)))
     for col in uniq_parcalari[1:]:
         uniq_df[col] = uniq_df[col].apply(temiz_metin)
-    df["Uniq ID"] = uniq_df.astype(str).agg("".join, axis=1)
+    uniq_metin = uniq_df.astype(str)
+    uniq_seri = uniq_metin[uniq_parcalari[0]]
+    for col in uniq_parcalari[1:]:
+        uniq_seri = uniq_seri + uniq_metin[col]
+    df["Uniq ID"] = uniq_seri.astype(object)
     df[DATA_NEW_KAYNAK_YIL_DB] = df["Yıl"].apply(
         lambda value: guvenli_tamsayi(value, nullable=False)
     )
@@ -3799,9 +3803,12 @@ def desi_tahmin_detayini_hesapla(
         "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
         "İlk Okutma Şubesi", "Müşteri Kodu"
     ]
-    sonuc["Uniq ID"] = sonuc[uniq_parcalari].fillna("").astype(str).agg(
-        "".join, axis=1
-    )
+    # Satır satır "".join yerine sütunlar bir kerede birleştirilir (aynı sonuç).
+    uniq_metin = sonuc[uniq_parcalari].fillna("").astype(str)
+    uniq_seri = uniq_metin[uniq_parcalari[0]]
+    for col in uniq_parcalari[1:]:
+        uniq_seri = uniq_seri + uniq_metin[col]
+    sonuc["Uniq ID"] = uniq_seri.astype(object)
 
     for ay in aylar:
         pay_haritasi = {
@@ -3811,8 +3818,12 @@ def desi_tahmin_detayini_hesapla(
         aylik_pay = satir_gruplari.map(pay_haritasi).fillna(0.0).to_numpy(
             dtype=float
         ) / 100.0
-        aylik_buyume = musteri_kodlari.map(
-            lambda kod: guvenli_sayi(buyume_haritasi.get(kod, {}).get(ay, 0.0))
+        ay_buyume_haritasi = {
+            kod: guvenli_sayi(oranlar.get(ay, 0.0))
+            for kod, oranlar in buyume_haritasi.items()
+        }
+        aylik_buyume = musteri_kodlari.map(ay_buyume_haritasi).fillna(
+            0.0
         ).to_numpy(dtype=float) / 100.0
         gun_katsayisi = guvenli_sayi(
             calisma_gunu_oranlari.get(ay, 1.0)
@@ -4203,9 +4214,12 @@ def desi_tahmin_manuel_degerlerini_uygula(detay_df, baglam):
     ayarlar = st.session_state.desi_tahmin_detay_manuel_ayarlari.get(
         baglam, {}
     )
-    index_haritasi = {
-        temiz_metin(value): idx for idx, value in sonuc["Uniq ID"].items()
-    }
+    if not ayarlar:
+        sonuc["Tahmini Yıl Toplam Desi"] = sonuc[
+            yil_kapanis_detay_ay_sutunlari
+        ].sum(axis=1)
+        return sonuc.reindex(columns=desi_tahmin_detay_sutunlari)
+    index_haritasi = dict(zip(seri_temiz_metin(sonuc["Uniq ID"]), sonuc.index))
     for uniq_id, degisiklikler in ayarlar.items():
         idx = index_haritasi.get(temiz_metin(uniq_id))
         if idx is None:
@@ -4235,20 +4249,32 @@ def desi_tahmin_manuel_degisikliklerini_kaydet(
     ayarlar = st.session_state.desi_tahmin_detay_manuel_ayarlari.setdefault(
         baglam, {}
     )
+    # 86 bin satır x 12 ay hücre hücre gezilmez; tablo bir kerede
+    # karşılaştırılır, yalnızca değişen hücreler dolaşılır (sonuç aynı).
+    uniq_idler = seri_temiz_metin(duzenlenen_df["Uniq ID"]).reset_index(
+        drop=True
+    )
+    gecerli = (
+        (uniq_idler != "") & uniq_idler.isin(onceki.index)
+    ).to_numpy()
+    if not gecerli.any():
+        return False
+    duzenlenen = duzenlenen_df.reset_index(drop=True).loc[gecerli]
+    uniq_idler = uniq_idler.loc[gecerli].to_numpy()
+    eslesen_onceki = onceki.loc[uniq_idler]
     degisti = False
-    for _, row in duzenlenen_df.iterrows():
-        uniq_id = temiz_metin(row.get("Uniq ID"))
-        if not uniq_id or uniq_id not in onceki.index:
+    for col in yil_kapanis_detay_ay_sutunlari:
+        if col not in duzenlenen.columns or col not in eslesen_onceki.columns:
             continue
-        satir_ayarlari = ayarlar.setdefault(uniq_id, {})
-        for col in yil_kapanis_detay_ay_sutunlari:
-            yeni = desi_kg_uc_ondalik_yuvarla(row.get(col))
-            eski = desi_kg_uc_ondalik_yuvarla(onceki.at[uniq_id, col])
-            if not np.isclose(yeni, eski):
-                satir_ayarlari[col] = yeni
-                degisti = True
-        if not satir_ayarlari:
-            ayarlar.pop(uniq_id, None)
+        yeni = desi_kg_serisini_uc_ondalik_yuvarla(
+            duzenlenen[col].reset_index(drop=True)
+        ).to_numpy(dtype=float)
+        eski = desi_kg_serisini_uc_ondalik_yuvarla(
+            eslesen_onceki[col].reset_index(drop=True)
+        ).to_numpy(dtype=float)
+        for i in np.flatnonzero(~np.isclose(yeni, eski)):
+            ayarlar.setdefault(uniq_idler[i], {})[col] = float(yeni[i])
+            degisti = True
     return degisti
 
 
@@ -9429,6 +9455,210 @@ if sekme_acik_mi[7]:
                         )
 
 # ------------------------------------------------------------
+# KAYITLI SONUÇ GÖRÜNÜMÜ VE HESAPLAMA ONAYI (Yıl Kapanış, Desi Tahminleme)
+# Revizyonda kayıtlı sonuç varsa sayfa hesap yapmadan onu gösterir; yeniden
+# hesaplama yalnızca onay penceresinde "Evet" denince başlar.
+# ------------------------------------------------------------
+@st.dialog("Onay")
+def onay_penceresi(mesaj, ayarlar, evet_etiketi="✅ Evet, hesapla"):
+    """Evet denirse ayarlar sözlüğündeki oturum değerlerini yazıp sayfayı
+    yeniler; Hayır ya da pencereyi kapatmak hiçbir şeyi değiştirmez."""
+    st.markdown(mesaj)
+    evet_col, hayir_col = st.columns(2)
+    if evet_col.button(
+        evet_etiketi, type="primary", use_container_width=True,
+        key="onay_penceresi_evet"
+    ):
+        for anahtar, deger in ayarlar.items():
+            st.session_state[anahtar] = deger
+        st.rerun()
+    if hayir_col.button(
+        "Hayır", use_container_width=True, key="onay_penceresi_hayir"
+    ):
+        st.rerun()
+
+
+def kayit_zamanini_bul(kayitlar, alanlar=("updated_at", "created_at")):
+    """Bulut kayıtlarındaki en son kayıt zamanını (İstanbul saati) döndürür."""
+    zamanlar = [
+        str(kayit.get(alan)) for kayit in kayitlar or [] for alan in alanlar
+        if kayit.get(alan)
+    ]
+    if not zamanlar:
+        return None
+    zaman = pd.to_datetime(max(zamanlar), errors="coerce", utc=True)
+    if pd.isna(zaman):
+        return None
+    return zaman.tz_convert("Europe/Istanbul")
+
+
+def zaman_metni(zaman):
+    return zaman.strftime("%d.%m.%Y %H:%M") if zaman is not None else "-"
+
+
+def kayitli_detay_gorunumu(
+    detay_df, ay_sutunlari, toplam_sutunlari, anahtar, dosya_adi
+):
+    """Kayıtlı detayın özetini ve seçilen müşterilerin satırlarını gösterir;
+    hiçbir hesaplama yapmaz (87 bin satırın tamamı ekrana basılmaz)."""
+    sayisal = [
+        col for col in ay_sutunlari + toplam_sutunlari if col in detay_df.columns
+    ]
+    toplamlar = {
+        col: float(pd.to_numeric(detay_df[col], errors="coerce").fillna(0).sum())
+        for col in sayisal
+    }
+    kodlar = seri_benzersiz_uygula(detay_df["Müşteri Kodu"], guvenli_metin_kodu)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Güzergah satırı", f"{len(detay_df):,}".replace(",", "."))
+    m2.metric("Müşteri", f"{kodlar.nunique():,}".replace(",", "."))
+    if toplam_sutunlari and toplam_sutunlari[-1] in toplamlar:
+        m3.metric(
+            toplam_sutunlari[-1],
+            f"{toplamlar[toplam_sutunlari[-1]]:,.0f}".replace(",", ".")
+        )
+    sayi_config = {
+        col: st.column_config.NumberColumn(col, format="localized")
+        for col in sayisal
+    }
+    st.dataframe(
+        pd.DataFrame([{"": "GENEL TOPLAM", **toplamlar}]),
+        use_container_width=True, hide_index=True, height=80,
+        column_config=sayi_config
+    )
+    if "Müşteri Grubu" in detay_df.columns and sayisal:
+        grup_ozeti = (
+            detay_df.assign(**{
+                col: pd.to_numeric(detay_df[col], errors="coerce").fillna(0)
+                for col in sayisal
+            })
+            .groupby("Müşteri Grubu", dropna=False)[sayisal].sum()
+            .sort_values(sayisal[-1], ascending=False).reset_index()
+        )
+        with st.expander("📊 Müşteri grubu toplamları", expanded=False):
+            st.dataframe(
+                grup_ozeti, use_container_width=True, hide_index=True,
+                column_config=sayi_config
+            )
+
+    adlar = (
+        seri_temiz_metin(detay_df["Müşteri Adı"])
+        if "Müşteri Adı" in detay_df.columns
+        else pd.Series("", index=detay_df.index)
+    )
+    siralama_sutunu = sayisal[-1] if sayisal else None
+    musteri_toplam = (
+        pd.to_numeric(detay_df[siralama_sutunu], errors="coerce").fillna(0)
+        .groupby(kodlar).sum()
+        if siralama_sutunu else pd.Series(dtype=float)
+    )
+    ad_haritasi = adlar.groupby(kodlar).first()
+    secenekler = [
+        kod for kod in musteri_toplam.sort_values(ascending=False).index
+        if kod
+    ]
+    secilenler = st.multiselect(
+        "Satırlarını görmek istediğiniz müşteriler",
+        secenekler,
+        format_func=lambda kod: f"{kod} · {ad_haritasi.get(kod, '')}",
+        key=f"{anahtar}_musteri_secimi"
+    )
+    if secilenler:
+        secili = detay_df[kodlar.isin(secilenler).to_numpy()]
+        st.dataframe(
+            secili, use_container_width=True, hide_index=True,
+            height=min(520, 38 * (len(secili) + 1) + 4),
+            column_config=sayi_config
+        )
+    st.download_button(
+        "📥 Kayıtlı Detayın Tamamını CSV İndir",
+        data=lambda df=detay_df: df.to_csv(
+            index=False, sep=";", decimal=",", date_format="%d.%m.%Y"
+        ).encode("utf-8-sig"),
+        on_click="ignore",
+        file_name=dosya_adi,
+        mime="text/csv",
+        use_container_width=True,
+        key=f"{anahtar}_csv"
+    )
+
+
+def operasyon_raporu_bolumu(tahmin_df, kapanis_df, kaynak_yil, tahmin_yili):
+    """Operasyona gönderilecek desi raporu: ek satır yükleme + indirme."""
+    st.markdown("---")
+    st.subheader("📤 Operasyon Desi Raporu")
+    st.caption(
+        f"Güzergah bazında {kaynak_yil} (Yıl Kapanış: gerçekleşen + yıl sonu "
+        f"tahmini) ve {tahmin_yili} (Desi Tahminleme) aylık desileri; geçen "
+        "yılki 'data' sayfası biçiminde. Bütün müşteriler 'DOP' "
+        "kategorisindedir; Vestel, BSH ve Yeni Satış satırları aşağıdan "
+        "yüklenince altına eklenir."
+    )
+    ek_anahtar = f"operasyon_ek_satirlar_{kaynak_yil}"
+    with st.expander("➕ Ek satırlar (Vestel, BSH, Yeni Satış)", expanded=False):
+        st.caption(
+            "Başlıklar rapordaki gibi olmalıdır: Teslimat Tipi, Atf Tipi, …, "
+            f"Müşteri Adı, müş. Kategori, …, {kaynak_yil} Ocak Desi … "
+            f"{kaynak_yil} Aralık Desi, {tahmin_yili} Ocak Desi … "
+            f"{tahmin_yili} Aralık Desi. Olmayan sütunlar boş, olmayan aylar 0 "
+            f"kalır (ör. Yeni Satış için yalnızca {tahmin_yili} ayları ve tek "
+            "satır yeterlidir). Birden fazla dosya yüklenebilir; ek satırlar "
+            "buluta kaydedilmez, oturum boyunca tutulur."
+        )
+        ek_dosyalar = st.file_uploader(
+            "Ek satır dosyalarını yükleyin",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key=f"operasyon_ek_upload_{kaynak_yil}"
+        )
+        ek_parcalari, ek_uyarilari = [], []
+        for ek_dosya in ek_dosyalar or []:
+            try:
+                ek_df, eksik = operasyon_ek_satirlarini_oku(
+                    yuklenen_tabloyu_oku(ek_dosya), kaynak_yil
+                )
+                ek_parcalari.append(ek_df)
+                st.success(f"{ek_dosya.name}: {len(ek_df):,} satır eklenecek.")
+                if eksik:
+                    ek_uyarilari.append(
+                        f"{ek_dosya.name} dosyasında olmayan sütunlar boş/0 "
+                        "bırakıldı: " + ", ".join(eksik[:8])
+                        + (" …" if len(eksik) > 8 else "")
+                    )
+            except Exception as ex:
+                st.error(f"{ek_dosya.name} okunamadı: {ex}")
+        for uyari in ek_uyarilari:
+            st.caption("ℹ️ " + uyari)
+        st.session_state[ek_anahtar] = (
+            pd.concat(ek_parcalari, ignore_index=True)
+            if ek_parcalari else pd.DataFrame()
+        )
+    ek_satirlar = st.session_state.get(ek_anahtar, pd.DataFrame())
+    st.download_button(
+        "📤 Operasyona Gönderilecek Desi Raporunu İndir",
+        data=lambda tahmin=tahmin_df, kapanis=kapanis_df, ek=ek_satirlar: (
+            operasyon_desi_raporu_excel(
+                operasyon_desi_raporu_tablosu(tahmin, kapanis, kaynak_yil, ek)
+            )
+        ),
+        on_click="ignore",
+        file_name=f"{datetime.now():%Y.%m.%d}_{tahmin_yili} desileri.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        type="primary",
+        use_container_width=True,
+        key="btn_operasyon_desi_raporu"
+    )
+    st.caption(
+        f"{len(tahmin_df):,} güzergah satırı"
+        + (f" + {len(ek_satirlar):,} ek satır" if not ek_satirlar.empty else "")
+        + ". Dosya butona basınca hazırlanır; büyük olduğu için biraz sürebilir."
+    )
+
+
+# ------------------------------------------------------------
 # 9. SAYFA: YIL KAPANIŞ
 # Aynı blok "Yıl Kapanış (Önceki Mantık)" sayfasında da çalışır. O sayfada
 # yalnızca son gerçekleşen aydan sonraki aylar doldurulur, ilk desi ayından
@@ -9458,6 +9688,177 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
         )
 
         aktif_yk_rev_id = sayfa_aktif_revizyonunu_getir()
+
+        # Kayıtlı görünüm: revizyonda kayıt varsa sayfa hesap yapmadan onu
+        # gösterir. Hesaplama/düzenleme ekranı yalnızca onayla açılır.
+        yk_rev_anahtari = aktif_yk_rev_id or "yerel"
+        if yk_onceki_mantik:
+            if not st.session_state.get("yk_onceki_mantik_hesapla"):
+                st.info(
+                    "Bu sayfa açılışta hesap yapmaz. Hesaplamayı başlatmak "
+                    "için butona basın; birkaç dakika sürebilir."
+                )
+                if st.button(
+                    "🧮 Önceki Mantıkla Hesapla", type="primary",
+                    key="btn_yk_onceki_hesapla"
+                ):
+                    onay_penceresi(
+                        "Yıl kapanış **önceki mantıkla** hesaplanacak. Bu "
+                        "birkaç dakika sürebilir. Devam edilsin mi?",
+                        {"yk_onceki_mantik_hesapla": True}
+                    )
+                st.stop()
+            if st.button(
+                "↩️ Hesaplamayı kapat", key="btn_yk_onceki_kapat"
+            ):
+                st.session_state.yk_onceki_mantik_hesapla = False
+                st.rerun()
+        elif (
+            st.session_state.get("yil_kapanis_duzenleme_revizyonu")
+            != yk_rev_anahtari
+        ):
+            if (
+                client and aktif_yk_rev_id
+                and st.session_state.get(
+                    "yil_kapanis_kayitli_gorunum_revizyon"
+                ) != aktif_yk_rev_id
+            ):
+                try:
+                    with st.spinner(
+                        "Kayıtlı yıl kapanış sonucu buluttan getiriliyor..."
+                    ):
+                        kayitli_detay_kayitlari = (
+                            supabase_revizyon_kayitlarini_getir(
+                                YIL_KAPANIS_DETAY_DB_TABLOSU, aktif_yk_rev_id
+                            )
+                        )
+                        kayitli_ozet_kayitlari = (
+                            supabase_revizyon_kayitlarini_getir(
+                                YIL_KAPANIS_DB_TABLOSU, aktif_yk_rev_id
+                            )
+                        )
+                    st.session_state.yil_kapanis_detay_bulut_df = (
+                        yil_kapanis_detayini_hazirla(
+                            pd.DataFrame(kayitli_detay_kayitlari).drop(
+                                columns=[
+                                    "id", "revizyon_id", "created_at",
+                                    "updated_at"
+                                ],
+                                errors="ignore"
+                            )
+                        )
+                        if kayitli_detay_kayitlari
+                        else pd.DataFrame(columns=yil_kapanis_detay_sutunlari)
+                    )
+                    st.session_state.yil_kapanis_kayit_zamani = (
+                        kayit_zamanini_bul(kayitli_detay_kayitlari)
+                    )
+                    if kayitli_ozet_kayitlari:
+                        ilk_ozet = kayitli_ozet_kayitlari[0]
+                        st.session_state.yil_kapanis_bulut_ayarlari = {
+                            "yil_1": guvenli_tamsayi(
+                                ilk_ozet.get("Yıl 1"), nullable=False
+                            ),
+                            "yil_2": guvenli_tamsayi(
+                                ilk_ozet.get("Yıl 2"), nullable=False
+                            ),
+                            "son_ay": temiz_metin(
+                                ilk_ozet.get("Gerçekleşen Son Ay"), "Ağustos"
+                            ),
+                            "kapanis_yili": guvenli_tamsayi(
+                                ilk_ozet.get("Kapanış Yılı"), nullable=True
+                            )
+                        }
+                except Exception as ex:
+                    st.error(f"Kayıtlı yıl kapanış sonucu getirilemedi: {ex}")
+                st.session_state.yil_kapanis_kayitli_gorunum_revizyon = (
+                    aktif_yk_rev_id
+                )
+            kayit_mesaji = st.session_state.pop("yil_kapanis_kayit_mesaji", None)
+            if kayit_mesaji:
+                getattr(st, kayit_mesaji[0])(kayit_mesaji[1])
+            duzenleme_ayarlari = {
+                "yil_kapanis_duzenleme_revizyonu": yk_rev_anahtari,
+                # Hesap ekranı açılınca Kg, matris ve kayıtlar bir kez
+                # buluttan getirilir (eski "Buluttan Getir" düğmesi gibi).
+                "yil_kapanis_otomatik_getir": bool(client and aktif_yk_rev_id)
+            }
+            kayitli_yk_detay = st.session_state.get(
+                "yil_kapanis_detay_bulut_df", pd.DataFrame()
+            )
+            if kayitli_yk_detay.empty:
+                st.info(
+                    "Bu revizyonda kayıtlı yıl kapanış sonucu yok. "
+                    "Hesaplamayı başlatmak için butona basın."
+                )
+                if st.button(
+                    "🧮 Yıl Kapanışı Hesapla", type="primary",
+                    key="btn_yk_hesapla"
+                ):
+                    onay_penceresi(
+                        "Yıl kapanış hesaplama ekranı açılacak. Bu birkaç "
+                        "dakika sürebilir. Devam edilsin mi?",
+                        duzenleme_ayarlari
+                    )
+            else:
+                yk_ayar = st.session_state.get("yil_kapanis_bulut_ayarlari", {})
+                yk_kayitli_yillar = pd.to_numeric(
+                    kayitli_yk_detay.get("Yıl"), errors="coerce"
+                ).dropna()
+                yk_kayitli_yil = (
+                    int(yk_kayitli_yillar.max())
+                    if not yk_kayitli_yillar.empty else "-"
+                )
+                st.success(
+                    "📌 **Kayıtlı sonuç gösteriliyor** — bu görünümde "
+                    "hesaplama yapılmaz. Revizyon: "
+                    f"{st.session_state.get('aktif_revizyon_adi') or '-'} · "
+                    "Kayıt: "
+                    f"{zaman_metni(st.session_state.get('yil_kapanis_kayit_zamani'))}"
+                    " · Kapanış yılı: "
+                    f"{yk_ayar.get('kapanis_yili') or yk_kayitli_yil} · "
+                    f"Son gerçekleşen ay: {yk_ayar.get('son_ay') or '-'}"
+                )
+                yk1, yk2 = st.columns(2)
+                if yk1.button(
+                    "✏️ Yeniden hesapla / düzenle", type="primary",
+                    use_container_width=True, key="btn_yk_duzenle"
+                ):
+                    onay_penceresi(
+                        "Sayfa yeniden hesaplanacak; bu birkaç dakika "
+                        "sürebilir. Buluta kaydetmediğiniz sürece kayıtlı "
+                        "sonuç değişmez. Devam edilsin mi?",
+                        duzenleme_ayarlari
+                    )
+                if yk2.button(
+                    "🔄 Kaydı buluttan yenile", use_container_width=True,
+                    disabled=not (client and aktif_yk_rev_id),
+                    key="btn_yk_kayit_yenile"
+                ):
+                    st.session_state.yil_kapanis_kayitli_gorunum_revizyon = None
+                    st.rerun()
+                kayitli_detay_gorunumu(
+                    kayitli_yk_detay, yil_kapanis_detay_ay_sutunlari,
+                    ["Gerçekleşen Toplam Desi", "Tahmini Yıl Sonu Toplam Desi"],
+                    "yk_kayitli", "yil_kapanis_kayitli_detay.csv"
+                )
+            st.stop()
+        else:
+            yd1, yd2 = st.columns([3, 1])
+            yd1.info(
+                "✏️ Hesaplama/düzenleme ekranındasınız. Detayı buluta "
+                "kaydedince kayıtlı görünüme dönülür."
+            )
+            if yd2.button(
+                "↩️ Düzenlemeyi bırak", use_container_width=True,
+                key="btn_yk_duzenleme_birak"
+            ):
+                onay_penceresi(
+                    "Buluta kaydetmediğiniz değişiklikler kayıtlı sonuca "
+                    "yansımaz. Düzenlemeden çıkılsın mı?",
+                    {"yil_kapanis_duzenleme_revizyonu": None},
+                    "↩️ Evet, çık"
+                )
 
         # Data_New başka bir sekmede olduğu için o sayfa açılmamış olsa bile
         # seçili revizyonun operasyon detayını burada bir kez otomatik hazırla.
@@ -9923,6 +10324,9 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                 use_container_width=True,
                 disabled=(not client or not aktif_yk_rev_id),
                 key="btn_yil_kapanis_cloud_load"
+            ) or (
+                not yk_onceki_mantik
+                and st.session_state.pop("yil_kapanis_otomatik_getir", False)
             )
             hafizayi_temizle = bulut2.button(
                 "🧹 Yıl Kapanış Hafızasını Temizle",
@@ -11490,6 +11894,7 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                             )
                         )
 
+                    detay_kaydedildi = False
                     try:
                         toplam, temizlenen, _, temizlik_hatasi = (
                             yil_kapanis_detayini_parcali_buluta_kaydet(
@@ -11507,14 +11912,17 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                             1.0,
                             text=f"Detay aktarımı tamamlandı: {toplam:,} satır"
                         )
+                        detay_kaydedildi = True
                         if temizlik_hatasi is None:
-                            st.success(
+                            st.session_state.yil_kapanis_kayit_mesaji = (
+                                "success",
                                 f"{toplam:,} detay satırı güvenli biçimde "
                                 f"kaydedildi; {temizlenen:,} eski satır "
                                 "temizlendi."
                             )
                         else:
-                            st.warning(
+                            st.session_state.yil_kapanis_kayit_mesaji = (
+                                "warning",
                                 f"{toplam:,} detay satırının tamamı buluta "
                                 "kaydedildi. Ancak önceki aktarımdan kalan "
                                 "eski satırların temizliği tamamlanamadı "
@@ -11531,6 +11939,16 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                             "silinmedi. Güncel Yıl Kapanış SQL'ini çalıştırıp "
                             f"aynı düğmeye yeniden basabilirsiniz. Ayrıntı: {ex}"
                         )
+                    if detay_kaydedildi:
+                        # Kaydedilen sonuç kayıtlı görünümde gösterilir.
+                        st.session_state.yil_kapanis_duzenleme_revizyonu = None
+                        st.session_state.yil_kapanis_kayitli_gorunum_revizyon = (
+                            aktif_yk_rev_id
+                        )
+                        st.session_state.yil_kapanis_kayit_zamani = (
+                            pd.Timestamp.now(tz="Europe/Istanbul")
+                        )
+                        st.rerun()
 
 
 # ------------------------------------------------------------
@@ -12807,6 +13225,10 @@ if sekme_acik_mi[12]:
             else:
                 st.session_state.desi_tahmin_bulut_detay_df = pd.DataFrame()
 
+            st.session_state.desi_tahmin_kayit_zamanlari = {
+                "kapanis": kayit_zamanini_bul(kapanis_kayitlari),
+                "tahmin": kayit_zamanini_bul(detay_kayitlari)
+            }
             st.session_state.desi_tahmin_bulut_revizyon = revizyon_id
             st.session_state.desi_tahmin_editor_surumu += 1
             return yuklenenler
@@ -12857,6 +13279,104 @@ if sekme_acik_mi[12]:
                 "Bazı tahmin kaynakları otomatik getirilemedi. Gerekirse "
                 "buluttan getir butonunu kullanın."
             )
+
+        # Kayıtlı görünüm: revizyonda kayıtlı tahmin varsa hesap yapılmaz.
+        desi_rev_anahtari = desi_rev_id or "yerel"
+        if (
+            st.session_state.get("desi_tahmin_duzenleme_revizyonu")
+            != desi_rev_anahtari
+        ):
+            kayit_mesaji = st.session_state.pop("desi_tahmin_kayit_mesaji", None)
+            if kayit_mesaji:
+                getattr(st, kayit_mesaji[0])(kayit_mesaji[1])
+            desi_duzenleme_ayari = {
+                "desi_tahmin_duzenleme_revizyonu": desi_rev_anahtari
+            }
+            kayitli_tahmin = st.session_state.get(
+                "desi_tahmin_bulut_detay_df", pd.DataFrame()
+            )
+            if kayitli_tahmin.empty:
+                st.info(
+                    "Bu revizyonda kayıtlı desi tahmini yok. Hesaplamayı "
+                    "başlatmak için butona basın."
+                )
+                if st.button(
+                    "🧮 Desi Tahminini Hesapla", type="primary",
+                    key="btn_desi_hesapla"
+                ):
+                    onay_penceresi(
+                        "Desi tahmini hesaplanacak. Bu birkaç dakika "
+                        "sürebilir. Devam edilsin mi?",
+                        desi_duzenleme_ayari
+                    )
+            else:
+                desi_ayar = st.session_state.get(
+                    "desi_tahmin_bulut_ayarlari", {}
+                )
+                kayitli_kaynak_yil = desi_ayar.get("kaynak_yil") or int(
+                    pd.to_numeric(
+                        kayitli_tahmin.get("Kaynak Yıl"), errors="coerce"
+                    ).max()
+                )
+                kayitli_tahmin_yili = int(kayitli_kaynak_yil) + 1
+                zamanlar = st.session_state.get("desi_tahmin_kayit_zamanlari", {})
+                st.success(
+                    "📌 **Kayıtlı tahmin gösteriliyor** — bu görünümde "
+                    "hesaplama yapılmaz. Kaynak yıl: "
+                    f"{kayitli_kaynak_yil} · Tahmin yılı: {kayitli_tahmin_yili}"
+                    f" · Kayıt: {zaman_metni(zamanlar.get('tahmin'))}"
+                )
+                if (
+                    zamanlar.get("kapanis") is not None
+                    and zamanlar.get("tahmin") is not None
+                    and zamanlar["kapanis"] > zamanlar["tahmin"]
+                ):
+                    st.warning(
+                        "Yıl Kapanış kaydı "
+                        f"({zaman_metni(zamanlar['kapanis'])}) tahmin "
+                        f"kaydından ({zaman_metni(zamanlar['tahmin'])}) daha "
+                        "yeni; tahmini yeniden hesaplamanız gerekebilir."
+                    )
+                if st.button(
+                    "✏️ Yeniden hesapla / düzenle", type="primary",
+                    key="btn_desi_duzenle"
+                ):
+                    onay_penceresi(
+                        "Desi tahmini yeniden hesaplanacak; bu birkaç dakika "
+                        "sürebilir. Buluta kaydetmediğiniz sürece kayıtlı "
+                        "tahmin değişmez. Devam edilsin mi?",
+                        desi_duzenleme_ayari
+                    )
+                kayitli_detay_gorunumu(
+                    kayitli_tahmin, yil_kapanis_detay_ay_sutunlari,
+                    ["Kaynak Yıl Toplam Desi", "Tahmini Yıl Toplam Desi"],
+                    "desi_kayitli",
+                    f"desi_tahmini_{kayitli_tahmin_yili}_kayitli.csv"
+                )
+                operasyon_raporu_bolumu(
+                    kayitli_tahmin,
+                    st.session_state.get(
+                        "yil_kapanis_detay_bulut_df", pd.DataFrame()
+                    ),
+                    kayitli_kaynak_yil, kayitli_tahmin_yili
+                )
+            st.stop()
+        else:
+            dd1, dd2 = st.columns([3, 1])
+            dd1.info(
+                "✏️ Hesaplama/düzenleme ekranındasınız. Tahmini buluta "
+                "kaydedince kayıtlı görünüme dönülür."
+            )
+            if dd2.button(
+                "↩️ Düzenlemeyi bırak", use_container_width=True,
+                key="btn_desi_duzenleme_birak"
+            ):
+                onay_penceresi(
+                    "Buluta kaydetmediğiniz değişiklikler kayıtlı tahmine "
+                    "yansımaz. Düzenlemeden çıkılsın mı?",
+                    {"desi_tahmin_duzenleme_revizyonu": None},
+                    "↩️ Evet, çık"
+                )
 
         kapanis_kaynak = st.session_state.get(
             "yil_kapanis_detay_bulut_df", pd.DataFrame()
@@ -13136,6 +13656,7 @@ if sekme_acik_mi[12]:
                         disabled=(not client or not desi_rev_id),
                         key="btn_desi_tahmin_cloud_save"
                     ):
+                        desi_kaydedildi = False
                         try:
                             ortalama_records = []
                             referans_listesi = [
@@ -13209,112 +13730,30 @@ if sekme_acik_mi[12]:
                                 "yil_kapanis_matrisi": bool(yk_matris_kullan),
                                 "yontem": desi_yontem
                             }
-                            st.success(
+                            st.session_state.desi_tahmin_kayit_mesaji = (
+                                "success",
                                 f"{tahmin_yili} Desi tahmini seçili revizyona "
                                 "kaydedildi."
                             )
+                            zamanlar = st.session_state.setdefault(
+                                "desi_tahmin_kayit_zamanlari", {}
+                            )
+                            zamanlar["tahmin"] = pd.Timestamp.now(
+                                tz="Europe/Istanbul"
+                            )
+                            desi_kaydedildi = True
                         except Exception as ex:
                             st.error(
                                 "Desi tahmini buluta kaydedilemedi. Önce Desi "
                                 f"Tahminleme Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
                             )
-
-                    # ------------------------------------------------
-                    # OPERASYONA GÖNDERİLECEK DESİ RAPORU
-                    # ------------------------------------------------
-                    st.markdown("---")
-                    st.subheader("📤 Operasyon Desi Raporu")
-                    st.caption(
-                        f"Güzergah bazında {kaynak_yil} (Yıl Kapanış: "
-                        "gerçekleşen + yıl sonu tahmini) ve "
-                        f"{tahmin_yili} (Desi Tahminleme) aylık desileri; "
-                        "geçen yılki 'data' sayfası biçiminde. Bütün "
-                        "müşteriler 'DOP' kategorisindedir; Vestel, BSH ve "
-                        "Yeni Satış satırları aşağıdan yüklenince altına "
-                        "eklenir."
-                    )
-                    ek_anahtar = f"operasyon_ek_satirlar_{kaynak_yil}"
-                    with st.expander(
-                        "➕ Ek satırlar (Vestel, BSH, Yeni Satış)",
-                        expanded=False
-                    ):
-                        st.caption(
-                            "Başlıklar rapordaki gibi olmalıdır: Teslimat "
-                            "Tipi, Atf Tipi, …, Müşteri Adı, müş. Kategori, "
-                            f"…, {kaynak_yil} Ocak Desi … {kaynak_yil} Aralık "
-                            f"Desi, {tahmin_yili} Ocak Desi … {tahmin_yili} "
-                            "Aralık Desi. Olmayan sütunlar boş, olmayan aylar "
-                            "0 kalır (ör. Yeni Satış için yalnızca "
-                            f"{tahmin_yili} ayları ve tek satır yeterlidir). "
-                            "Birden fazla dosya yüklenebilir; ek satırlar "
-                            "buluta kaydedilmez, oturum boyunca tutulur."
-                        )
-                        ek_dosyalar = st.file_uploader(
-                            "Ek satır dosyalarını yükleyin",
-                            type=["xlsx", "xls", "csv"],
-                            accept_multiple_files=True,
-                            key=f"operasyon_ek_upload_{kaynak_yil}"
-                        )
-                        ek_parcalari, ek_uyarilari = [], []
-                        for ek_dosya in ek_dosyalar or []:
-                            try:
-                                ek_df, eksik = operasyon_ek_satirlarini_oku(
-                                    yuklenen_tabloyu_oku(ek_dosya), kaynak_yil
-                                )
-                                ek_parcalari.append(ek_df)
-                                st.success(
-                                    f"{ek_dosya.name}: {len(ek_df):,} satır "
-                                    "eklenecek."
-                                )
-                                if eksik:
-                                    ek_uyarilari.append(
-                                        f"{ek_dosya.name} dosyasında olmayan "
-                                        "sütunlar boş/0 bırakıldı: "
-                                        + ", ".join(eksik[:8])
-                                        + (" …" if len(eksik) > 8 else "")
-                                    )
-                            except Exception as ex:
-                                st.error(
-                                    f"{ek_dosya.name} okunamadı: {ex}"
-                                )
-                        for uyari in ek_uyarilari:
-                            st.caption("ℹ️ " + uyari)
-                        st.session_state[ek_anahtar] = (
-                            pd.concat(ek_parcalari, ignore_index=True)
-                            if ek_parcalari else pd.DataFrame()
-                        )
-                    ek_satirlar = st.session_state.get(
-                        ek_anahtar, pd.DataFrame()
-                    )
-                    st.download_button(
-                        "📤 Operasyona Gönderilecek Desi Raporunu İndir",
-                        data=lambda tahmin=tahmin_detay_sonuc,
-                        kapanis=kapanis_kaynak, ek=ek_satirlar: (
-                            operasyon_desi_raporu_excel(
-                                operasyon_desi_raporu_tablosu(
-                                    tahmin, kapanis, kaynak_yil, ek
-                                )
+                        if desi_kaydedildi:
+                            st.session_state.desi_tahmin_duzenleme_revizyonu = (
+                                None
                             )
-                        ),
-                        on_click="ignore",
-                        file_name=(
-                            f"{datetime.now():%Y.%m.%d}_{tahmin_yili} "
-                            "desileri.xlsx"
-                        ),
-                        mime=(
-                            "application/vnd.openxmlformats-officedocument."
-                            "spreadsheetml.sheet"
-                        ),
-                        type="primary",
-                        use_container_width=True,
-                        key="btn_operasyon_desi_raporu"
-                    )
-                    st.caption(
-                        f"{len(tahmin_detay_sonuc):,} güzergah satırı"
-                        + (
-                            f" + {len(ek_satirlar):,} ek satır"
-                            if not ek_satirlar.empty else ""
-                        )
-                        + ". Dosya butona basınca hazırlanır; büyük olduğu "
-                        "için biraz sürebilir."
+                            st.rerun()
+
+                    operasyon_raporu_bolumu(
+                        tahmin_detay_sonuc, kapanis_kaynak, kaynak_yil,
+                        tahmin_yili
                     )
