@@ -3737,6 +3737,279 @@ def desi_tahmin_durum2_uygula(detay_df, musteri_kartlari):
     return sonuc, int(kodlar[gecersiz].nunique())
 
 
+OPERASYON_RAPORU_KIMLIK_SUTUNLARI = [
+    "Uniq ID", "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
+    "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+    "İlk Okutma Şubesi", "Müşteri Kodu", "Müşteri Adı", "müş. Kategori",
+    "Müşteri Temsilcisi", "Sap Kodu", "Durum", "Kayıt Tarihi",
+    "Müşteri Grubu"
+]
+
+
+def operasyon_raporu_sutunlari(kaynak_yil, tahmin_yili):
+    """Operasyon desi raporunun (geçen yılın 'data' sayfası) sütunları."""
+    return (
+        OPERASYON_RAPORU_KIMLIK_SUTUNLARI
+        + [f"{int(kaynak_yil)} {ay} Desi" for ay in aylar]
+        + [f"{int(tahmin_yili)} {ay} Desi" for ay in aylar]
+    )
+
+
+def operasyon_desi_raporu_tablosu(
+    tahmin_df, kapanis_df, kaynak_yil, ek_satirlar_df=None
+):
+    """Kapanan yıl (Yıl Kapanış) ve tahmin yılı (Desi Tahminleme) desilerini
+    güzergah bazında yan yana getirir; ek satırlar (Vestel, BSH, Yeni Satış)
+    en alta eklenir.
+    """
+    kaynak_yil = int(kaynak_yil)
+    tahmin_yili = kaynak_yil + 1
+    sutunlar = operasyon_raporu_sutunlari(kaynak_yil, tahmin_yili)
+    kaynak_ay = [f"{kaynak_yil} {ay} Desi" for ay in aylar]
+    tahmin_ay = [f"{tahmin_yili} {ay} Desi" for ay in aylar]
+    if tahmin_df is None or tahmin_df.empty:
+        rapor = pd.DataFrame(columns=sutunlar)
+    else:
+        rapor = pd.DataFrame(index=tahmin_df.index)
+        for col in OPERASYON_RAPORU_KIMLIK_SUTUNLARI:
+            rapor[col] = (
+                tahmin_df[col] if col in tahmin_df.columns else None
+            )
+        rapor["Yıl"] = kaynak_yil
+        # Bu uygulamadaki bütün müşteriler bütçelenen müşterilerdir.
+        rapor["müş. Kategori"] = "DOP"
+        rapor["Uniq ID"] = tahmin_df["Kaynak Uniq ID"].apply(temiz_metin)
+
+        kapanis = (
+            kapanis_df.copy() if isinstance(kapanis_df, pd.DataFrame)
+            else pd.DataFrame()
+        )
+        if not kapanis.empty and "Yıl" in kapanis.columns:
+            kapanis = kapanis[
+                pd.to_numeric(kapanis["Yıl"], errors="coerce") == kaynak_yil
+            ]
+        if not kapanis.empty:
+            kapanis = kapanis.assign(
+                _uniq=kapanis["Uniq ID"].apply(temiz_metin)
+            ).drop_duplicates("_uniq", keep="last").set_index("_uniq")
+        for ay, hedef in zip(aylar, kaynak_ay):
+            kolon = f"{ay} Desi"
+            if kapanis.empty or kolon not in kapanis.columns:
+                rapor[hedef] = 0.0
+            else:
+                rapor[hedef] = desi_kg_serisini_uc_ondalik_yuvarla(
+                    rapor["Uniq ID"].map(kapanis[kolon]).fillna(0.0)
+                )
+        for ay, hedef in zip(aylar, tahmin_ay):
+            rapor[hedef] = desi_kg_serisini_uc_ondalik_yuvarla(
+                tahmin_df[f"{ay} Desi"]
+            )
+        rapor = rapor.reindex(columns=sutunlar)
+
+    if isinstance(ek_satirlar_df, pd.DataFrame) and not ek_satirlar_df.empty:
+        ek = ek_satirlar_df.reindex(columns=sutunlar)
+        for col in kaynak_ay + tahmin_ay:
+            ek[col] = desi_kg_serisini_uc_ondalik_yuvarla(ek[col])
+        rapor = pd.concat([rapor, ek], ignore_index=True)
+    return rapor.reset_index(drop=True)
+
+
+def operasyon_ek_satirlarini_oku(dataframe, kaynak_yil):
+    """Vestel, BSH, Yeni Satış gibi ekiplerden gelen satırları rapor
+    sütunlarına getirir. Sütunlar başlık adıyla eşleşir; ay sütunları
+    "2026 Ocak Desi" biçiminde olmalıdır. Eksik ay 0 kabul edilir.
+    """
+    kaynak_yil = int(kaynak_yil)
+    sutunlar = operasyon_raporu_sutunlari(kaynak_yil, kaynak_yil + 1)
+    df = sutun_adlarini_standartlastir(dataframe)
+    kolon_bul = {str(c).casefold(): c for c in df.columns}
+    ek = pd.DataFrame(index=df.index)
+    bulunan = []
+    for col in sutunlar:
+        kaynak_col = kolon_bul.get(col.casefold())
+        if kaynak_col is not None:
+            ek[col] = df[kaynak_col]
+            bulunan.append(col)
+        else:
+            ek[col] = None
+    ay_sutunlari = sutunlar[len(OPERASYON_RAPORU_KIMLIK_SUTUNLARI):]
+    if not any(col in bulunan for col in ay_sutunlari):
+        raise ValueError(
+            "Ay sütunları bulunamadı. Başlıklar rapordaki gibi olmalı: "
+            f"{ay_sutunlari[0]} … {ay_sutunlari[-1]}"
+        )
+    for col in ay_sutunlari:
+        ek[col] = pd.to_numeric(ek[col], errors="coerce").fillna(0.0)
+    if "Yıl" not in bulunan:
+        ek["Yıl"] = kaynak_yil
+    # Tamamen boş satırlar (ör. Excel'deki boş alt satırlar) atlanır.
+    dolu = ek[ay_sutunlari].abs().sum(axis=1) > 0
+    if "Müşteri Adı" in bulunan:
+        dolu |= ek["Müşteri Adı"].apply(temiz_metin) != ""
+    return ek[dolu].reset_index(drop=True), [
+        col for col in sutunlar if col not in bulunan and col != "Uniq ID"
+    ]
+
+
+def operasyon_desi_raporu_excel(rapor_df):
+    """Raporu geçen yılki 'data' sayfası biçiminde Excel'e yazar.
+
+    xlsxwriter varsa onunla (86 bin satırda birkaç saniye), yoksa
+    openpyxl ile yazılır. Uniq ID, geçen yılki gibi B..J sütunlarını
+    birleştiren formüldür; hesaplanmış değeri de dosyaya yazılır.
+    """
+    sayi_bicimi = '_-* #,##0_-;\\-* #,##0_-;_-* "-"??_-;_-@_-'
+    tarih_bicimi = "d\\.mm\\.yyyy"
+    sutunlar = list(rapor_df.columns)
+    ay_baslangic = len(OPERASYON_RAPORU_KIMLIK_SUTUNLARI)
+    metin_sutunlari = {
+        "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı", "Çıkış Şube Adı",
+        "Varış İl Adı", "Varış Şube Adı", "İlk Okutma Şubesi",
+        "Müşteri Adı", "müş. Kategori"
+    }
+    uniq_parcalari = [
+        "Yıl", "Teslimat Tipi", "Atf Tipi", "Çıkış İl Adı",
+        "Çıkış Şube Adı", "Varış İl Adı", "Varış Şube Adı",
+        "İlk Okutma Şubesi", "Müşteri Kodu"
+    ]
+
+    def kod_degeri(value):
+        metin = guvenli_metin_kodu(value)
+        return int(metin) if metin.isdigit() else (metin or None)
+
+    tarihler = pd.to_datetime(
+        rapor_df.get("Kayıt Tarihi"), errors="coerce", dayfirst=True
+    )
+    degerler, bicimler = {}, {}
+    for i, col in enumerate(sutunlar):
+        if col == "Uniq ID":
+            continue
+        if i >= ay_baslangic:
+            degerler[col] = pd.to_numeric(
+                rapor_df[col], errors="coerce"
+            ).fillna(0.0).astype(float).tolist()
+            bicimler[col] = sayi_bicimi
+        elif col == "Kayıt Tarihi":
+            degerler[col] = [
+                None if pd.isna(t) else t.to_pydatetime() for t in tarihler
+            ]
+            bicimler[col] = tarih_bicimi
+        elif col in ("Müşteri Kodu", "Yıl"):
+            degerler[col] = seri_benzersiz_uygula(
+                rapor_df[col], kod_degeri
+            ).tolist()
+        elif col == "Sap Kodu":
+            degerler[col] = seri_benzersiz_uygula(
+                rapor_df[col], lambda v: guvenli_metin_kodu(v) or None
+            ).tolist()
+        else:
+            degerler[col] = seri_benzersiz_uygula(
+                rapor_df[col], lambda v: temiz_metin(v) or None
+            ).tolist()
+            if col in metin_sutunlari:
+                bicimler[col] = "@"
+    satir_sayisi = len(rapor_df)
+    uniq_degerleri = [
+        "".join(
+            "" if degerler[p][r] is None else str(degerler[p][r])
+            for p in uniq_parcalari
+        )
+        for r in range(satir_sayisi)
+    ]
+
+    def harf(col):
+        index = sutunlar.index(col)
+        sonuc = ""
+        index += 1
+        while index:
+            index, kalan = divmod(index - 1, 26)
+            sonuc = chr(65 + kalan) + sonuc
+        return sonuc
+
+    uniq_harfleri = [harf(p) for p in uniq_parcalari]
+    cikti = io.BytesIO()
+    try:
+        import xlsxwriter
+    except ImportError:
+        xlsxwriter = None
+
+    if xlsxwriter is not None:
+        wb = xlsxwriter.Workbook(
+            cikti, {"constant_memory": True, "in_memory": True}
+        )
+        ws = wb.add_worksheet("data")
+        bicim_nesneleri = {
+            col: wb.add_format({"num_format": bicim})
+            for col, bicim in bicimler.items()
+        }
+        baslik_bicimi = wb.add_format({"bold": True})
+        for i, col in enumerate(sutunlar):
+            ws.set_column(i, i, 14 if i >= ay_baslangic else 18)
+            ws.write_string(0, i, col, baslik_bicimi)
+        ws.freeze_panes(1, 0)
+        for r in range(satir_sayisi):
+            satir_no = r + 2
+            for i, col in enumerate(sutunlar):
+                if col == "Uniq ID":
+                    ws.write_formula(
+                        r + 1, i,
+                        "=" + "&".join(f"{h}{satir_no}" for h in uniq_harfleri),
+                        None, uniq_degerleri[r]
+                    )
+                    continue
+                deger = degerler[col][r]
+                bicim = bicim_nesneleri.get(col)
+                if deger is None:
+                    if bicim is not None:
+                        ws.write_blank(r + 1, i, None, bicim)
+                elif isinstance(deger, datetime):
+                    ws.write_datetime(r + 1, i, deger, bicim)
+                elif isinstance(deger, (int, float)):
+                    ws.write_number(r + 1, i, deger, bicim)
+                else:
+                    ws.write_string(r + 1, i, str(deger), bicim)
+        wb.close()
+        return cikti.getvalue()
+
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("data")
+    ws.freeze_panes = "A2"
+    baslik = []
+    for col in sutunlar:
+        hucre = WriteOnlyCell(ws, value=col)
+        hucre.font = Font(bold=True)
+        baslik.append(hucre)
+    ws.append(baslik)
+    stiller = {}
+    for col, bicim in bicimler.items():
+        ornek = WriteOnlyCell(ws, value=None)
+        ornek.number_format = bicim
+        stiller[col] = ornek._style
+    for r in range(satir_sayisi):
+        satir_no = r + 2
+        hucreler = []
+        for col in sutunlar:
+            if col == "Uniq ID":
+                hucreler.append(
+                    "=" + "&".join(f"{h}{satir_no}" for h in uniq_harfleri)
+                )
+                continue
+            deger = degerler[col][r]
+            if col not in stiller:
+                hucreler.append(deger)
+                continue
+            hucre = WriteOnlyCell(ws, value=deger)
+            hucre._style = stiller[col]
+            hucreler.append(hucre)
+        ws.append(hucreler)
+    wb.save(cikti)
+    return cikti.getvalue()
+
+
 def desi_tahmin_referans_ayarini_coz(ham):
     """Bulut "Referans Yıllar" değerini (eski: liste, yeni: nesne) çözer.
 
@@ -12664,19 +12937,23 @@ if sekme_acik_mi[12]:
                         f"{toplam_tahmin:,.0f}".replace(",", ".")
                     )
 
-                    excel_buffer = io.BytesIO()
-                    with pd.ExcelWriter(
-                        excel_buffer, engine="openpyxl"
-                    ) as writer:
-                        tahmin_detay_sonuc.to_excel(
-                            writer, index=False,
-                            sheet_name=f"{tahmin_yili} Desi Tahmini"[:31]
-                        )
+                    def desi_tahmin_excel_verisi(df=tahmin_detay_sonuc):
+                        excel_buffer = io.BytesIO()
+                        with pd.ExcelWriter(
+                            excel_buffer, engine="openpyxl"
+                        ) as writer:
+                            df.to_excel(
+                                writer, index=False,
+                                sheet_name=f"{tahmin_yili} Desi Tahmini"[:31]
+                            )
+                        return excel_buffer.getvalue()
 
                     da1, da2 = st.columns(2)
                     da1.download_button(
                         "📥 Desi Tahminini Excel İndir",
-                        data=excel_buffer.getvalue(),
+                        # Dosya yalnızca butona basılınca üretilir.
+                        data=desi_tahmin_excel_verisi,
+                        on_click="ignore",
                         file_name=f"desi_tahmini_{tahmin_yili}.xlsx",
                         mime=(
                             "application/vnd.openxmlformats-officedocument."
@@ -12776,3 +13053,103 @@ if sekme_acik_mi[12]:
                                 "Desi tahmini buluta kaydedilemedi. Önce Desi "
                                 f"Tahminleme Supabase SQL'ini çalıştırın. Ayrıntı: {ex}"
                             )
+
+                    # ------------------------------------------------
+                    # OPERASYONA GÖNDERİLECEK DESİ RAPORU
+                    # ------------------------------------------------
+                    st.markdown("---")
+                    st.subheader("📤 Operasyon Desi Raporu")
+                    st.caption(
+                        f"Güzergah bazında {kaynak_yil} (Yıl Kapanış: "
+                        "gerçekleşen + yıl sonu tahmini) ve "
+                        f"{tahmin_yili} (Desi Tahminleme) aylık desileri; "
+                        "geçen yılki 'data' sayfası biçiminde. Bütün "
+                        "müşteriler 'DOP' kategorisindedir; Vestel, BSH ve "
+                        "Yeni Satış satırları aşağıdan yüklenince altına "
+                        "eklenir."
+                    )
+                    ek_anahtar = f"operasyon_ek_satirlar_{kaynak_yil}"
+                    with st.expander(
+                        "➕ Ek satırlar (Vestel, BSH, Yeni Satış)",
+                        expanded=False
+                    ):
+                        st.caption(
+                            "Başlıklar rapordaki gibi olmalıdır: Teslimat "
+                            "Tipi, Atf Tipi, …, Müşteri Adı, müş. Kategori, "
+                            f"…, {kaynak_yil} Ocak Desi … {kaynak_yil} Aralık "
+                            f"Desi, {tahmin_yili} Ocak Desi … {tahmin_yili} "
+                            "Aralık Desi. Olmayan sütunlar boş, olmayan aylar "
+                            "0 kalır (ör. Yeni Satış için yalnızca "
+                            f"{tahmin_yili} ayları ve tek satır yeterlidir). "
+                            "Birden fazla dosya yüklenebilir; ek satırlar "
+                            "buluta kaydedilmez, oturum boyunca tutulur."
+                        )
+                        ek_dosyalar = st.file_uploader(
+                            "Ek satır dosyalarını yükleyin",
+                            type=["xlsx", "xls", "csv"],
+                            accept_multiple_files=True,
+                            key=f"operasyon_ek_upload_{kaynak_yil}"
+                        )
+                        ek_parcalari, ek_uyarilari = [], []
+                        for ek_dosya in ek_dosyalar or []:
+                            try:
+                                ek_df, eksik = operasyon_ek_satirlarini_oku(
+                                    yuklenen_tabloyu_oku(ek_dosya), kaynak_yil
+                                )
+                                ek_parcalari.append(ek_df)
+                                st.success(
+                                    f"{ek_dosya.name}: {len(ek_df):,} satır "
+                                    "eklenecek."
+                                )
+                                if eksik:
+                                    ek_uyarilari.append(
+                                        f"{ek_dosya.name} dosyasında olmayan "
+                                        "sütunlar boş/0 bırakıldı: "
+                                        + ", ".join(eksik[:8])
+                                        + (" …" if len(eksik) > 8 else "")
+                                    )
+                            except Exception as ex:
+                                st.error(
+                                    f"{ek_dosya.name} okunamadı: {ex}"
+                                )
+                        for uyari in ek_uyarilari:
+                            st.caption("ℹ️ " + uyari)
+                        st.session_state[ek_anahtar] = (
+                            pd.concat(ek_parcalari, ignore_index=True)
+                            if ek_parcalari else pd.DataFrame()
+                        )
+                    ek_satirlar = st.session_state.get(
+                        ek_anahtar, pd.DataFrame()
+                    )
+                    st.download_button(
+                        "📤 Operasyona Gönderilecek Desi Raporunu İndir",
+                        data=lambda tahmin=tahmin_detay_sonuc,
+                        kapanis=kapanis_kaynak, ek=ek_satirlar: (
+                            operasyon_desi_raporu_excel(
+                                operasyon_desi_raporu_tablosu(
+                                    tahmin, kapanis, kaynak_yil, ek
+                                )
+                            )
+                        ),
+                        on_click="ignore",
+                        file_name=(
+                            f"{datetime.now():%Y.%m.%d}_{tahmin_yili} "
+                            "desileri.xlsx"
+                        ),
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        ),
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_operasyon_desi_raporu"
+                    )
+                    st.caption(
+                        f"{len(tahmin_detay_sonuc):,} güzergah satırı"
+                        + (
+                            f" + {len(ek_satirlar):,} ek satır"
+                            if not ek_satirlar.empty else ""
+                        )
+                        + ". Dosya butona basınca hazırlanır; büyük olduğu "
+                        "için biraz sürebilir."
+                    )

@@ -4,3 +4,4 @@ numpy>=1.26
 openpyxl>=3.1
 supabase>=2.4
 streamlit-aggrid==1.2.1.post2
+xlsxwriter>=3.1
