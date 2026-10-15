@@ -1222,7 +1222,30 @@ def seri_benzersiz_uygula(seri, fonksiyon):
     """
     if not isinstance(seri, pd.Series) or seri.empty:
         return pd.Series(seri).apply(fonksiyon)
+    if fonksiyon is temiz_metin:
+        return seri_temiz_metin(seri)
     eksik = seri.isna().to_numpy()
+    # Tek tipli sütunlarda (yalnız metin ya da yalnız sayı) benzersiz değerler
+    # pandas ile bulunur; 1 / 1.0 / "1" gibi karışık tipler aynı sütunda
+    # olmadığı için sonuç aşağıdaki (tip, değer) eşlemesiyle birebir aynıdır.
+    if pd.api.types.infer_dtype(seri, skipna=True) in (
+        "string", "integer", "floating", "empty"
+    ):
+        kodlar, _ = pd.factorize(seri, use_na_sentinel=True)
+        degerler = seri.to_numpy(dtype=object)
+        _, ilk_konumlar = np.unique(kodlar[kodlar >= 0], return_index=True)
+        dolu_konumlar = np.flatnonzero(kodlar >= 0)
+        benzersiz_sonuc = np.empty(len(ilk_konumlar), dtype=object)
+        for i, konum in enumerate(dolu_konumlar[ilk_konumlar]):
+            benzersiz_sonuc[kodlar[konum]] = fonksiyon(degerler[konum])
+        sonuc = np.empty(len(seri), dtype=object)
+        dolu = kodlar >= 0
+        sonuc[dolu] = benzersiz_sonuc[kodlar[dolu]]
+        if not dolu.all():
+            bos_deger = fonksiyon(degerler[np.flatnonzero(~dolu)[0]])
+            for konum in np.flatnonzero(~dolu):
+                sonuc[konum] = bos_deger
+        return pd.Series(sonuc, index=seri.index, dtype=object)
     try:
         degerler = seri.to_numpy(dtype=object)
         harita = {}
@@ -1647,12 +1670,135 @@ def data_new_buyume_kaynaklarini_uygula(
     return df, eslesme
 
 
+SUPABASE_PARALEL_ISCI = 6
+
+
+def json_kayitlarina_cevir(dataframe, sutunlar):
+    """DataFrame'i, her hücresi json_uyumlu_deger'den geçmiş gibi kayıt
+    listesine çevirir (iterrows'tan çok daha hızlı, sonuç aynı)."""
+    satir_sayisi = len(dataframe)
+    kolon_degerleri = []
+    for col in sutunlar:
+        if col not in dataframe.columns:
+            kolon_degerleri.append([None] * satir_sayisi)
+            continue
+        seri = dataframe[col]
+        if pd.api.types.is_bool_dtype(seri) and not seri.isna().any():
+            degerler = [bool(v) for v in seri.to_numpy()]
+        elif pd.api.types.is_integer_dtype(seri) and not seri.isna().any():
+            degerler = [int(v) for v in seri.to_numpy()]
+        elif pd.api.types.is_float_dtype(seri) and not isinstance(
+            seri.dtype, pd.api.extensions.ExtensionDtype
+        ):
+            x = seri.to_numpy(dtype=float)
+            degerler = [
+                float(v) if sonlu else None
+                for v, sonlu in zip(x.tolist(), np.isfinite(x))
+            ]
+        elif pd.api.types.is_datetime64_any_dtype(seri):
+            metin = seri.dt.strftime("%Y-%m-%d")
+            degerler = [
+                None if bos else v
+                for v, bos in zip(metin.tolist(), seri.isna().to_numpy())
+            ]
+        else:
+            degerler = seri_benzersiz_uygula(
+                seri, json_uyumlu_deger
+            ).tolist()
+        kolon_degerleri.append(degerler)
+    return [dict(zip(sutunlar, satir)) for satir in zip(*kolon_degerleri)]
+
+
+def supabase_paketleri_paralel_yaz(
+    yaz, kayitlar, paket_boyutu, ilerleme_callback=None, en_kucuk_paket=25
+):
+    """Kayıtları paketler halinde aynı anda birkaç istekle yazar.
+
+    Zaman aşımına (57014) düşen paket ikiye bölünüp yeniden denenir. İlerleme
+    bilgisi yalnızca ana iş parçacığından bildirilir (Streamlit için).
+    """
+    from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+
+    toplam = len(kayitlar)
+    bekleyen = [
+        kayitlar[i:i + paket_boyutu] for i in range(0, toplam, paket_boyutu)
+    ]
+    tamamlanan = 0
+    with ThreadPoolExecutor(SUPABASE_PARALEL_ISCI) as havuz:
+        calisan = {}
+        while bekleyen or calisan:
+            while bekleyen and len(calisan) < SUPABASE_PARALEL_ISCI:
+                paket = bekleyen.pop(0)
+                calisan[havuz.submit(yaz, paket)] = paket
+            biten, _ = wait(list(calisan), return_when=FIRST_COMPLETED)
+            for gorev in biten:
+                paket = calisan.pop(gorev)
+                try:
+                    gorev.result()
+                except Exception as ex:
+                    hata_metni = str(ex).lower()
+                    zaman_asimi = (
+                        "57014" in hata_metni
+                        or "statement timeout" in hata_metni
+                    )
+                    if zaman_asimi and len(paket) > en_kucuk_paket:
+                        yari = len(paket) // 2
+                        bekleyen[:0] = [paket[:yari], paket[yari:]]
+                        continue
+                    for diger in calisan:
+                        diger.cancel()
+                    raise
+                tamamlanan += len(paket)
+                if ilerleme_callback:
+                    ilerleme_callback(tamamlanan, toplam)
+    return tamamlanan
+
+
 def supabase_revizyon_kayitlarini_getir(
     tablo_adi, revizyon_id, paket_boyutu=1000
 ):
-    """PostgREST satır sınırına takılmadan bir revizyonun tamamını getirir."""
+    """PostgREST satır sınırına takılmadan bir revizyonun tamamını getirir.
+
+    İlk paketle birlikte toplam satır sayısı alınır, kalan paketler paralel
+    istenir (87 bin satırda ~45 sn yerine ~15 sn). Satır sayısı tutmazsa
+    eski sıralı yönteme dönülür.
+    """
     if not client or not revizyon_id:
         return []
+    try:
+        ilk = (
+            client.table(tablo_adi)
+            .select("*", count="exact")
+            .eq("revizyon_id", revizyon_id)
+            .range(0, paket_boyutu - 1)
+            .execute()
+        )
+        toplam = ilk.count
+        tum_kayitlar = list(ilk.data or [])
+        if toplam is not None and toplam > len(tum_kayitlar):
+            from concurrent.futures import ThreadPoolExecutor
+
+            def paketi_getir(bas):
+                return (
+                    client.table(tablo_adi)
+                    .select("*")
+                    .eq("revizyon_id", revizyon_id)
+                    .range(bas, bas + paket_boyutu - 1)
+                    .execute()
+                ).data or []
+
+            with ThreadPoolExecutor(SUPABASE_PARALEL_ISCI) as havuz:
+                for paket in havuz.map(
+                    paketi_getir, range(len(tum_kayitlar), toplam, paket_boyutu)
+                ):
+                    tum_kayitlar.extend(paket)
+        kimlikler = {kayit.get("id") for kayit in tum_kayitlar}
+        if toplam is not None and len(tum_kayitlar) == toplam and (
+            None in kimlikler or len(kimlikler) == toplam
+        ):
+            return tum_kayitlar
+    except Exception:
+        pass
     tum_kayitlar = []
     baslangic = 0
     while True:
@@ -1761,43 +1907,20 @@ def yil_kapanis_detayini_parcali_buluta_kaydet(
 
     kayit_zamani = datetime.now().astimezone().isoformat()
     toplam = len(hazir)
-    baslangic = 0
-    paket_boyutu = YIL_KAPANIS_DETAY_BULUT_PAKET_BOYUTU
-    while baslangic < toplam:
-        paket_df = hazir.iloc[
-            baslangic:baslangic + paket_boyutu
-        ]
-        records = []
-        for _, row in paket_df.iterrows():
-            rec = {
-                col: json_uyumlu_deger(row.get(col))
-                for col in yil_kapanis_detay_sutunlari
-            }
-            rec["revizyon_id"] = revizyon_id
-            rec["updated_at"] = kayit_zamani
-            records.append(rec)
-        try:
-            (
-                db_client.table(YIL_KAPANIS_DETAY_DB_TABLOSU)
-                .upsert(records, on_conflict="kayit_anahtari")
-                .execute()
-            )
-        except Exception as ex:
-            hata_metni = str(ex).lower()
-            if (
-                paket_boyutu > 25
-                and (
-                    "57014" in hata_metni
-                    or "statement timeout" in hata_metni
-                )
-            ):
-                paket_boyutu = max(25, paket_boyutu // 2)
-                continue
-            raise
-        tamamlanan = min(baslangic + len(paket_df), toplam)
-        if ilerleme_callback:
-            ilerleme_callback(tamamlanan, toplam)
-        baslangic = tamamlanan
+    records = json_kayitlarina_cevir(hazir, yil_kapanis_detay_sutunlari)
+    for rec in records:
+        rec["revizyon_id"] = revizyon_id
+        rec["updated_at"] = kayit_zamani
+    supabase_paketleri_paralel_yaz(
+        lambda paket: (
+            db_client.table(YIL_KAPANIS_DETAY_DB_TABLOSU)
+            .upsert(paket, on_conflict="kayit_anahtari")
+            .execute()
+        ),
+        records,
+        YIL_KAPANIS_DETAY_BULUT_PAKET_BOYUTU,
+        ilerleme_callback
+    )
 
     # Yalnızca bütün yeni paketler başarıyla yazıldıktan sonra eski sürümde
     # kalmış satırlar kısa SQL işlemleriyle temizlenir. Zaman aşımında parti
@@ -1949,6 +2072,41 @@ guvenli_metin_kodu = _degere_gore_onbellekle(guvenli_metin_kodu)
 nullable_sayi = _degere_gore_onbellekle(nullable_sayi)
 temiz_metin = _degere_gore_onbellekle(temiz_metin)
 yil_kapanis_grup_adi = _degere_gore_onbellekle(yil_kapanis_grup_adi)
+
+# Python'un \s ve str.strip() ile boşluk saydığı bütün karakterler; Arrow'un
+# düzenli ifade motorunda \s yalnızca ASCII boşlukları kapsadığı için açıkça
+# yazılır (sonuç temiz_metin ile birebir aynı olsun).
+_BOSLUK_KARAKTERLERI = (
+    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    + "".join(chr(c) for c in range(0x2000, 0x200B))
+    + "\u2028\u2029\u202f\u205f\u3000"
+)
+_BOSLUK_DESENI = "[" + _BOSLUK_KARAKTERLERI + "]+"
+
+
+def seri_temiz_metin(seri, varsayilan=""):
+    """temiz_metin'in sütun bazında (vektörel) karşılığı; sonuç birebir aynı.
+
+    86 bin satırlık Uniq ID gibi her satırı farklı sütunlarda hücre hücre
+    regex çalıştırmak yerine bütün sütun tek seferde temizlenir.
+    """
+    seri = pd.Series(seri)
+    if seri.empty:
+        return pd.Series([], index=seri.index, dtype=object)
+    eksik = seri.isna().to_numpy(dtype=bool)
+    ham = seri.to_numpy(dtype=object)
+    metinler = [
+        "" if bos else (deger if isinstance(deger, str) else str(deger))
+        for deger, bos in zip(ham, eksik)
+    ]
+    metin = pd.Series(metinler, index=seri.index, dtype="string[pyarrow]")
+    metin = metin.str.replace(_BOSLUK_DESENI, " ", regex=True).str.strip(" ")
+    bos = eksik | metin.str.lower().isin(
+        ["", "nan", "none", "null", "nat"]
+    ).to_numpy(dtype=bool)
+    sonuc = metin.astype(object)
+    sonuc[bos] = varsayilan
+    return sonuc
 
 
 def musteri_ilk_dolu_deger(seri, varsayilan=""):
@@ -2545,7 +2703,7 @@ def yil_kapanis_manuel_matrisini_hazirla(dataframe, varsayilan_yil=None):
     sonuc["Yıl"] = sonuc["Yıl"].apply(
         lambda value: guvenli_tamsayi(value, nullable=True)
     )
-    ham_gruplar = sonuc["Müşteri Grubu"].apply(temiz_metin)
+    ham_gruplar = seri_temiz_metin(sonuc["Müşteri Grubu"])
     # Excel'den yıl başlık satırı da kopyalanırsa müşteri grubu sanılmasın.
     yil_baslik_satiri = ham_gruplar.str.fullmatch(r"20\d{2}", na=False)
     sonuc = sonuc[
@@ -3064,7 +3222,9 @@ def yil_kapanis_detay_tahminini_hesapla(
     sonuc["Gerçekleşen Toplam Desi"] = gercek_toplam
 
     oran_haritasi = ortalama_sonuc.set_index("Müşteri Grubu")
-    satir_gruplari = sonuc["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
+    satir_gruplari = seri_benzersiz_uygula(
+        sonuc["Müşteri Grubu"], yil_kapanis_grup_adi
+    )
     # Satır x 12 ay: her satırın müşteri grubuna ait aylık sezon payı (%).
     pay_matrisi = np.column_stack([
         satir_gruplari.map({
@@ -3084,7 +3244,9 @@ def yil_kapanis_detay_tahminini_hesapla(
         )
         musteri_anahtari = (
             sonuc["Yıl"].astype(str) + "|"
-            + sonuc["Müşteri Kodu"].apply(guvenli_metin_kodu)
+            + seri_benzersiz_uygula(
+                sonuc["Müşteri Kodu"], guvenli_metin_kodu
+            ).astype(str)
         )
         musteri_ilk_ay = pd.Series(
             satir_ilk_ay, index=sonuc.index
@@ -3614,14 +3776,18 @@ def desi_tahmin_detayini_hesapla(
     oran_haritasi = ortalama_df.drop_duplicates(
         "Müşteri Grubu", keep="last"
     ).set_index("Müşteri Grubu")
-    satir_gruplari = kapanis["Müşteri Grubu"].apply(yil_kapanis_grup_adi)
-    musteri_kodlari = kapanis["Müşteri Kodu"].apply(guvenli_metin_kodu)
+    satir_gruplari = seri_benzersiz_uygula(
+        kapanis["Müşteri Grubu"], yil_kapanis_grup_adi
+    )
+    musteri_kodlari = seri_benzersiz_uygula(
+        kapanis["Müşteri Kodu"], guvenli_metin_kodu
+    )
     kaynak_toplam = kapanis[yil_kapanis_detay_ay_sutunlari].sum(
         axis=1
     ).astype(float)
 
     sonuc = kapanis[yil_kapanis_detay_kimlik_sutunlari].copy()
-    sonuc["Kaynak Uniq ID"] = kapanis["Uniq ID"].apply(temiz_metin)
+    sonuc["Kaynak Uniq ID"] = seri_temiz_metin(kapanis["Uniq ID"])
     sonuc["Kaynak Yıl"] = int(kaynak_yil)
     sonuc["Kaynak Yıl Toplam Desi"] = desi_kg_serisini_uc_ondalik_yuvarla(
         kaynak_toplam
@@ -3778,7 +3944,7 @@ def operasyon_desi_raporu_tablosu(
         rapor["Yıl"] = kaynak_yil
         # Bu uygulamadaki bütün müşteriler bütçelenen müşterilerdir.
         rapor["müş. Kategori"] = "DOP"
-        rapor["Uniq ID"] = tahmin_df["Kaynak Uniq ID"].apply(temiz_metin)
+        rapor["Uniq ID"] = seri_temiz_metin(tahmin_df["Kaynak Uniq ID"])
 
         kapanis = (
             kapanis_df.copy() if isinstance(kapanis_df, pd.DataFrame)
@@ -3790,7 +3956,7 @@ def operasyon_desi_raporu_tablosu(
             ]
         if not kapanis.empty:
             kapanis = kapanis.assign(
-                _uniq=kapanis["Uniq ID"].apply(temiz_metin)
+                _uniq=seri_temiz_metin(kapanis["Uniq ID"])
             ).drop_duplicates("_uniq", keep="last").set_index("_uniq")
         for ay, hedef in zip(aylar, kaynak_ay):
             kolon = f"{ay} Desi"
@@ -4062,7 +4228,7 @@ def desi_tahmin_manuel_degisikliklerini_kaydet(
     ):
         return False
     onceki = onceki_df.copy()
-    onceki["Uniq ID"] = onceki["Uniq ID"].apply(temiz_metin)
+    onceki["Uniq ID"] = seri_temiz_metin(onceki["Uniq ID"])
     onceki = onceki.drop_duplicates("Uniq ID", keep="last").set_index(
         "Uniq ID"
     )
@@ -4095,12 +4261,12 @@ def data_new_desi_tahminini_uygula(dataframe, desi_tahmin_df):
 
     tahmin = desi_tahmin_detayini_hazirla(desi_tahmin_df)
     tahmin = tahmin[
-        tahmin["Kaynak Uniq ID"].apply(temiz_metin) != ""
+        seri_temiz_metin(tahmin["Kaynak Uniq ID"]) != ""
     ].copy()
     if tahmin.empty:
         return sonuc, eslesme
 
-    tahmin["Kaynak Uniq ID"] = tahmin["Kaynak Uniq ID"].apply(temiz_metin)
+    tahmin["Kaynak Uniq ID"] = seri_temiz_metin(tahmin["Kaynak Uniq ID"])
     tahmin["Kaynak Yıl"] = tahmin["Kaynak Yıl"].apply(
         lambda value: guvenli_tamsayi(value, nullable=True)
     )
@@ -9608,9 +9774,9 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
 
             if manuel_kaydet:
                 manuel_ham = manuel_duzenlenen.copy()
-                ham_gruplar = manuel_ham.get(
+                ham_gruplar = seri_temiz_metin(manuel_ham.get(
                     "Müşteri Grubu", pd.Series(dtype=str)
-                ).apply(temiz_metin)
+                ))
                 gecerli_satir = (
                     (ham_gruplar != "")
                     & ~ham_gruplar.str.fullmatch(r"20\d{2}", na=False)
@@ -10484,12 +10650,12 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                     # Müşteri bazlı hariç tutma, hesap başlamadan uygulanır;
                     # böylece detay, toplamlar, tahmin ve dışa aktarımlar aynı
                     # filtrelenmiş veri kümesini kullanır.
-                    musteri_kodlari = kapanacak_detay[
-                        "Müşteri Kodu"
-                    ].apply(guvenli_metin_kodu)
-                    musteri_adlari = kapanacak_detay[
-                        "Müşteri Adı"
-                    ].apply(temiz_metin)
+                    musteri_kodlari = seri_benzersiz_uygula(
+                        kapanacak_detay["Müşteri Kodu"], guvenli_metin_kodu
+                    )
+                    musteri_adlari = seri_temiz_metin(
+                        kapanacak_detay["Müşteri Adı"]
+                    )
                     musteri_anahtarlari = pd.Series(
                         np.where(
                             musteri_kodlari != "",
@@ -10598,7 +10764,7 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                         )
                         if geriye_tahmin_idleri:
                             etkilenen_musteri = detay_sonuc.loc[
-                                detay_sonuc["Uniq ID"].apply(temiz_metin)
+                                seri_temiz_metin(detay_sonuc["Uniq ID"])
                                 .isin(geriye_tahmin_idleri),
                                 "Müşteri Kodu"
                             ].nunique()
@@ -13012,24 +13178,23 @@ if sekme_acik_mi[12]:
                                 st.session_state.desi_tahmin_detay_manuel_ayarlari
                                 .get(tahmin_baglam, {})
                             )
-                            for i in range(0, len(tahmin_detay_sonuc), 500):
-                                records = []
-                                for _, row in tahmin_detay_sonuc.iloc[
-                                    i:i + 500
-                                ].iterrows():
-                                    uniq_id = temiz_metin(row.get("Uniq ID"))
-                                    rec = {
-                                        col: json_uyumlu_deger(row.get(col))
-                                        for col in desi_tahmin_detay_sutunlari
-                                    }
-                                    rec["revizyon_id"] = desi_rev_id
-                                    rec["Manuel Desi Ayarları"] = (
-                                        manuel_ayarlar.get(uniq_id, {})
-                                    )
-                                    records.append(rec)
-                                client.table(
+                            records = json_kayitlarina_cevir(
+                                tahmin_detay_sonuc, desi_tahmin_detay_sutunlari
+                            )
+                            uniq_idler = seri_temiz_metin(
+                                tahmin_detay_sonuc["Uniq ID"]
+                            ).tolist()
+                            for rec, uniq_id in zip(records, uniq_idler):
+                                rec["revizyon_id"] = desi_rev_id
+                                rec["Manuel Desi Ayarları"] = (
+                                    manuel_ayarlar.get(uniq_id, {})
+                                )
+                            supabase_paketleri_paralel_yaz(
+                                lambda paket: client.table(
                                     DESI_TAHMIN_DETAY_DB_TABLOSU
-                                ).insert(records).execute()
+                                ).insert(paket).execute(),
+                                records, 500
+                            )
                             revizyonu_degistirildi_isaretle(desi_rev_id)
                             st.session_state.desi_tahmin_bulut_ortalama_df = (
                                 tahmin_ortalama.copy()
