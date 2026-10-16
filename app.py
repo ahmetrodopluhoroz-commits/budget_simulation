@@ -474,6 +474,9 @@ MUSTERI_GRUP_ESLESTIRME_KOLONLARI = [
 KG_MUSTERI_DB_TABLOSU = "kg_musteri_tablosu"
 YIL_KAPANIS_DB_TABLOSU = "yil_kapanis_tablosu"
 YIL_KAPANIS_DETAY_DB_TABLOSU = "yil_kapanis_detay_tablosu"
+# Önceki Mantık sonucu; operasyon desi raporunun kapanan yıl sütunları.
+YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU = "yil_kapanis_onceki_detay_tablosu"
+YIL_KAPANIS_ONCEKI_SQL_DOSYASI = "Supabase_yil_kapanis_onceki_mantik.sql"
 YIL_KAPANIS_MANUEL_MATRIS_DB_TABLOSU = (
     "yil_kapanis_manuel_matris_tablosu"
 )
@@ -9627,17 +9630,74 @@ def kayitli_detay_gorunumu(
     )
 
 
-def operasyon_raporu_bolumu(tahmin_df, kapanis_df, kaynak_yil, tahmin_yili):
+def onceki_mantik_sonucu_kaynagi(revizyon_id, kaynak_yil):
+    """Operasyon raporunun kapanan yıl sütunları için Önceki Mantık sonucu.
+
+    Önce bu oturumda Önceki Mantık sayfasında hesaplanan sonuç, yoksa
+    revizyonun bulut kaydı kullanılır. Döndürür: (açıklama, satır sayısı,
+    tabloyu getiren fonksiyon) — kayıt yoksa (açıklama, 0, None).
+    """
+    oturum = st.session_state.get("yk_onceki_mantik_sonuc") or {}
+    if (
+        oturum.get("rev") == revizyon_id
+        and oturum.get("yil") == int(kaynak_yil)
+        and isinstance(oturum.get("df"), pd.DataFrame)
+        and not oturum["df"].empty
+    ):
+        df = oturum["df"]
+        return "bu oturumda hesaplanan Önceki Mantık sonucu", len(df), (
+            lambda: df
+        )
+    if not client or not revizyon_id:
+        return "Önceki Mantık kaydı bulunamadı", 0, None
+    try:
+        sayi = supabase_revizyon_satir_sayisi(
+            YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU, revizyon_id
+        ) or 0
+    except Exception:
+        return "Önceki Mantık tablosu Supabase'de yok", 0, None
+    if not sayi:
+        return "Önceki Mantık kaydı bulunamadı", 0, None
+
+    def buluttan_getir():
+        kayitlar = supabase_revizyon_kayitlarini_getir(
+            YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU, revizyon_id
+        )
+        return yil_kapanis_detayini_hazirla(
+            pd.DataFrame(kayitlar).drop(
+                columns=["id", "revizyon_id", "created_at"], errors="ignore"
+            )
+        )
+
+    return "buluttaki Önceki Mantık kaydı", sayi, buluttan_getir
+
+
+def operasyon_raporu_bolumu(tahmin_df, kaynak_yil, tahmin_yili, revizyon_id):
     """Operasyona gönderilecek desi raporu: ek satır yükleme + indirme."""
     st.markdown("---")
     st.subheader("📤 Operasyon Desi Raporu")
     st.caption(
-        f"Güzergah bazında {kaynak_yil} (Yıl Kapanış: gerçekleşen + yıl sonu "
-        f"tahmini) ve {tahmin_yili} (Desi Tahminleme) aylık desileri; geçen "
-        "yılki 'data' sayfası biçiminde. Bütün müşteriler 'DOP' "
-        "kategorisindedir; Vestel, BSH ve Yeni Satış satırları aşağıdan "
-        "yüklenince altına eklenir."
+        f"Güzergah bazında {kaynak_yil} (Yıl Kapanış — **Önceki Mantık**: "
+        "gerçekleşen + son gerçekleşen aydan sonraki aylar) ve "
+        f"{tahmin_yili} (Desi Tahminleme) aylık desileri; geçen yılki 'data' "
+        "sayfası biçiminde. Bütün müşteriler 'DOP' kategorisindedir; Vestel, "
+        "BSH ve Yeni Satış satırları aşağıdan yüklenince altına eklenir."
     )
+    onceki_aciklama, onceki_satir, onceki_getir = onceki_mantik_sonucu_kaynagi(
+        revizyon_id, kaynak_yil
+    )
+    if onceki_getir is None:
+        st.warning(
+            f"{kaynak_yil} sütunları Yıl Kapanış (Önceki Mantık) sonucundan "
+            f"alınır, ancak bu revizyon için kayıt yok ({onceki_aciklama}). "
+            "Önce '🏁 Yıl Kapanış (Önceki Mantık)' sayfasında hesaplayıp "
+            "'Operasyon Raporu İçin Kaydet'e basın."
+        )
+    else:
+        st.caption(
+            f"{kaynak_yil} sütunlarının kaynağı: {onceki_aciklama} "
+            f"({onceki_satir:,} satır)."
+        )
     ek_anahtar = f"operasyon_ek_satirlar_{kaynak_yil}"
     with st.expander("➕ Ek satırlar (Vestel, BSH, Yeni Satış)", expanded=False):
         st.caption(
@@ -9680,11 +9740,13 @@ def operasyon_raporu_bolumu(tahmin_df, kapanis_df, kaynak_yil, tahmin_yili):
     ek_satirlar = st.session_state.get(ek_anahtar, pd.DataFrame())
     st.download_button(
         "📤 Operasyona Gönderilecek Desi Raporunu İndir",
-        data=lambda tahmin=tahmin_df, kapanis=kapanis_df, ek=ek_satirlar: (
+        # Önceki Mantık kaydı buluttaysa yalnızca butona basınca getirilir.
+        data=lambda tahmin=tahmin_df, getir=onceki_getir, ek=ek_satirlar: (
             operasyon_desi_raporu_excel(
-                operasyon_desi_raporu_tablosu(tahmin, kapanis, kaynak_yil, ek)
+                operasyon_desi_raporu_tablosu(tahmin, getir(), kaynak_yil, ek)
             )
         ),
+        disabled=onceki_getir is None,
         on_click="ignore",
         file_name=f"{datetime.now():%Y.%m.%d}_{tahmin_yili} desileri.xlsx",
         mime=(
@@ -11776,11 +11838,98 @@ if sekme_acik_mi[8] or yk_onceki_mantik:
                 st.markdown("#### ☁️ Bulut kayıtları")
                 if yk_onceki_mantik:
                     st.caption(
-                        "Önceki mantık sayfasında bulut kaydı kapalıdır: iki "
-                        "sayfa aynı revizyonun yıl kapanış kaydını paylaşır ve "
-                        "buradan kaydetmek Yıl Kapanış sayfasının (ve Desi "
-                        "Tahminleme'nin kullandığı) sonucun üzerine yazardı."
+                        "Yıl Kapanış kaydı bu sayfadan değiştirilemez (Yıl "
+                        "Kapanış sayfası ve Desi Tahminleme onu kullanır). Bu "
+                        "sayfanın sonucu ayrı kaydedilir ve operasyon desi "
+                        "raporunun kapanan yıl sütunlarında kullanılır."
                     )
+                    if detay_buluttan_final:
+                        st.warning(
+                            "Bu sonuç buluttaki Yıl Kapanış kaydından geliyor, "
+                            "önceki mantıkla hesaplanmadı; operasyon raporu "
+                            "için kaydedilemez. Önceki mantıkla hesaplamak "
+                            "için yukarıdan operasyon dosyasını yükleyin."
+                        )
+                    elif not detay_sonuc.empty and kapanis_yili is not None:
+                        # Rapor aynı oturumda kayıt beklemeden de kullanabilsin.
+                        st.session_state.yk_onceki_mantik_sonuc = {
+                            "rev": aktif_yk_rev_id,
+                            "yil": int(kapanis_yili),
+                            "df": detay_sonuc
+                        }
+                    if st.button(
+                        "☁️ Önceki Mantık Sonucunu Operasyon Raporu İçin Kaydet"
+                        + (
+                            f" ({len(detay_sonuc):,} satır)"
+                            if not detay_sonuc.empty else ""
+                        ),
+                        type="primary",
+                        use_container_width=True,
+                        disabled=(
+                            not client or not aktif_yk_rev_id
+                            or detay_sonuc.empty or detay_buluttan_final
+                        ),
+                        key="btn_yk_onceki_bulut_kaydet"
+                    ):
+                        onceki_ilerleme = st.progress(
+                            0.0, text="Önceki Mantık sonucu hazırlanıyor..."
+                        )
+                        try:
+                            onceki_kayitlar = json_kayitlarina_cevir(
+                                detay_sonuc.drop_duplicates(
+                                    "Uniq ID", keep="last"
+                                ),
+                                yil_kapanis_detay_sutunlari
+                            )
+                            for rec in onceki_kayitlar:
+                                rec["revizyon_id"] = aktif_yk_rev_id
+                            client.table(
+                                YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU
+                            ).delete().eq(
+                                "revizyon_id", aktif_yk_rev_id
+                            ).execute()
+                            supabase_paketleri_paralel_yaz(
+                                lambda paket: is_parcacigi_istemcisi().table(
+                                    YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU
+                                ).insert(paket).execute(),
+                                onceki_kayitlar, 500,
+                                lambda tamam, toplam: onceki_ilerleme.progress(
+                                    tamam / max(toplam, 1),
+                                    text=f"Kaydediliyor: {tamam:,} / {toplam:,}"
+                                )
+                            )
+                            onceki_bulut = supabase_revizyon_satir_sayisi(
+                                YIL_KAPANIS_ONCEKI_DETAY_DB_TABLOSU,
+                                aktif_yk_rev_id
+                            )
+                            if onceki_bulut != len(onceki_kayitlar):
+                                raise RuntimeError(
+                                    f"kayıt doğrulanamadı: bulutta "
+                                    f"{onceki_bulut:,} satır var, "
+                                    f"{len(onceki_kayitlar):,} bekleniyordu. "
+                                    "Lütfen tekrar kaydedin"
+                                )
+                            onceki_ilerleme.progress(1.0, text="Tamamlandı")
+                            revizyonu_degistirildi_isaretle(aktif_yk_rev_id)
+                            st.success(
+                                f"{len(onceki_kayitlar):,} satırlık Önceki "
+                                "Mantık sonucu kaydedildi; operasyon desi "
+                                "raporu bu sonucu kullanacak."
+                            )
+                        except Exception as ex:
+                            st.error(
+                                "Önceki Mantık sonucu kaydedilemedi. Tablo "
+                                "henüz yoksa aşağıdaki SQL'i Supabase SQL "
+                                f"Editor'de bir kez çalıştırın. Ayrıntı: {ex}"
+                            )
+                            try:
+                                with open(
+                                    YIL_KAPANIS_ONCEKI_SQL_DOSYASI,
+                                    encoding="utf-8"
+                                ) as sql_dosyasi:
+                                    st.code(sql_dosyasi.read(), language="sql")
+                            except OSError:
+                                pass
                 cloud_ozet_col, cloud_detay_col = st.columns(2)
                 ozet_bulut_kaydet = cloud_ozet_col.button(
                     "💾 Yüzde Matrisleri, Kg ve Özeti Kaydet",
@@ -13428,11 +13577,8 @@ if sekme_acik_mi[12]:
                     f"desi_tahmini_{kayitli_tahmin_yili}_kayitli.csv"
                 )
                 operasyon_raporu_bolumu(
-                    kayitli_tahmin,
-                    st.session_state.get(
-                        "yil_kapanis_detay_bulut_df", pd.DataFrame()
-                    ),
-                    kayitli_kaynak_yil, kayitli_tahmin_yili
+                    kayitli_tahmin, kayitli_kaynak_yil, kayitli_tahmin_yili,
+                    desi_rev_id
                 )
             st.stop()
         else:
@@ -13839,6 +13985,6 @@ if sekme_acik_mi[12]:
                             st.rerun()
 
                     operasyon_raporu_bolumu(
-                        tahmin_detay_sonuc, kapanis_kaynak, kaynak_yil,
-                        tahmin_yili
+                        tahmin_detay_sonuc, kaynak_yil, tahmin_yili,
+                        desi_rev_id
                     )
